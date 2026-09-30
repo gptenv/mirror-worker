@@ -133,6 +133,18 @@ function assetDownload(json: Record<string, unknown>): AssetDownload {
 export class ChatGptBackendClient {
   public accountId: string | null = null;
   public turnstileSolver?: ((challenge: TurnstileChallenge) => Promise<string | null> | string | null) | null;
+  private lastTokenLengths: {
+    accessToken: { received: number; sentUpstream: number | null };
+    sessionToken: { received: number | null; sentUpstream: number | null };
+  } = {
+    accessToken: { received: 0, sentUpstream: null },
+    sessionToken: { received: null, sentUpstream: null },
+  };
+
+  private attachLastTokenLengths(error: BackendApiError): BackendApiError {
+    Object.assign(error, { tokenLengths: this.lastTokenLengths });
+    return error;
+  }
 
   constructor(private readonly creds: SessionCredentials) {}
 
@@ -173,6 +185,10 @@ export class ChatGptBackendClient {
       signal: opts.signal,
     });
     const firstAccessToken = this.creds.accessToken;
+    this.lastTokenLengths = {
+      accessToken: { received: firstAccessToken.length, sentUpstream: firstAccessToken.length },
+      sessionToken: { received: this.creds.sessionToken?.length ?? null, sentUpstream: null },
+    };
     let res: Response;
     try {
       res = await request();
@@ -181,6 +197,7 @@ export class ChatGptBackendClient {
       throw error;
     }
     if (this.creds.sessionToken && await isAccessDeniedResponse(res)) {
+      this.lastTokenLengths.sessionToken.sentUpstream = this.creds.sessionToken.length;
       let minted;
       try {
         minted = await mintAccessTokenShared(this.creds.sessionToken);
@@ -191,6 +208,7 @@ export class ChatGptBackendClient {
       // Keep the refreshed value only in this request's credentials object;
       // the server returns it to the browser, which owns persistent storage.
       this.creds.accessToken = minted.accessToken;
+      this.lastTokenLengths.accessToken.sentUpstream = minted.accessToken.length;
       this.creds.rotatedSessionToken = minted.rotatedSessionToken;
       res = await request();
     }
@@ -205,12 +223,12 @@ export class ChatGptBackendClient {
     const text = await res.text();
     const json = safeJson(text);
     if (!res.ok) {
-      throw new BackendApiError(
+      throw this.attachLastTokenLengths(new BackendApiError(
         `GET ${path} failed: ${res.status}`,
         res.status,
         json ?? text,
         text,
-      );
+      ));
     }
     if (!isObject(json)) {
       throw new BackendApiError(`GET ${path} returned non-object JSON`);
@@ -232,12 +250,12 @@ export class ChatGptBackendClient {
     const text = await res.text();
     const json = safeJson(text);
     if (!res.ok) {
-      throw new BackendApiError(
+      throw this.attachLastTokenLengths(new BackendApiError(
         `POST ${path} failed: ${res.status}`,
         res.status,
         json ?? text,
         text,
-      );
+      ));
     }
     if (!isObject(json)) {
       throw new BackendApiError(`POST ${path} returned non-object JSON`);
@@ -794,12 +812,12 @@ export class ChatGptBackendClient {
 
     if (!res.ok || !res.body) {
       const text = await res.text().catch(() => "");
-      throw new BackendApiError(
+      throw this.attachLastTokenLengths(new BackendApiError(
         `POST /f/conversation failed: ${res.status}`,
         res.status,
         text,
         text,
-      );
+      ));
     }
 
     // Scope display suppression to a new upstream Custom GPT/Project chat.

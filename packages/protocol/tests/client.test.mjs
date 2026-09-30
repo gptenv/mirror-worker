@@ -116,6 +116,11 @@ test("a GET call throws BackendApiError with the parsed body on a non-ok respons
         assert.ok(error instanceof BackendApiError);
         assert.equal(error.status, 403);
         assert.deepEqual(error.body, { detail: "nope" });
+        assert.equal(error.upstreamResponseText, JSON.stringify({ detail: "nope" }));
+        assert.deepEqual(error.tokenLengths, {
+          accessToken: { received: "access-token".length, sentUpstream: "access-token".length },
+          sessionToken: { received: null, sentUpstream: null },
+        });
         return true;
       });
     },
