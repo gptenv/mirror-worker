@@ -125,7 +125,13 @@ export function mintAccessTokenShared(sessionToken: string): Promise<MintedAcces
   const active = activeMints.get(key);
   if (active) return active;
   let pending: Promise<MintedAccessToken>;
-  pending = mintAccessToken(sessionToken).finally(() => {
+  pending = mintAccessToken(sessionToken).catch((error) => {
+    const name = error instanceof Error ? error.name : typeof error;
+    let message = error instanceof Error ? error.message : String(error);
+    if (message.includes(sessionToken)) message = message.split(sessionToken).join("[redacted]");
+    console.error("ChatGPT session exchange failed", { name, message: message.slice(0, 300) });
+    throw error;
+  }).finally(() => {
     if (activeMints.get(key) === pending) activeMints.delete(key);
   });
   activeMints.set(key, pending);
