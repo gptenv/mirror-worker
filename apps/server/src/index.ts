@@ -86,6 +86,15 @@ function isPublicApiPath(url: string): boolean {
   return pathname === "/v1/responses" || pathname === "/v1/models" || pathname === "/v1/chat/completions" || pathname === "/v1/capabilities";
 }
 
+function sessionAuthenticationError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const status = message.match(/^GET \/api\/auth\/session returned (\d{3})$/)?.[1];
+  if (status) return `ChatGPT's session endpoint returned HTTP ${status}.`;
+  if (error instanceof Error && error.name === "SessionTokenInvalidError")
+    return "ChatGPT's session endpoint did not return an accessToken.";
+  return "The Worker could not complete the ChatGPT session exchange.";
+}
+
 export interface WorkerAssets {
   fetch(request: Request): Promise<Response>;
 }
@@ -167,7 +176,7 @@ app.addHook("onRequest", async (req, reply) => {
       sessionBearerAuthenticated = true;
     } catch (error) {
       return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
-        error: { message: "Invalid ChatGPT session token", type: "authentication_error" },
+        error: { message: sessionAuthenticationError(error), type: "authentication_error" },
       });
     }
   }
@@ -213,7 +222,7 @@ app.addHook("onRequest", async (req, reply) => {
       sessionBearerAuthenticated = true;
     } catch (error) {
       return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
-        error: { message: "Invalid ChatGPT session token", type: "authentication_error" },
+        error: { message: sessionAuthenticationError(error), type: "authentication_error" },
       });
     }
   }
