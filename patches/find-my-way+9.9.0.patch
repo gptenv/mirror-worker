@@ -1,0 +1,159 @@
+diff --git a/node_modules/find-my-way/lib/constrainer.js b/node_modules/find-my-way/lib/constrainer.js
+index abb4f0a..fd318ae 100644
+--- a/node_modules/find-my-way/lib/constrainer.js
++++ b/node_modules/find-my-way/lib/constrainer.js
+@@ -151,25 +151,16 @@ class Constrainer {
+   _buildDeriveConstraints () {
+     if (this.strategiesInUse.size === 0) return
+ 
+-    const lines = ['return {']
+-
+-    for (const key of this.strategiesInUse) {
+-      const strategy = this.strategies[key]
+-      // Optimization: inline the derivation for the common built in constraints
+-      if (!strategy.isCustom) {
+-        if (key === 'version') {
+-          lines.push('   version: req.headers[\'accept-version\'],')
+-        } else {
+-          lines.push('   host: req.headers.host || req.headers[\':authority\'],')
+-        }
+-      } else {
+-        lines.push(`  ${strategy.name}: this.strategies.${key}.deriveConstraint(req, ctx),`)
++    this.deriveSyncConstraints = (req, ctx) => {
++      const derived = {}
++      for (const key of this.strategiesInUse) {
++        const strategy = this.strategies[key]
++        if (!strategy.isCustom && key === 'version') derived.version = req.headers['accept-version']
++        else if (!strategy.isCustom) derived.host = req.headers.host || req.headers[':authority']
++        else derived[strategy.name] = strategy.deriveConstraint(req, ctx)
+       }
++      return derived
+     }
+-
+-    lines.push('}')
+-
+-    this.deriveSyncConstraints = new Function('req', 'ctx', lines.join('\n')).bind(this) // eslint-disable-line
+   }
+ }
+ 
+diff --git a/node_modules/find-my-way/lib/handler-storage.js b/node_modules/find-my-way/lib/handler-storage.js
+index 20a0acc..901adf6 100644
+--- a/node_modules/find-my-way/lib/handler-storage.js
++++ b/node_modules/find-my-way/lib/handler-storage.js
+@@ -62,20 +62,13 @@ class HandlerStorage {
+   }
+ 
+   _compileCreateParamsObject (params) {
+-    const fnBody = []
+-
+-    fnBody.push('const fn = function _createParamsObject (paramsArray) {')
+-
+-    fnBody.push('const params = new NullObject()')
+-    for (let i = 0; i < params.length; i++) {
+-      fnBody.push(`params['${params[i]}'] = paramsArray[${i}]`)
++    return function _createParamsObject (paramsArray) {
++      const result = new NullObject()
++      for (let i = 0; i < params.length; i++) {
++        result[params[i]] = paramsArray[i]
++      }
++      return result
+     }
+-    fnBody.push('return params')
+-    fnBody.push('}')
+-
+-    fnBody.push('return fn')
+-
+-    return new Function('NullObject', fnBody.join('\n'))(NullObject)  // eslint-disable-line
+   }
+ 
+   _getHandlerMatchingConstraints () {
+@@ -126,49 +119,27 @@ class HandlerStorage {
+       this._buildConstraintStore(store, constraint)
+     }
+ 
+-    const lines = []
+-    lines.push(`
+-    let candidates = ${(1 << this.handlers.length) - 1}
+-    let mask, matches
+-    `)
+-    for (const constraint of this.constraints) {
+-      // Setup the mask for indexes this constraint applies to. The mask bits are set to 1 for each position if the constraint applies.
+-      lines.push(`
+-      mask = ${this._constrainedIndexBitmask(constraint)}
+-      value = derivedConstraints.${constraint}
+-      `)
+-
+-      // If there's no constraint value, none of the handlers constrained by this constraint can match. Remove them from the candidates.
+-      // If there is a constraint value, get the matching indexes bitmap from the store, and mask it down to only the indexes this constraint applies to, and then bitwise and with the candidates list to leave only matching candidates left.
+-      const strategy = constrainer.strategies[constraint]
+-      const matchMask = strategy.mustMatchWhenDerived ? 'matches' : '(matches | mask)'
+-
+-      lines.push(`
+-      if (value === undefined) {
+-        candidates &= mask
+-      } else {
+-        matches = this.constrainedHandlerStores.${constraint}.get(value) || 0
+-        candidates &= ${matchMask}
++    this._getHandlerMatchingConstraints = (derivedConstraints) => {
++      let candidates = (1 << this.handlers.length) - 1
++      for (const constraint of this.constraints) {
++        const mask = this._constrainedIndexBitmask(constraint)
++        const value = derivedConstraints[constraint]
++        if (value === undefined) {
++          candidates &= mask
++        } else {
++          const matches = this.constrainedHandlerStores[constraint].get(value) || 0
++          const strategy = constrainer.strategies[constraint]
++          candidates &= strategy.mustMatchWhenDerived ? matches : (matches | mask)
++        }
++        if (candidates === 0) return null
+       }
+-      if (candidates === 0) return null;
+-      `)
+-    }
+-
+-    // There are some constraints that can be derived and marked as "must match", where if they are derived, they only match routes that actually have a constraint on the value, like the SemVer version constraint.
+-    // An example: a request comes in for version 1.x, and this node has a handler that matches the path, but there's no version constraint. For SemVer, the find-my-way semantics do not match this handler to that request.
+-    // This function is used by Nodes with handlers to match when they don't have any constrained routes to exclude request that do have must match derived constraints present.
+-    for (const constraint in constrainer.strategies) {
+-      if (!Object.hasOwn(constrainer.strategies, constraint)) continue
+-      const strategy = constrainer.strategies[constraint]
+-      if (strategy.mustMatchWhenDerived && !this.constraints.includes(constraint)) {
+-        lines.push(`if (derivedConstraints.${constraint} !== undefined) return null`)
++      for (const constraint in constrainer.strategies) {
++        if (!Object.hasOwn(constrainer.strategies, constraint)) continue
++        if (constrainer.strategies[constraint].mustMatchWhenDerived &&
++          !this.constraints.includes(constraint) && derivedConstraints[constraint] !== undefined) return null
+       }
++      return this.handlers[31 - Math.clz32(candidates)]
+     }
+-
+-    // Return the highest set bit index in the candidates bitmask.
+-    lines.push('return this.handlers[31 - Math.clz32(candidates)]')
+-
+-    this._getHandlerMatchingConstraints = new Function('derivedConstraints', lines.join('\n')) // eslint-disable-line
+   }
+ }
+ 
+diff --git a/node_modules/find-my-way/lib/node.js b/node_modules/find-my-way/lib/node.js
+index d4eb79e..a09169a 100644
+--- a/node_modules/find-my-way/lib/node.js
++++ b/node_modules/find-my-way/lib/node.js
+@@ -212,12 +212,12 @@ class StaticNode extends ParentNode {
+       return
+     }
+ 
+-    const lines = []
+-    for (let i = 1; i < this.prefix.length; i++) {
+-      const charCode = this.prefix.charCodeAt(i)
+-      lines.push(`path.charCodeAt(i + ${i}) === ${charCode}`)
++    this.matchPrefix = (path, i) => {
++      for (let offset = 1; offset < this.prefix.length; offset++) {
++        if (path.charCodeAt(i + offset) !== this.prefix.charCodeAt(offset)) return false
++      }
++      return true
+     }
+-    this.matchPrefix = new Function('path', 'i', `return ${lines.join(' && ')}`) // eslint-disable-line
+   }
+ }
+ 

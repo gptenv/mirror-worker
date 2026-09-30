@@ -1,4 +1,5 @@
 import { migrateDatabase } from "./schema.js";
+import { wrapDurableSql, wrapNodeDatabase, type DurableSqlStorage, type SqliteDatabase } from "./worker-sql.js";
 import { resolveDataDirectory } from "./storage-config.js";
 import {
   createCipheriv,
@@ -25,7 +26,8 @@ import type {
   UploadedFile,
 } from "@mirror/protocol";
 
-const PROJECT_ROOT = path.resolve(
+const cloudflareRuntime = typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined";
+const PROJECT_ROOT = cloudflareRuntime ? "/" : path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../..",
 );
@@ -33,8 +35,7 @@ const DATA_DIR = resolveDataDirectory(PROJECT_ROOT, process.env.MIRROR_DATA_DIR)
 const DATABASE_FILE = path.join(DATA_DIR, "mirror.db");
 const KEY_FILE = path.join(DATA_DIR, "master.key");
 const LEGACY_STORE_FILE = path.join(DATA_DIR, "store.json");
-
-mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+let db: SqliteDatabase;
 
 function decodeConfiguredKey(value: string): Buffer {
   const key = /^[a-f\d]{64}$/i.test(value)
@@ -57,7 +58,44 @@ function loadEncryptionKey(): Buffer {
   return key;
 }
 
-const encryptionKey = loadEncryptionKey();
+let encryptionKey: Buffer;
+
+function initializeDurableSchema(storage: DurableSqlStorage): void {
+  db = wrapDurableSql(storage);
+  storage.exec(`
+    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL DEFAULT 'default', upstream_id TEXT,
+      current_node_id TEXT NOT NULL, model TEXT NOT NULL, gizmo_id TEXT, title TEXT NOT NULL,
+      initialized INTEGER NOT NULL DEFAULT 0, init_json TEXT, is_private INTEGER NOT NULL DEFAULT 0,
+      is_branch INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS conversations_updated_idx ON conversations(account_id, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      upstream_node_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
+      events_json TEXT NOT NULL DEFAULT '[]', attachments_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
+    CREATE TABLE IF NOT EXISTS openai_contexts (
+      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+      instructions_hash TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS openai_transcripts (
+      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+      account_id TEXT NOT NULL, transcript_hash TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS openai_transcripts_hash_idx ON openai_transcripts(account_id, transcript_hash);
+    CREATE TABLE IF NOT EXISTS conversation_instructions (
+      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, messages_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+  `);
+  storage.exec("UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'");
+}
 
 function encrypt(value: string): string {
   const iv = randomBytes(12);
@@ -90,13 +128,24 @@ function decrypt(value: string): string {
   ]).toString("utf8");
 }
 
-const db = new DatabaseSync(DATABASE_FILE);
-chmodSync(DATABASE_FILE, 0o600);
-db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-migrateDatabase(db);
-db.prepare(
-  "UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'",
-).run();
+if (!cloudflareRuntime) {
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const nodeDatabase = new DatabaseSync(DATABASE_FILE);
+  chmodSync(DATABASE_FILE, 0o600);
+  nodeDatabase.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+  migrateDatabase(nodeDatabase);
+  db = wrapNodeDatabase(nodeDatabase);
+  db.prepare("UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'").run();
+  encryptionKey = loadEncryptionKey();
+}
+
+export function initializeWorkerStore(storage: DurableSqlStorage, configuredKey?: string): void {
+  if (!cloudflareRuntime) throw new Error("Worker storage can only be initialized in the Workers runtime");
+  initializeDurableSchema(storage);
+  if (!configuredKey) throw new Error("MIRROR_STORE_KEY secret is required for Worker deployments");
+  encryptionKey = decodeConfiguredKey(configuredKey);
+  removeStoredSessionCredentials();
+}
 
 let sessionRevision = 0;
 const sessionListeners = new Set<() => void>();
@@ -107,7 +156,8 @@ export function assertSessionRevision(expected: number): void {
   if (expected !== sessionRevision) throw Object.assign(new Error("Session changed; retry with the current account"), {statusCode: 409});
 }
 export interface StoredSession {
-  sessionToken: string;
+  /** Read only while migrating old stores; never written by this version. */
+  sessionToken?: string;
   deviceId: string;
   savedAt: string;
   assetLinkGeneration?: string;
@@ -133,8 +183,12 @@ function writeSetting(key: string, value: string): void {
 }
 
 function migrateLegacyStore(): void {
-  if (!existsSync(LEGACY_STORE_FILE) || readSetting("session")) return;
+  if (!existsSync(LEGACY_STORE_FILE)) return;
   try {
+    if (readSetting("session")) {
+      unlinkSync(LEGACY_STORE_FILE);
+      return;
+    }
     const legacy = JSON.parse(readFileSync(LEGACY_STORE_FILE, "utf8")) as {
       session?: StoredSession | null;
     };
@@ -145,9 +199,12 @@ function migrateLegacyStore(): void {
     // Leave an unreadable legacy file untouched so recovery remains possible.
   }
 }
-migrateLegacyStore();
-const storedAccountId = getSession()?.accountId;
-if (storedAccountId) claimDefaultAccountData(storedAccountId);
+if (!cloudflareRuntime) {
+  migrateLegacyStore();
+  removeStoredSessionCredentials();
+  const storedAccountId = getSession()?.accountId;
+  if (storedAccountId) claimDefaultAccountData(storedAccountId);
+}
 
 export function databaseHealthy(): boolean {
   return (db.prepare("SELECT 1 AS ok").get() as { ok: number }).ok === 1;
@@ -156,6 +213,39 @@ export function databaseHealthy(): boolean {
 export function getSession(): StoredSession | null {
   const sealed = readSetting("session");
   return sealed ? (JSON.parse(decrypt(sealed)) as StoredSession) : null;
+}
+
+/** Persist only a stable, non-secret installation id when API clients connect directly. */
+export function getOrCreateDeviceId(): string {
+  const session = getSession();
+  if (session?.deviceId) return session.deviceId;
+  const metadata: StoredSession = {
+    deviceId: randomUUID(),
+    savedAt: new Date().toISOString(),
+    assetLinkGeneration: randomUUID(),
+  };
+  writeSetting("session", encrypt(JSON.stringify(metadata)));
+  return metadata.deviceId;
+}
+
+/** Retain harmless account metadata while erasing old server-side credentials. */
+function removeStoredSessionCredentials(): void {
+  const sealed = readSetting("session");
+  if (!sealed) return;
+  try {
+    const old = JSON.parse(decrypt(sealed)) as Partial<StoredSession>;
+    const metadata: StoredSession = {
+      deviceId: typeof old.deviceId === "string" ? old.deviceId : randomUUID(),
+      savedAt: typeof old.savedAt === "string" ? old.savedAt : new Date().toISOString(),
+      ...(typeof old.accountId === "string" ? { accountId: old.accountId } : {}),
+      ...(typeof old.assetLinkGeneration === "string" ? { assetLinkGeneration: old.assetLinkGeneration } : {}),
+      ...(typeof old.turnstileToken === "string" ? { turnstileToken: old.turnstileToken } : {}),
+      ...(typeof old.turnstileTokenSavedAt === "number" ? { turnstileTokenSavedAt: old.turnstileTokenSavedAt } : {}),
+    };
+    writeSetting("session", encrypt(JSON.stringify(metadata)));
+  } catch {
+    db.prepare("DELETE FROM settings WHERE key = 'session'").run();
+  }
 }
 
 // Account-wide default system instructions (MIR-brainstorm #3/#6 hybrid):
@@ -203,25 +293,19 @@ export function setHotkeys(accountId: string, hotkeys: Record<string, string>): 
 }
 
 export function saveVerifiedSession(
-  sessionToken: string,
   accountId?: string,
   deviceId?: string,
   turnstileToken?: string,
 ): StoredSession {
   changedSession();
   const prior = getSession();
-  const isSameSession = Boolean(
-    prior &&
-    prior.sessionToken === sessionToken &&
-    (!accountId || !prior.accountId || prior.accountId === accountId),
-  );
+  const isSameSession = Boolean(prior && (!accountId || !prior.accountId || prior.accountId === accountId));
   const effectiveTurnstile =
     turnstileToken ?? (isSameSession ? prior?.turnstileToken : undefined);
   const effectiveTurnstileSavedAt = turnstileToken
     ? Date.now()
     : (isSameSession ? prior?.turnstileTokenSavedAt : undefined);
   const session: StoredSession = {
-    sessionToken,
     deviceId: deviceId ?? (isSameSession ? prior?.deviceId : undefined) ?? randomUUID(),
     savedAt: new Date().toISOString(),
     assetLinkGeneration: randomUUID(),
@@ -264,19 +348,6 @@ export function setSessionAccountId(accountId: string): void {
   session.accountId = accountId;
   writeSetting("session", encrypt(JSON.stringify(session)));
   claimDefaultAccountData(accountId);
-}
-
-export function updateMintedToken(
-  accessToken: string,
-  expiresAt: number,
-  rotatedSessionToken: string | null,
-): void {
-  const session = getSession();
-  if (!session) return;
-  session.cachedAccessToken = accessToken;
-  session.cachedAccessTokenExpiresAt = expiresAt;
-  if (rotatedSessionToken) session.sessionToken = rotatedSessionToken;
-  writeSetting("session", encrypt(JSON.stringify(session)));
 }
 
 export function clearSession(): void {
@@ -505,8 +576,7 @@ export function syncRemoteConversations(
       (SELECT 1 FROM messages WHERE conversation_id=conversations.id)
       THEN COALESCE(?, current_node_id) ELSE current_node_id END,
     updated_at=? WHERE id=?`);
-  db.exec("BEGIN");
-  try {
+  db.transaction(() => {
     for (const item of items) {
       const row = find.get(accountId, item.id) as { id: string } | undefined;
       if (row)
@@ -529,11 +599,7 @@ export function syncRemoteConversations(
           item.updateTime,
         );
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 function textFromRemoteMessage(message: Record<string, unknown>): string {
@@ -874,8 +940,7 @@ export function replaceMessages(
     attachments?: UploadedFile[];
   }>,
 ): void {
-  db.exec("BEGIN");
-  try {
+  db.transaction(() => {
     db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(
       conversationId,
     );
@@ -891,11 +956,7 @@ export function replaceMessages(
         attachments: entry.attachments,
       });
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function saveInstructions(id: string, messages: Array<{role: string; content: string}>): void {

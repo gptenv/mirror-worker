@@ -33,19 +33,12 @@ export function requestOrigin(protocol: string, host: string | undefined): strin
  * services must remain untouched.
  */
 export function rewriteChatGptUrls(input: string, proxyOrigin: string): string {
-  const proxyWebSocketOrigin = proxyOrigin.replace(/^http/, "ws");
   const escapedProxy = proxyOrigin.replaceAll("/", "\\/");
-  const escapedWebSocketProxy = proxyWebSocketOrigin.replaceAll("/", "\\/");
 
   return input
     .replace(new RegExp(`https://${CHATGPT_WEB_HOSTS}`, "gi"), proxyOrigin)
-    .replace(new RegExp(`wss://${CHATGPT_WEB_HOSTS}`, "gi"), proxyWebSocketOrigin)
     .replace(
       /https:(?:\\\/){2}(?:(?:[a-z0-9-]+\.)*chatgpt\.com|chat\.openai\.com)/gi,
       escapedProxy,
-    )
-    .replace(
-      /wss:(?:\\\/){2}(?:(?:[a-z0-9-]+\.)*chatgpt\.com|chat\.openai\.com)/gi,
-      escapedWebSocketProxy,
     );
 }

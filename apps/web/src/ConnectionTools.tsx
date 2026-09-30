@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export function ConnectionTools({ domain, apiKey, generationSucceeded }: { domain: string; apiKey: string; generationSucceeded: boolean }) {
+export function ConnectionTools({ domain, apiKey, generationSucceeded, onSessionToken }: { domain: string; apiKey: string; generationSucceeded: boolean; onSessionToken?: (token: string) => void }) {
   const [diagnostics, setDiagnostics] = useState<unknown>(null);
   const [status, setStatus] = useState("Not tested");
   const [busy, setBusy] = useState(false);
@@ -15,7 +15,9 @@ export function ConnectionTools({ domain, apiKey, generationSucceeded }: { domai
         headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
         signal: AbortSignal.timeout(30_000),
       });
-      if (!models.ok) throw new Error(`Model discovery returned HTTP ${models.status}. Check the key, WARP, and saved session.`);
+      const rotated = models.headers.get("x-mirror-session-token");
+      if (rotated) onSessionToken?.(rotated);
+      if (!models.ok) throw new Error(`Model discovery returned HTTP ${models.status}. Check the key and saved session.`);
       const body = await models.json();
       if (!Array.isArray(body.data)) throw new Error("Model discovery returned an unsupported response.");
       setStatus(`Model discovery passed (${body.data.length} models). ${apiKey ? "Bearer credential supplied." : "Browser authentication used; a client key has not been tested."}`);

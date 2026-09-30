@@ -1,7 +1,7 @@
 /** Public errors and diagnostics contain no upstream payloads or exception text. */
 const categories: Record<number, [string, string, string]> = {
   400: ["invalid_request_error", "invalid_request", "Invalid request. Check the supported fields and message history."],
-  401: ["authentication_error", "authentication_required", "Supply a configured Mirror API key and check session readiness."],
+  401: ["authentication_error", "authentication_required", "Supply a valid ChatGPT session token as the Bearer credential."],
   403: ["permission_error", "request_forbidden", "Request rejected. Check the browser origin and account permissions."],
   404: ["invalid_request_error", "not_found", "The requested resource was not found."],
   409: ["invalid_request_error", "conversation_conflict", "Conversation or session changed. Reload before continuing."],
@@ -11,7 +11,7 @@ const categories: Record<number, [string, string, string]> = {
 };
 const recent: Array<{ at: string; code: string; requestId: string; protocolCategory: string | null }> = [];
 export function apiError(status: number, message: string, requestId: string) {
-  const [type, code, fallback] = categories[status] ?? ["server_error", "upstream_failure", "Generation failed. Check WARP and session readiness, then reload history before retrying."];
+  const [type, code, fallback] = categories[status] ?? ["server_error", "upstream_failure", "Generation failed. Check session readiness, then reload history before retrying."];
   return { error: { type, code, message: status === 400 ? message : fallback, request_id: requestId } };
 }
 export function recordFailure(code: string, requestId: string, protocolCategory: string | null = null) {

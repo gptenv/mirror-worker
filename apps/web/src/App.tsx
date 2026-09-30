@@ -134,7 +134,10 @@ export default function App() {
   const [domain, setDomain] = useState(() => location.origin);
   const [mode, setMode] = useState<"chat" | "responses">("chat");
   const [path, setPath] = useState("/v1/chat/completions");
-  const [apiKey, setApiKey] = useState("");
+  const [apiKey, setApiKey] = useState(() => {
+    try { return localStorage.getItem("mirror_session_token") ?? ""; } catch { return ""; }
+  });
+  const credentialRotationRef = useRef(false);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [model, setModel] = useState(() => loadSnapshot()?.model ?? "auto");
   const [modelFreeform, setModelFreeform] = useState(false);
@@ -254,8 +257,24 @@ export default function App() {
   const canRun = runBlockedReason === null;
 
   useEffect(() => {
+    if (credentialRotationRef.current) {
+      credentialRotationRef.current = false;
+      return;
+    }
     fetch(`${domain.replace(/\/$/, "")}/v1/models`, { headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {} })
-      .then(async (res) => { if (!res.ok) throw new Error(`Model discovery failed: ${res.status}`); return res.json(); })
+      .then(async (res) => {
+        const rotated = res.headers.get("x-mirror-session-token");
+        if (rotated) {
+          setApiKey(rotated);
+          if (rotated !== apiKey) credentialRotationRef.current = true;
+          try {
+            localStorage.setItem("mirror_session_token", rotated);
+            document.cookie = `mirror_asset_session=${encodeURIComponent(rotated)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+          } catch { /* Browser storage may be unavailable. */ }
+        }
+        if (!res.ok) throw new Error(`Model discovery failed: ${res.status}`);
+        return res.json();
+      })
       .then((body) => {
         if (Array.isArray(body.data)) setModels(body.data);
       })
@@ -539,6 +558,15 @@ export default function App() {
           ...(Object.keys(metadata).length ? { metadata } : {}),
         }),
       });
+      const rotated = response.headers.get("x-mirror-session-token");
+      if (rotated) {
+        setApiKey(rotated);
+        if (rotated !== apiKey) credentialRotationRef.current = true;
+        try {
+          localStorage.setItem("mirror_session_token", rotated);
+          document.cookie = `mirror_asset_session=${encodeURIComponent(rotated)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+        } catch { /* Browser storage may be unavailable. */ }
+      }
       if (!response.ok)
         throw new Error(`${response.status} ${await response.text()}`);
       const returnedConversationId = response.headers.get(
@@ -683,10 +711,23 @@ export default function App() {
             <input
               type="password"
               value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="Optional for this server"
+              onChange={(event) => {
+                const value = event.target.value;
+                setApiKey(value);
+                try {
+                  if (value) {
+                    localStorage.setItem("mirror_session_token", value);
+                    document.cookie = `mirror_asset_session=${encodeURIComponent(value)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+                  } else {
+                    localStorage.removeItem("mirror_session_token");
+                    document.cookie = `mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+                  }
+                } catch { /* Browser storage may be unavailable. */ }
+              }}
+              placeholder="Paste ChatGPT session token"
             />
           </label>
+          <small>Use your ChatGPT session token as the Mirror API bearer.</small>
         </div>
         <div className="columns">
           <section className="prompt-panel">
@@ -1044,7 +1085,19 @@ export default function App() {
             </label>
             <ConversationTools conversationId={conversationId} disabled={running || readingFiles} onSelect={id => void loadConversation(id)} />
             <HotkeySettings hotkeys={hotkeys} disabled={running || readingFiles} onSave={saveHotkeys} />
-            <ConnectionTools domain={domain} apiKey={apiKey} generationSucceeded={status === "Completed"} />
+            <ConnectionTools
+              domain={domain}
+              apiKey={apiKey}
+              generationSucceeded={status === "Completed"}
+              onSessionToken={(token) => {
+                if (token !== apiKey) credentialRotationRef.current = true;
+                setApiKey(token);
+                try {
+                  localStorage.setItem("mirror_session_token", token);
+                  document.cookie = `mirror_asset_session=${encodeURIComponent(token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+                } catch { /* Browser storage may be unavailable. */ }
+              }}
+            />
             <div className="request-preview">
               <span>Request URL</span>
               <code>{endpoint}</code>

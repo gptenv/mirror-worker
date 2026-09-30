@@ -13,6 +13,26 @@ function rel(u){
   return u;
 }
 function wrapFetch(delegate){
+  function rememberToken(token){
+    localStorage.setItem('mirror_session_token',token);
+    document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+  }
+  function send(input,init){
+    try{
+      var token=localStorage.getItem('mirror_session_token');
+      var url=typeof input==='string'?input:(input&&typeof input.url==='string'?input.url:String(input));
+      if(token&&new URL(url,location.href).origin===location.origin){
+        var opts=Object.assign({},init||{});
+        var headers=new Headers(opts.headers||(input&&input.headers)||undefined);
+        headers.set('authorization','Bearer '+token);
+        opts.headers=headers;init=opts;
+      }
+    }catch(e){}
+    return Promise.resolve(delegate.call(this,input,init)).then(function(response){
+      try{var rotated=response.headers.get('x-mirror-session-token');if(rotated)rememberToken(rotated);}catch(e){}
+      return response;
+    });
+  }
   var wrapped=function(input,init){
     try{
       if(typeof input==="string")input=rel(input);
@@ -50,7 +70,7 @@ function wrapFetch(delegate){
             return input.clone().arrayBuffer().then(function(buf){
               base.body=buf;
               if(init)for(var key in init)base[key]=init[key];
-              return delegate.call(this,rewritten,base);
+              return send.call(this,rewritten,base);
             }.bind(this));
           }
           if(init)for(var key in init)base[key]=init[key];
@@ -58,7 +78,7 @@ function wrapFetch(delegate){
         }
       }
     }catch(e){}
-    return delegate.call(this,input,init);
+    return send.call(this,input,init);
   };
   try{Object.defineProperty(wrapped,"__mirrorProxyPatch",{value:true});}catch(e){}
   return wrapped;
@@ -85,8 +105,14 @@ var open=XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open=function(method,url){
   var args=Array.prototype.slice.call(arguments);
   try{if(typeof url==="string")args[1]=rel(url);}catch(e){}
+  try{this.__mirrorSameOrigin=typeof args[1]==='string'&&new URL(args[1],location.href).origin===location.origin;}catch(e){this.__mirrorSameOrigin=false;}
   try{if(typeof url==="string"&&url.indexOf("prepare")!==-1){window.__mirrorDebugXhr=window.__mirrorDebugXhr||[];window.__mirrorDebugXhr.push({method:method,url:url});}}catch(e){}
   return open.apply(this,args);
+};
+var xhrSend=XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send=function(){
+  try{var token=localStorage.getItem('mirror_session_token');if(token&&this.__mirrorSameOrigin)this.setRequestHeader('Authorization','Bearer '+token);}catch(e){}
+  return xhrSend.apply(this,arguments);
 };
 var OrigWorker=window.Worker;
 if(OrigWorker){
@@ -99,17 +125,6 @@ if(OrigWorker){
 }
 var sb=navigator.sendBeacon;
 if(sb)navigator.sendBeacon=function(url,data){try{if(typeof url==="string")url=rel(url);}catch(e){}return sb.call(navigator,url,data);};
-var WS=window.WebSocket;
-if(WS){
-  var W2=function(url,protocols){
-    try{
-      if(typeof url==="string")url=rel(url).replace(/^https:/,"wss:").replace(/^http:/,"ws:");
-    }catch(e){}
-    return protocols!==undefined?new WS(url,protocols):new WS(url);
-  };
-  W2.prototype=WS.prototype;
-  window.WebSocket=W2;
-}
 // Remove this script's own node from <head> immediately after it has run.
 // It has already installed its patches via closures/property overrides at
 // this point, so the DOM node itself serves no further purpose -- but left

@@ -128,18 +128,40 @@ export function makePublicLookup(resolve: AddressResolver = lookup as AddressRes
 
 export const publicLookup = makePublicLookup();
 
+const cloudflareRuntime = typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined";
+
+async function verifyWorkerDns(hostname: string, label: string, index: number): Promise<void> {
+  if (isIP(hostname)) {
+    if (!isPublicImageHost(hostname)) throw new Error(`${label}[${index}] host is not permitted: ${hostname}`);
+    return;
+  }
+  const answers = await Promise.all(["A", "AAAA"].map(async (type) => {
+    const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`, {
+      headers: { accept: "application/dns-json" },
+    });
+    if (!response.ok) throw new Error(`DNS check failed for ${hostname}`);
+    const result = await response.json() as { Answer?: Array<{ data?: string }> };
+    return (result.Answer ?? []).map((answer) => answer.data).filter((address): address is string => Boolean(address));
+  }));
+  const addresses = answers.flat();
+  if (!addresses.length || addresses.some((address) => !isPublicImageHost(address)))
+    throw new Error(`${label}[${index}] host does not resolve exclusively to public addresses: ${hostname}`);
+}
+
 async function fetchPublicResource(url: string, signal: AbortSignal | undefined, index: number, label: string) {
-  const agent = new Agent({ connect: { lookup: publicLookup } });
+  const agent = cloudflareRuntime ? undefined : new Agent({ connect: { lookup: publicLookup } });
   let current = new URL(url);
   try {
     for (let redirects = 0; ; redirects += 1) {
       if (!isPublicImageHost(current.hostname))
         throw new Error(`${label}[${index}] host is not permitted: ${current.hostname}`);
-      const res = await fetch(current, {
+      if (cloudflareRuntime) await verifyWorkerDns(current.hostname, label, index);
+      const init: RequestInit & { dispatcher?: Agent } = {
         signal,
         redirect: "manual",
-        dispatcher: agent,
-      } as RequestInit & { dispatcher: Agent });
+      };
+      if (agent) init.dispatcher = agent as unknown as NonNullable<typeof init.dispatcher>;
+      const res = await fetch(current, init as never);
       if (![301, 302, 303, 307, 308].includes(res.status)) {
         if (!res.ok)
           throw new Error(`Could not fetch ${label}[${index}]: upstream returned ${res.status}`);
@@ -179,7 +201,7 @@ async function fetchPublicResource(url: string, signal: AbortSignal | undefined,
         throw new Error(`${label}[${index}] redirect protocol is not permitted`);
     }
   } finally {
-    await agent.close();
+    await agent?.close();
   }
 }
 

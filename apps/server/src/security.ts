@@ -1,5 +1,10 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { isIP } from "node:net";
+const cloudflareRuntime = typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined";
+
+function isIpv4(hostname: string): boolean {
+  const parts = hostname.split(".");
+  return parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
 
 function hostnameFromHost(host: string): string | null {
   try {
@@ -25,7 +30,7 @@ export function isLoopbackHostname(hostname: string): boolean {
     normalized === "localhost" ||
     normalized.endsWith(".localhost") ||
     normalized === "::1" ||
-    (isIP(normalized) === 4 && normalized.startsWith("127."))
+    (isIpv4(normalized) && normalized.startsWith("127."))
   );
 }
 
@@ -50,6 +55,7 @@ export function isAllowedRequestHost(
   if (!host) return false;
   const hostname = hostnameFromHost(host);
   if (!hostname) return false;
+  if (cloudflareRuntime) return true;
   if (isLoopbackHostname(hostname)) return true;
   return extraAllowedHostnames(env).includes(hostname);
 }
@@ -62,7 +68,7 @@ export function isAllowedOrigin(
   try {
     const originUrl = new URL(origin);
     const requestHostname = requestHost ? hostnameFromHost(requestHost) : null;
-    if (requestHostname && originUrl.origin === new URL(`http://${requestHost}`).origin) return true;
+    if (requestHostname && originUrl.host.toLowerCase() === requestHost?.toLowerCase() && ["http:", "https:"].includes(originUrl.protocol)) return true;
     const developmentOrigin =
       process.env.MIRROR_WEB_ORIGIN?.trim() || "http://localhost:5173";
     return originUrl.origin === new URL(developmentOrigin).origin;
@@ -86,16 +92,20 @@ export function bearerToken(authorization: string | undefined): string {
   return authorization?.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
 }
 
-const controlSecret = randomBytes(32).toString("base64url");
-export function controlCookie(): string { return `mirror_control=${controlSecret}; Path=/; HttpOnly; SameSite=Strict`; }
+let controlSecret: string | undefined;
+function getControlSecret(): string {
+  controlSecret ??= randomBytes(32).toString("base64url");
+  return controlSecret;
+}
+export function controlCookie(): string { return `mirror_control=${getControlSecret()}; Path=/; HttpOnly; SameSite=Strict${cloudflareRuntime ? "; Secure" : ""}`; }
 export function authorizedLocalRequest(headers: { authorization?: string; cookie?: string }): boolean {
   if (tokenMatches(bearerToken(headers.authorization), configuredApiKeys())) return true;
   const cookie = headers.cookie?.split(";").map(x => x.trim()).find(x => x.startsWith("mirror_control="))?.slice(15) ?? "";
-  return tokenMatches(cookie, [controlSecret]);
+  return tokenMatches(cookie, controlSecret ? [controlSecret] : []);
 }
 export function mayBootstrapBrowser(method: string, url: string, headers: Record<string, unknown>): boolean {
   const pathname = url.split("?", 1)[0];
-  const isBrowserPage = pathname === "/" || pathname === "/mirror/playground" || /^\/c\/[a-z0-9:_-]+$/i.test(pathname);
+  const isBrowserPage = pathname === "/" || pathname === "/mirror/playground" || pathname === "/mirror/api-docs" || /^\/c\/[a-z0-9:_-]+$/i.test(pathname);
   return method === "GET" && isBrowserPage &&
     String(headers.accept ?? "").includes("text/html") && headers["sec-fetch-site"] !== "cross-site";
 }

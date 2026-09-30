@@ -3,8 +3,8 @@
  *
  * Mirror's actual startup sequence (see the entrypoint block at the bottom of
  * `index.ts`) is: build the app (config parsing, master-key/`MIRROR_STORE_KEY`
- * decoding, database open + migration) -> verify required WARP egress -> bind
- * the HTTP listener. Each of those three phases fails in a recognizably
+ * decoding, database open + migration) -> bind the HTTP listener. Each phase
+ * fails in a recognizably
  * different way today; this module turns whichever one throws into one short,
  * actionable line instead of a raw stack trace, so a failed `npm start` (or
  * a failed container boot) says what to actually do next rather than just
@@ -23,7 +23,6 @@
 export type StartupFailureCategory =
   | "configuration"
   | "database-migration"
-  | "warp-egress"
   | "port-in-use"
   | "unknown";
 
@@ -54,15 +53,6 @@ export function classifyStartupFailure(error: unknown): ClassifiedStartupFailure
       message,
       nextAction:
         "Another process is already using this port. Stop it, or set PORT (direct run) / MIRROR_PORT (Compose) to a free one.",
-    };
-  }
-
-  if (message.includes("Mirror requires WARP")) {
-    return {
-      category: "warp-egress",
-      message,
-      nextAction:
-        "Confirm the bundled WARP container is running and WARP_ACCEPT_TOS=yes is set, then restart. Mirror will not fall back to a direct connection.",
     };
   }
 

@@ -5,7 +5,6 @@ import { createDocument, type oas31, type ZodOpenApiPathsObject } from "zod-open
 import { z } from "zod";
 import { CompletionBody } from "./openai.js";
 import {
-  SetSessionBody,
   ConversationIdParam,
   ModelUpdateBody,
   BranchBody,
@@ -343,13 +342,13 @@ const PublicGizmoSummary = z
 /** Mirrors EgressStatus from egress.ts. */
 const EgressStatus = z
   .object({
-    mode: z.enum(["direct", "warp"]),
-    required: z.boolean().openapi({ description: "Whether this deployment is configured to require verified WARP egress before it will serve traffic." }),
+    mode: z.literal("direct"),
+    required: z.literal(false),
     verified: z.boolean(),
     checkedAt: z.string().datetime().nullable(),
     error: z.string().nullable(),
   })
-  .openapi({ ref: "EgressStatus", description: "The result of Mirror's last Cloudflare WARP verification check (egress.ts)." });
+  .openapi({ ref: "EgressStatus", description: "Outbound request routing status for this deployment." });
 
 /** The shape stored/returned by store.ts's getInstructions(). */
 const InstructionMessage = z
@@ -367,7 +366,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
           content: {
             "application/json": {
               schema: z.object({
-                ok: z.boolean().openapi({ description: "True only when storage is healthy and required WARP egress (if configured) is verified." }),
+                ok: z.boolean().openapi({ description: "True when Mirror's storage is healthy." }),
                 storage: z.literal("sqlite"),
                 configured: z.boolean().openapi({ description: "Whether a ChatGPT session has been connected." }),
                 egress: EgressStatus,
@@ -398,9 +397,8 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
       },
     },
     post: {
-      summary: "Connect Mirror to a ChatGPT account",
+      summary: "Verify the current browser's ChatGPT session bearer",
       tags: ["Mirror"],
-      requestBody: { content: { "application/json": { schema: SetSessionBody } } },
       responses: {
         "200": {
           description: "OK",
@@ -414,8 +412,8 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
             },
           },
         },
-        "400": {
-          description: "Invalid session token",
+        "401": {
+          description: "Missing or invalid ChatGPT session bearer",
           content: { "application/json": { schema: ErrorResponse } },
         },
       },
@@ -760,10 +758,10 @@ export function buildOpenApiDocument(): oas31.OpenAPIObject {
           type: "http",
           scheme: "bearer",
           description:
-            "A value from MIRROR_API_KEY / MIRROR_API_KEYS. Required for /v1/* and /api/* " +
-            "requests that aren't coming from a browser tab that has already completed the " +
-            "Mirror controls sessionToken bootstrap (which instead authenticates via an " +
-            "HttpOnly mirror_control cookie).",
+            "Your ChatGPT session token. Mirror stores it in the browser and sends it as the " +
+            "Bearer credential; the Worker uses it transiently to mint upstream access. " +
+            "MIRROR_API_KEY / MIRROR_API_KEYS can additionally authorize control routes, " +
+            "but do not provide ChatGPT account access.",
         },
       },
     },

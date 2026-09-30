@@ -53,13 +53,19 @@ export async function solveTurnstileWithBrowser(
   opts: BrowserTurnstileOptions = {},
 ): Promise<string | null> {
   if (opts.signal?.aborted) return null;
+  // Workers have no browser runtime. Keep the challenge paths that accept a
+  // supplied token, but skip the optional local Chromium fallback there.
+  if (typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined") return null;
   const origin = opts.origin ?? "https://chatgpt.com";
   const frameUrl = opts.frameUrl ?? `${origin}/backend-api/sentinel/frame.html`;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   try {
     let pw = opts.playwright;
     if (!pw) {
-      pw = await import("playwright");
+      // Use a runtime specifier so edge bundlers do not include Node-only
+      // Playwright and its Chromium dependencies in the Worker bundle.
+      const playwrightModule = "play" + "wright";
+      pw = await import(playwrightModule);
     }
     const chromium = pw?.chromium;
     if (!chromium || typeof chromium.launch !== "function") return null;

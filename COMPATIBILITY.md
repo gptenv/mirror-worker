@@ -84,7 +84,7 @@ Given the above, "fully OpenAI-compatible" isn't a reachable end state for this 
 
 ## Responses API text subset
 
-`POST /v1/responses` adapts text generation to the Responses request/output format. It shares the Chat Completions engine, persistence, account checks, immutable assistant history, cancellation, deadlines, and WARP egress.
+`POST /v1/responses` adapts text generation to the Responses request/output format. It shares the Chat Completions engine, persistence, account checks, immutable assistant history, cancellation, and deadlines.
 
 - `input`: a string or message array with `system`, `developer`, `user`, or `assistant` roles. Content can be a string or `input_text`/`output_text` parts. Returned assistant message items can be included in subsequent input history.
 - `instructions`: optional system instructions. `model`, `stream`, `store`, and Mirror `metadata` routing fields are supported. `max_output_tokens` is accepted but ignored so answers remain complete.

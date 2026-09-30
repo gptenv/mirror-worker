@@ -1,0 +1,7 @@
+# Generate a private, stable key with: openssl rand -base64 32
+MIRROR_STORE_KEY=
+
+# Optional programmatic API keys.
+MIRROR_API_KEY=
+MIRROR_API_KEYS=
+OPENAI_API_KEY=

@@ -17,11 +17,9 @@
     "@fastify/swagger": "^9.8.1",
     "@fastify/swagger-ui": "^6.1.1",
     "@mirror/protocol": "^0.1.0",
-    "@types/ws": "^8.18.1",
     "fastify": "^5.12.3",
     "mdast-util-from-markdown": "^2.0.2",
     "undici": "^7.29.1",
-    "ws": "^8.21.3",
     "yaml": "^2.9.0",
     "zod": "^3.25.76",
     "zod-openapi": "^4.2.4"

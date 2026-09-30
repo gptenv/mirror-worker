@@ -17,7 +17,6 @@
  */
 
 import pkg from "js-sha3";
-import { Worker } from "node:worker_threads";
 const { sha3_512 } = pkg;
 
 export type ProofConfig = [
@@ -139,7 +138,8 @@ export function generateProofToken(opts: GenerateProofOptions): string | null {
  * Fastify process for every other request.
  */
 export async function generateProofTokenAsync(
-  opts: GenerateProofOptions & { yieldEvery?: number },
+    opts: GenerateProofOptions & { yieldEvery?: number },
+    signal?: AbortSignal,
 ): Promise<string | null> {
   const {
     required,
@@ -159,6 +159,7 @@ export async function generateProofTokenAsync(
   const difficultyLen = difficulty.length;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (signal?.aborted) throw new DOMException("Proof generation aborted", "AbortError");
     proof[3] = attempt;
     const proofJson = JSON.stringify(proof);
     const proofBase = b64(proofJson);
@@ -167,7 +168,7 @@ export async function generateProofTokenAsync(
       return "gAAAAAB" + proofBase;
     }
     if (attempt > 0 && attempt % yieldEvery === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
   }
 
@@ -176,8 +177,12 @@ export async function generateProofTokenAsync(
 }
 
 /** Run CPU-bound Sentinel work outside the server event loop. */
-export function generateProofTokenInWorker(opts: GenerateProofOptions, signal?: AbortSignal): Promise<string | null> {
+export async function generateProofTokenInWorker(opts: GenerateProofOptions, signal?: AbortSignal): Promise<string | null> {
   if (!opts.required) return Promise.resolve(null);
+  if (typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined")
+    return generateProofTokenAsync(opts, signal);
+  const workerThreadsModule = "node:" + "worker_threads";
+  const { Worker } = await import(workerThreadsModule);
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./proof-worker.js", import.meta.url), { workerData: opts });
     const abort = () => {
@@ -185,15 +190,15 @@ export function generateProofTokenInWorker(opts: GenerateProofOptions, signal?: 
       reject(new DOMException("Proof generation aborted", "AbortError"));
     };
     signal?.addEventListener("abort", abort, { once: true });
-    worker.once("message", (message) => {
+    worker.once("message", (message: unknown) => {
       signal?.removeEventListener("abort", abort);
       resolve(message as string | null);
     });
-    worker.once("error", (error) => {
+    worker.once("error", (error: Error) => {
       signal?.removeEventListener("abort", abort);
       reject(error);
     });
-    worker.once("exit", (code) => {
+    worker.once("exit", (code: number) => {
       signal?.removeEventListener("abort", abort);
       if (code !== 0 && !signal?.aborted) reject(new Error(`Proof worker exited with code ${code}`));
     });

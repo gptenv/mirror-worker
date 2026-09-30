@@ -1,34 +1,11 @@
 services:
-  warp:
-    build:
-      context: ./docker/warp
-    environment:
-      WARP_ACCEPT_TOS: ${WARP_ACCEPT_TOS:-no}
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "127.0.0.1:${MIRROR_PORT:-8799}:8787"
-    volumes:
-      - mirror-warp:/var/lib/cloudflare-warp
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/warp-healthcheck"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    restart: unless-stopped
-
   mirror:
     build:
       context: .
       args:
         MIRROR_BUILD_REVISION: ${MIRROR_BUILD_REVISION:-development}
-    network_mode: "service:warp"
-    depends_on:
-      warp:
-        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MIRROR_PORT:-8799}:8787"
     environment:
       HOST: 0.0.0.0
       PORT: 8787
@@ -37,11 +14,6 @@ services:
       MIRROR_API_KEYS: ${MIRROR_API_KEYS:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MIRROR_STORE_KEY: ${MIRROR_STORE_KEY:-}
-      # DEMO-ONLY: lets a specific external hostname (e.g. a localtunnel
-      # URL) through the loopback-only Host/Origin checks in security.ts.
-      # Leave unset for normal use - only set these for a short-lived,
-      # throwaway demo recording, then unset and recreate the container.
-      MIRROR_ALLOWED_HOSTS: ${MIRROR_ALLOWED_HOSTS:-}
       MIRROR_WEB_ORIGIN: ${MIRROR_WEB_ORIGIN:-}
     volumes:
       - mirror-data:/home/node/.mirror
@@ -49,4 +21,3 @@ services:
 
 volumes:
   mirror-data:
-  mirror-warp:

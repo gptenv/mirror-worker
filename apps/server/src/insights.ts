@@ -45,7 +45,7 @@ export async function registerInsightRoutes(app: FastifyInstance) {
       egress: { required: egress.required, verified: egress.verified, mode: egress.mode, checkedAt: egress.checkedAt },
       session: { saved: Boolean(getSession()), generationVerified: false },
       recentFailures: recentFailures(),
-      nextAction: !egress.verified ? "Check the WARP container health." : !getSession() ? "Save a session in Mirror controls." : "Test model discovery, then explicitly run a generation in Playground.",
+      nextAction: !getSession() ? "Save a session in Mirror controls." : "Test model discovery, then explicitly run a generation in Playground.",
     };
   });
   // Account-wide sticky default for the Playground's System box: saved

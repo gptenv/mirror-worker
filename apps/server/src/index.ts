@@ -19,7 +19,6 @@ import { stringify as toYaml } from "yaml";
 import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
 import {
-  SetSessionBody,
   ConversationIdParam,
   ModelUpdateBody,
   BranchBody,
@@ -34,19 +33,16 @@ import {
   normalizeModels,
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
-import { getValidCredentials, verifyCandidateSessionToken } from "./auth.js";
+import { getRequestSessionToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
   injectionCss,
   injectionJs,
   proxyChatGpt,
-  proxyWebSocketUpgrade,
 } from "./proxy.js";
 import {
   getEgressStatus,
-  monitorRequiredEgress,
-  verifyRequiredEgress,
 } from "./egress.js";
 import {
   controlCookie,
@@ -80,7 +76,6 @@ import {
   setConversationModel,
   setConversationSyncCursor,
   syncRemoteConversations,
-  updateMintedToken,
   ownsFile,
   ownsUpstreamConversation,
 } from "./store.js";
@@ -91,9 +86,14 @@ function isPublicApiPath(url: string): boolean {
   return pathname === "/v1/responses" || pathname === "/v1/models" || pathname === "/v1/chat/completions" || pathname === "/v1/capabilities";
 }
 
-export async function buildApp() {
+export interface WorkerAssets {
+  fetch(request: Request): Promise<Response>;
+}
+
+export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets } = {}) {
 const app = Fastify({
-  logger: {
+  trustProxy: options.worker ? true : false,
+  logger: options.worker ? false : {
     redact: [
       "req.headers.authorization",
       "req.headers.cookie",
@@ -124,8 +124,8 @@ await app.register(cors, {
       ? (req.headers.origin || false) : false,
     credentials: false,
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type"],
-    exposedHeaders: ["x-mirror-conversation-id", "x-request-id"],
+    allowedHeaders: ["Authorization", "Content-Type", "x-mirror-device-id", "x-turnstile-token"],
+    exposedHeaders: ["x-mirror-conversation-id", "x-request-id", "x-mirror-session-token"],
   }),
 });
 await app.register(rateLimit, {
@@ -137,45 +137,100 @@ await app.register(multipart, {
   limits: { fileSize: 25 * 1024 * 1024, files: 1 },
 });
 
-const apiKeys = configuredApiKeys();
 const accountKey = () => getSession()?.accountId ?? "default";
 app.addHook("onRequest", async (req, reply) => {
   reply.header("x-request-id", req.id);
   if (!isAllowedRequestHost(req.headers.host)) {
     return reply.code(421).send({ error: "Untrusted Host header" });
   }
-  // Image tags and new-tab downloads cannot attach a Mirror bearer header.
-  // This exact read-only route validates its own sealed, file-scoped ticket.
-  if (["GET", "HEAD"].includes(req.method) && req.url.split("?", 1)[0] === "/api/asset-content") return;
-  if (isPublicApiPath(req.url) && !isAllowedOrigin(req.headers.origin, req.headers.host)) {
-    if (!tokenMatches(bearerToken(req.headers.authorization), configuredApiKeys())) {
+  const bearer = bearerToken(req.headers.authorization);
+  const isConfiguredApiKey = tokenMatches(bearer, configuredApiKeys());
+  const assetContentRequest = ["GET", "HEAD"].includes(req.method) && req.url.split("?", 1)[0] === "/api/asset-content";
+  const encodedAssetCookieToken = assetContentRequest
+    ? req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("mirror_asset_session="))?.slice("mirror_asset_session=".length)
+    : undefined;
+  let assetCookieToken: string | undefined;
+  try { assetCookieToken = encodedAssetCookieToken ? decodeURIComponent(encodedAssetCookieToken) : undefined; } catch { assetCookieToken = undefined; }
+  let sessionBearerAuthenticated = false;
+  const requiresUpstreamSession = isPublicApiPath(req.url) ||
+    req.url.startsWith("/backend-api/") || req.url.startsWith("/ces/") ||
+    req.url.startsWith("/realtime/") || req.url.startsWith("/api/auth/") ||
+    req.url.split("?", 1)[0] === "/api/session" || assetContentRequest;
+  const requestSessionToken = bearer || assetCookieToken || "";
+  if (requestSessionToken) setRequestSessionToken(requestSessionToken);
+  if (requestSessionToken && requiresUpstreamSession) {
+    // A ChatGPT session token is the client-side Mirror bearer credential.
+    // Verify it before granting access to local routes, and reuse the minted
+    // token for the rest of this request.
+    try {
+      await getValidCredentials();
+      sessionBearerAuthenticated = true;
+    } catch (error) {
+      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
+        error: { message: "Invalid ChatGPT session token", type: "authentication_error" },
+      });
+    }
+  }
+  // Native image/download requests use a client-side cookie scoped only to
+  // this exact asset route because browsers cannot attach Authorization.
+  if (assetContentRequest) {
+    if (!sessionBearerAuthenticated) return reply.code(401).send({ error: "A valid session token is required for this asset." });
+    return;
+  }
+  const crossOriginPublicApi = isPublicApiPath(req.url) && !isAllowedOrigin(req.headers.origin, req.headers.host);
+  if (crossOriginPublicApi) {
+    if (!isConfiguredApiKey && !sessionBearerAuthenticated) {
       return reply.code(401).send({ error: {
-        message: "Cross-origin API requests require a configured Mirror API key",
+        message: "Cross-origin API requests require a ChatGPT session token Bearer credential",
         type: "authentication_error",
       } });
     }
-    return;
   }
+  const authenticatedCrossOriginApi = crossOriginPublicApi && (isConfiguredApiKey || sessionBearerAuthenticated);
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(req.method);
-  if (mutating && !isAllowedOrigin(req.headers.origin, req.headers.host)) {
+  if (mutating && !isAllowedOrigin(req.headers.origin, req.headers.host) && !authenticatedCrossOriginApi) {
     return reply
       .code(403)
       .send({ error: "Cross-origin control request rejected" });
   }
-  if (req.headers.origin && !isAllowedOrigin(req.headers.origin, req.headers.host))
+  if (req.headers.origin && !isAllowedOrigin(req.headers.origin, req.headers.host) && !authenticatedCrossOriginApi)
     return reply.code(403).send({error: "Origin rejected"});
-  if (mayBootstrapBrowser(req.method, req.url, req.headers)) {
+  const workerPage = options.worker && req.method === "GET" &&
+    ["/mirror/playground", "/mirror/api-docs", "/mirror/openapi"].includes(req.url.split("?", 1)[0]!) &&
+    String(req.headers.accept ?? "").includes("text/html");
+  const workerAsset = options.worker && req.method === "GET" &&
+    (/^\/(?:assets|mirror\/assets)\//.test(req.url) || ["/favicon.ico", "/index.html"].includes(req.url.split("?", 1)[0]!));
+  if (workerPage || workerAsset) return;
+  if (!options.worker && mayBootstrapBrowser(req.method, req.url, req.headers)) {
     req.log.info({ url: req.url }, "setting control cookie for bootstrap");
     reply.header("Set-Cookie", controlCookie());
     return;
   }
   if (req.url === "/api/health" || req.url.startsWith("/mirror/assets/")) return;
-  if (!authorizedLocalRequest(req.headers)) {
-    return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a configured Mirror API key", type: "authentication_error" } });
+  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey) {
+    try {
+      await getValidCredentials();
+      sessionBearerAuthenticated = true;
+    } catch (error) {
+      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
+        error: { message: "Invalid ChatGPT session token", type: "authentication_error" },
+      });
+    }
+  }
+  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers)) {
+    return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT session token as the Bearer credential", type: "authentication_error" } });
   }
 });
 
 app.addHook("onSend", async (req, reply, payload) => {
+  const rotatedSessionToken = getRotatedRequestSessionToken();
+  if (rotatedSessionToken) {
+    reply.header("x-mirror-session-token", rotatedSessionToken);
+    if (req.url.split("?", 1)[0] === "/api/asset-content") {
+      const secure = req.protocol === "https" ? "; Secure" : "";
+      reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(rotatedSessionToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
+    }
+  }
   if (req.url.startsWith("/v1/") && reply.statusCode >= 400) {
     // Format direct route replies and Fastify/plugin failures alike. Every
     // /v1/ response - a route's own .send(), the notFoundHandler, the rate
@@ -219,25 +274,16 @@ app.get("/api/health", async () => ({
   egress: getEgressStatus(),
 }));
 
-app.post("/api/session", async (req) => {
-  const body = SetSessionBody.parse(req.body);
-  const revision = getSessionRevision();
-  const candidate = await verifyCandidateSessionToken(body.sessionToken, body.turnstileToken);
-  const client = new ChatGptBackendClient(candidate.credentials);
+app.post("/api/session", async (req, reply) => {
+  const credentials = await getValidCredentials();
+  const client = new ChatGptBackendClient(credentials);
   const me = await client.fetchMe();
-  assertSessionRevision(revision);
   saveVerifiedSession(
-    candidate.persistedSessionToken,
     client.accountId ?? undefined,
-    candidate.credentials.deviceId,
-    body.turnstileToken ?? candidate.turnstileToken,
+    credentials.deviceId,
   );
   if (client.accountId) claimDefaultAccountData(client.accountId);
-  updateMintedToken(
-    candidate.credentials.accessToken,
-    candidate.expiresAt,
-    null,
-  );
+  reply.header("Cache-Control", "no-store");
   return {
     ok: true,
     accountId: client.accountId,
@@ -248,7 +294,7 @@ app.post("/api/session", async (req) => {
 app.get("/api/session", async () => {
   const session = getSession();
   return {
-    configured: Boolean(session),
+    configured: Boolean(getRequestSessionToken()),
     savedAt: session?.savedAt ?? null,
     hasTurnstileToken: Boolean(session?.turnstileToken),
   };
@@ -539,35 +585,72 @@ registerConversionRoutes(app);
 // trying to introspect Fastify route schemas (most routes here validate
 // manually with Zod inside the handler body, not via Fastify's own `schema`
 // option, so there'd be nothing for the automatic mode to find).
-await app.register(fastifySwagger, {
-  mode: "static",
-  // zod-openapi's OpenAPIObject type models the OpenAPI spec slightly more
-  // strictly than @fastify/swagger's own openapi-types import (e.g. server
-  // variable `enum` as string[] only, vs string[] | number[] | boolean[]) -
-  // both describe the same real document shape, so this is a type-only cast,
-  // not a runtime one.
-  specification: { document: buildOpenApiDocument() as any },
-});
-await app.register(fastifySwaggerUi, { routePrefix: "/mirror/api-docs" });
+if (!options.worker) {
+  await app.register(fastifySwagger, {
+    mode: "static",
+    // zod-openapi's OpenAPIObject type models the OpenAPI spec slightly more
+    // strictly than @fastify/swagger's own openapi-types import.
+    specification: { document: buildOpenApiDocument() as any },
+  });
+  await app.register(fastifySwaggerUi, { routePrefix: "/mirror/api-docs" });
+} else {
+  app.get("/mirror/api-docs", (_req, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mirror API docs</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.20.0/swagger-ui.css"></head>
+<body><div id="swagger-ui"></div><script src="https://unpkg.com/swagger-ui-dist@5.20.0/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url:"/mirror/openapi",dom_id:"#swagger-ui"})</script></body></html>`));
+}
 const OpenApiQuery = z.object({ format: z.enum(["json", "yaml"]).default("json") });
 app.get("/mirror/openapi", async (req, reply) => {
   const { format } = OpenApiQuery.parse(req.query);
-  const doc = app.swagger();
+  const doc = options.worker ? buildOpenApiDocument() : app.swagger();
   if (format === "yaml") return reply.type("application/yaml").send(toYaml(doc));
   return reply.type("application/json").send(doc);
 });
 
-const staticRoot = path.resolve(
+const staticRoot = options.worker ? "" : path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../web/dist",
 );
-await app.register(fastifyStatic, {
-  root: staticRoot,
-  prefix: "/mirror/",
-  wildcard: false,
-  decorateReply: true,
-});
-app.get("/mirror/playground", (_req, reply) => reply.sendFile("index.html"));
+if (!options.worker) {
+  await app.register(fastifyStatic, {
+    root: staticRoot,
+    prefix: "/mirror/",
+    wildcard: false,
+    decorateReply: true,
+  });
+  app.get("/mirror/playground", (_req, reply) => reply.sendFile("index.html"));
+} else {
+  app.get("/mirror/playground", async (req, reply) => {
+    if (!options.assets) return reply.code(503).send({ error: "Static assets are unavailable" });
+    const asset = await options.assets.fetch(new Request(new URL("/index.html", req.protocol + "://" + req.headers.host)));
+    if (!asset.ok) return reply.code(asset.status).send(await asset.text());
+    reply.type(asset.headers.get("content-type") ?? "text/html; charset=utf-8");
+    return reply.send(Buffer.from(await asset.arrayBuffer()));
+  });
+  app.get("/mirror/assets/*", async (req, reply) => {
+    if (!options.assets) return reply.code(503).send({ error: "Static assets are unavailable" });
+    const path = req.url.split("?", 1)[0]!.replace(/^\/mirror/, "");
+    const asset = await options.assets.fetch(new Request(new URL(path, req.protocol + "://" + req.headers.host)));
+    reply.code(asset.status);
+    asset.headers.forEach((value, key) => reply.header(key, value));
+    return reply.send(Buffer.from(await asset.arrayBuffer()));
+  });
+  app.get("/assets/*", async (req, reply) => {
+    if (!options.assets) return reply.code(503).send({ error: "Static assets are unavailable" });
+    const asset = await options.assets.fetch(new Request(new URL(req.url, req.protocol + "://" + req.headers.host)));
+    reply.code(asset.status);
+    asset.headers.forEach((value, key) => reply.header(key, value));
+    return reply.send(Buffer.from(await asset.arrayBuffer()));
+  });
+  app.get("/favicon.ico", async (req, reply) => {
+    if (!options.assets) return reply.code(503).send({ error: "Static assets are unavailable" });
+    const asset = await options.assets.fetch(new Request(new URL("/favicon.ico", req.protocol + "://" + req.headers.host)));
+    reply.code(asset.status);
+    asset.headers.forEach((value, key) => reply.header(key, value));
+    return reply.send(Buffer.from(await asset.arrayBuffer()));
+  });
+}
 app.get("/mirror/inject.css", (_req, reply) =>
   reply.type("text/css").send(injectionCss),
 );
@@ -585,39 +668,20 @@ app.setNotFoundHandler(async (req, reply) => {
 return app;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair === "undefined" && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 let app: Awaited<ReturnType<typeof buildApp>>;
 try {
   app = await buildApp();
   const port = Number(process.env.PORT ?? 8787);
   const host = process.env.HOST ?? "127.0.0.1";
-  await verifyRequiredEgress();
   await app.listen({ port, host });
   app.log.info(`mirror server listening on http://${host}:${port}`);
 } catch (error) {
-  // Startup failures (bad config, an incompatible database, unverifiable
-  // WARP egress, a port already in use) are classified into one actionable
+  // Startup failures (bad config, an incompatible database, a port already in use)
+  // are classified into one actionable
   // line instead of surfacing as a raw unhandled-rejection stack trace -
   // see preflight.ts for why these four categories specifically.
   console.error(formatStartupFailure(error));
   process.exit(1);
 }
-// The frontend also opens a raw WebSocket (realtime notifications) straight
-// to the upstream host; Fastify itself has no built-in WebSocket support, so
-// this proxies the HTTP upgrade through by hand, the same way every other
-// request is proxied through proxyChatGpt().
-app.server.on("upgrade", (req, socket, head) => {
-  void proxyWebSocketUpgrade(req, socket, head).catch((error) => {
-    app.log.error({ err: error }, "mirror websocket proxy failed");
-    socket.destroy();
-  });
-});
-monitorRequiredEgress((error) => {
-  app.log.error(
-    { err: error },
-    "required WARP egress was lost; stopping Mirror to prevent direct fallback",
-  );
-  void app.close().finally(() => process.exit(1));
-});
-
 }

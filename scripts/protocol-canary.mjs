@@ -1,7 +1,7 @@
 // Opt-in live protocol canary (MIR-32, NEXT-STEPS.md section 3).
 //
 // Read-only by default: checks that a running Mirror instance can actually
-// reach chatgpt.com/backend-api right now (WARP egress, a healthy saved
+// reach chatgpt.com/backend-api right now (a healthy saved
 // session, live model discovery) and prints a sanitized report suitable for
 // attaching to an issue when something about the private protocol has
 // drifted. Never touches the database directly and never prints a session
@@ -60,7 +60,7 @@ await check("diagnostics", async () => {
   const res = await fetch(`${baseUrl}/api/diagnostics`);
   if (!res.ok) throw new Error(`GET /api/diagnostics -> HTTP ${res.status}`);
   const body = await res.json();
-  return { schemaVersion: body.storage?.schemaVersion, warp: body.warp?.mode, session: body.session?.state };
+  return { schemaVersion: body.storage?.schemaVersion, egress: body.egress?.mode, session: body.session?.state };
 });
 
 await check("model-discovery", async () => {

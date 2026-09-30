@@ -22,7 +22,6 @@ export const injectionCss = decoderChallengeCss + `
 #mirror-launcher .mirror-save{background:#fff;color:#111}
 #mirror-launcher .mirror-play,#mirror-launcher .mirror-docs{background:#343434;color:#eee}
 #mirror-launcher .mirror-status{min-height:16px;margin-top:6px;color:#9adfce;font-size:11px}
-#mirror-launcher .mirror-egress{margin-top:8px;color:#aaa;font-size:11px}
 `;
 
 /**
@@ -48,7 +47,7 @@ function buildWidget(){
   var root=document.createElement('div');
   root.id='mirror-launcher';
   root.innerHTML='<button type="button" class="mirror-row"><span class="mirror-dot"></span><span>Mirror controls</span></button>'
-    +'<div class="mirror-panel"><strong>Mirror controls</strong><p>Connect with a sessionToken. <a class="mirror-session-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">Get it from ChatGPT</a>. The credential stays encrypted on this server and is never inserted into ChatGPT page scripts.</p><label>sessionToken</label><textarea autocomplete="off" spellcheck="false" placeholder="Paste sessionToken"></textarea><div class="mirror-actions"><button class="mirror-save">Save &amp; reload</button><a class="mirror-play" href="/mirror/playground" target="_blank" rel="noopener noreferrer">API tester</a><a class="mirror-docs" href="/mirror/api-docs" target="_blank" rel="noopener noreferrer">API docs</a></div><div class="mirror-status"></div><div class="mirror-egress">Egress: checking…</div></div>';
+    +'<div class="mirror-panel"><strong>Mirror controls</strong><p>Connect with your ChatGPT session token. <a class="mirror-session-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">Get it from ChatGPT</a>. It stays in this browser and is sent as the Bearer credential for Mirror requests.</p><label>ChatGPT session token / Mirror API bearer</label><textarea autocomplete="off" spellcheck="false" placeholder="Paste session token"></textarea><div class="mirror-actions"><button class="mirror-save">Save &amp; reload</button><a class="mirror-play" href="/mirror/playground" target="_blank" rel="noopener noreferrer">API tester</a><a class="mirror-docs" href="/mirror/api-docs" target="_blank" rel="noopener noreferrer">API docs</a></div><div class="mirror-status"></div></div>';
   var decoder=document.createElement('button');
   decoder.type='button';decoder.className='mirror-docs';decoder.textContent='Decoder challenges';
   decoder.onclick=function(){root.querySelector('.mirror-panel').classList.remove('open');window.dispatchEvent(new Event('mirror:decoder-open'));};
@@ -73,6 +72,7 @@ function wireWidget(root){
   root.dataset.wired='1';
   var row=root.querySelector('.mirror-row'),panel=root.querySelector('.mirror-panel'),
       status=root.querySelector('.mirror-status'),area=root.querySelector('textarea');
+  try{area.value=localStorage.getItem('mirror_session_token')||'';}catch(e){}
   row.onclick=function(){
     var willOpen=!panel.classList.contains('open');
     if(willOpen)positionPanel(row,panel);
@@ -91,21 +91,17 @@ function wireWidget(root){
     var token=area.value.trim();if(!token)return;
     status.textContent='Verifying…';
     try{
-      var r=await fetch('/api/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionToken:token})});
+      localStorage.setItem('mirror_session_token',token);
+      document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+      var r=await fetch('/api/session',{method:'POST'});
       var b=await r.json();
       if(!r.ok)throw Error(b.error||'Could not connect');
       area.value='';status.textContent='Connected. Reloading…';location.reload();
-    }catch(e){status.textContent=e.message||String(e);}
+    }catch(e){try{localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');}catch(_){}status.textContent=e.message||String(e);}
   };
   fetch('/api/session').then(function(r){return r.json();}).then(function(s){
     root.querySelector('.mirror-dot').style.background=s.configured?'#19c59a':'#e7a83d';
   }).catch(function(){});
-  fetch('/api/health').then(function(r){return r.json();}).then(function(h){
-    var e=h&&h.egress,el=root.querySelector('.mirror-egress');
-    if(!e){el.textContent='Egress: unavailable';return;}
-    el.textContent=e.mode==='warp'&&e.verified?'Egress: WARP verified':'Egress: direct';
-    el.style.color=e.required&&!e.verified?'#f0a28a':'#aaa';
-  }).catch(function(){root.querySelector('.mirror-egress').textContent='Egress: unavailable';});
 }
 function isReallyVisible(el){
   if(el.offsetParent===null)return false;

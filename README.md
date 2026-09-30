@@ -15,17 +15,12 @@ You need Docker and an active ChatGPT account in your browser.
 
    ```sh
    cp .env.example .env
-   # Read Cloudflare's WARP terms, then set WARP_ACCEPT_TOS=yes in .env.
    docker compose up --build
    ```
 
 3. Open [http://127.0.0.1:8799](http://127.0.0.1:8799). Select **Mirror controls** in the ChatGPT sidebar, paste the token, and choose **Save & reload**.
 
-Mirror stores the credential encrypted on the local server and uses it to obtain short-lived access tokens. The controls panel also reports connection and WARP status and links to the Playground, API documentation, and decoder challenges.
-
-### Network requirements
-
-All outbound traffic must use the bundled Cloudflare WARP tunnel. Mirror checks the tunnel before serving requests and periodically while running; it does not fall back to a direct connection. This keeps outbound traffic on a verified egress path and avoids the 10-second request limit of Cloudflare's local-proxy mode. WARP does not provide a fixed IP or resolve account restrictions.
+Mirror keeps the session token in this browser's local storage and sends it as a Bearer credential with requests. A second browser cookie is scoped only to native asset downloads, which cannot send Authorization headers. The server uses the token only while handling a request to obtain the upstream access token; it does not save the session token or minted access token. The Playground uses this same browser-stored value as its Mirror API bearer credential.
 
 ## ChatGPT features
 
@@ -48,7 +43,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8799/v1",
-    api_key="your-mirror-api-key",
+    api_key="your-chatgpt-session-token",
 )
 
 response = client.chat.completions.create(
@@ -62,9 +57,9 @@ for chunk in response:
 
 Mirror provides `GET /v1/models` and `POST /v1/chat/completions` (streaming and non-streaming). The supported request fields and known differences from OpenAI are documented in [COMPATIBILITY.md](COMPATIBILITY.md). Mirror does not call `api.openai.com`; `OPENAI_API_KEY`, when set, is accepted as an inbound Mirror API key.
 
-Programmatic clients must set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY`. Browser navigation to Mirror's root or Playground establishes a same-origin control cookie for the browser UI. API keys do not replace the ChatGPT session token.
+Programmatic clients pass their ChatGPT session token as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror uses that same value to authenticate the upstream ChatGPT account. Optional `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` secrets can additionally authorize control routes; they do not provide ChatGPT account access on their own. Native browser navigation can establish a same-origin control cookie; the Worker deployment requires the client-held session token for control API requests.
 
-Generate a random API key with:
+Generate an optional control-route key with:
 
 ```sh
 npm run gen-api-key
@@ -82,32 +77,44 @@ npm ci
 npm run dev
 ```
 
-This starts the server on `127.0.0.1:8787` and the web development server on port `5173`. A direct `npm start` runs the production server on `HOST:PORT` (defaults `127.0.0.1:8787`) and still requires a working WARP tunnel.
+This starts the server on `127.0.0.1:8787` and the web development server on port `5173`. A direct `npm start` runs the production server on `HOST:PORT` (defaults `127.0.0.1:8787`).
+
+## Deploy as a Cloudflare Worker
+
+The Worker build keeps Mirror's HTTP routes and browser assets, stores its single account's SQLite data in a SQLite-backed Durable Object, and does not proxy WebSockets. Configure the encryption key as a Worker secret; it must be 32 bytes when decoded from base64 or 64 hex characters.
+
+```sh
+npm ci
+npm run build:worker
+npx wrangler secret put MIRROR_STORE_KEY
+npx wrangler deploy
+```
+
+Paste a securely generated key when Wrangler prompts for it. To run the Worker locally, add the same setting to `.dev.vars` and run `npm run dev:worker`. Set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` as Worker secrets when enabling programmatic control-route access. The Worker stores conversations and settings in its Durable Object; `MIRROR_STORE_KEY` encrypts stored app data and account metadata. The Worker URL is public and does not use Cloudflare Access: app and control API requests require the ChatGPT session token entered in the browser, which is stored only in that browser and sent as a Bearer credential. This is a single-account deployment, so anyone with a valid session token can access the same stored data.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `WARP_ACCEPT_TOS` | unset | Set to `yes` after reviewing Cloudflare's WARP terms. Required for startup. |
 | `MIRROR_PORT` | `8799` | Host port for Docker Compose. |
 | `HOST` | `127.0.0.1` | Bind address for a direct, non-Compose run. |
 | `PORT` | `8787` | Port for a direct, non-Compose run. |
 | `MIRROR_WEB_ORIGIN` | `http://localhost:5173` | Web origin used for development CORS. |
 | `MIRROR_DATA_DIR` | `.data` | Directory for the SQLite database and generated encryption key. |
-| `MIRROR_STORE_KEY` | generated | Optional 32-byte key (base64 or hex) for encrypting credentials at rest. |
-| `MIRROR_API_KEY` | unset | Inbound API key for programmatic access. |
+| `MIRROR_STORE_KEY` | generated | Optional 32-byte key (base64 or hex) for encrypting stored app data and account metadata. |
+| `MIRROR_API_KEY` | unset | Optional inbound key for control routes; ChatGPT access still requires a session-token bearer. |
 | `MIRROR_API_KEYS` | unset | Comma-separated set of accepted inbound API keys. |
 | `OPENAI_API_KEY` | unset | Additional inbound API key; not an OpenAI service credential. |
 
-Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. These settings are independent.
+Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. Worker bindings and secrets are configured with Wrangler.
 
 ## Security and data
 
 Mirror binds to loopback by default and rejects non-loopback hosts. It is not designed for remote or multi-user deployment. A remote deployment would require additional authentication, TLS, CSRF defenses, and a security review.
 
-Session and minted access tokens are encrypted at rest with AES-256-GCM in `.data/mirror.db` by default. Mirror creates `.data/master.key` with owner-only permissions, or you can provide `MIRROR_STORE_KEY`. Conversation text, instructions, and events are stored locally without encryption. Request logs redact common credential headers, but should still be treated as sensitive.
+The browser stores the ChatGPT session token in local storage and sends it in the Authorization header. A second cookie scoped to `/api/asset-content` supports native browser downloads. Mirror uses the session token transiently to mint upstream access tokens, but does not store either token in its database. Older encrypted server-side session copies are removed when the store initializes. Conversation text, instructions, and events are stored locally without encryption. Request logs redact common credential headers, but should still be treated as sensitive.
 
-Backups may contain plaintext conversations and instructions, encrypted credentials, and the generated master key. Protect the complete backup and retain a supplied `MIRROR_STORE_KEY` separately. Example maintenance commands:
+Backups may contain plaintext conversations and instructions, plus the generated master key. Protect the complete backup and retain a supplied `MIRROR_STORE_KEY` separately. Example maintenance commands:
 
 ```sh
 npm run storage -- backup /absolute/path/to/backup
@@ -144,8 +151,8 @@ Mirror provides local control routes, conversion routes, decoder-challenge route
 | Route | Purpose |
 | --- | --- |
 | `GET /api/health` | Health, configuration, and egress status |
-| `POST /api/session` | Verify and save a ChatGPT session token |
-| `GET` / `DELETE /api/session` | Inspect or remove the saved session |
+| `POST /api/session` | Verify the browser-supplied ChatGPT session token and save non-secret account metadata |
+| `GET` / `DELETE /api/session` | Inspect or clear saved account metadata |
 | `/api/conversations/*` | Create, list, load, branch, stop, and delete conversations |
 | `POST /api/files` | Upload an attachment |
 | `/api/convert/*` | Encode, decode, verify, and calibrate supported formats |

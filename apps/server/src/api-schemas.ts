@@ -12,25 +12,6 @@ import { z } from "zod";
  * buildOpenApiDocument from there to serve /mirror/openapi).
  */
 
-export const SetSessionBody = z
-  .object({
-    sessionToken: z
-      .string()
-      .min(20, "That doesn't look like a valid session token")
-      .openapi({
-        description:
-          "The value of the __Secure-next-auth.session-token cookie from chatgpt.com/api/auth/session.",
-      }),
-    turnstileToken: z
-      .string()
-      .optional()
-      .openapi({
-        description:
-          "Optional Cloudflare Turnstile token for sentinel requirements.",
-      }),
-  })
-  .openapi({ ref: "SetSessionBody" });
-
 // Mirror conversation ids are UUIDs when auto-generated, but a caller can
 // also name their own via /v1/chat/completions' metadata.conversation_id
 // (e.g. an arbitrary slug) - accept any non-empty id here so a
@@ -119,4 +100,3 @@ export const ChatBody = z
     ref: "ChatBody",
     description: "Mirror's native chat request, used by the proxied ChatGPT UI and Playground (see POST /api/chat).",
   });
-

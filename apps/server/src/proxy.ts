@@ -1,10 +1,7 @@
 import { EARLY_PATCH } from "./browser-patch.js";
 export { injectionCss, injectionJs } from "./mirror-controls.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { IncomingMessage } from "node:http";
-import type { Duplex } from "node:stream";
-import { WebSocket, WebSocketServer } from "ws";
-import { getValidCredentials } from "./auth.js";
+import { getRotatedRequestSessionToken, getValidCredentials } from "./auth.js";
 import { getSession, setSessionAccountId } from "./store.js";
 import { isRewritableContentType, requestOrigin, rewriteChatGptUrls } from "./url-rewrite.js";
 import { authorizedLocalRequest, isAllowedOrigin, isAllowedRequestHost } from "./security.js";
@@ -50,9 +47,6 @@ const SEC_CH_UA = '"Chromium";v="152", "Not?A_Brand";v="24", "Google Chrome";v="
 // Syntactically valid, unsigned, non-secret JWT. The official client decodes
 // expiry/subject locally; the proxy always discards it before upstream calls.
 const BROWSER_TOKEN = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6Im1pcnJvci11c2VyIn0.";
-const websocketServer = new WebSocketServer({ noServer: true });
-const MAX_PENDING_WEBSOCKET_MESSAGES = 100;
-const MAX_PENDING_WEBSOCKET_BYTES = 1024 * 1024;
 
 // Previously this was a static <link>/<script defer> pair spliced directly
 // into the served HTML head. That worked, but left extra <head> children
@@ -68,7 +62,7 @@ const MAX_PENDING_WEBSOCKET_BYTES = 1024 * 1024;
 
 /**
  * The upstream bundle bakes absolute `https://chatgpt.com/...` URLs into its
- * fetch/XHR/WebSocket calls instead of using paths relative to the page's own
+ * fetch/XHR calls instead of using paths relative to the page's own
  * origin. When that HTML is served from our proxy's origin, those calls become
  * real cross-origin requests that chatgpt.com's CORS policy rejects outright
  * (no Access-Control-Allow-Origin for our origin) -- this is NOT fixable with
@@ -212,98 +206,10 @@ async function resolveAccountId(credentials: { accessToken: string; deviceId: st
   }
 }
 
-/**
- * The upstream frontend opens a raw WebSocket for realtime notifications
- * (e.g. `wss://chatgpt.com/p1/ws/user/...`). Our EARLY_PATCH client-side
- * shim already rewrites that URL to point back at this same-origin server
- * (see the WebSocket constructor patch below), but until now nothing on
- * the server side actually accepted that upgrade -- Fastify's plain HTTP
- * server has no listener for the 'upgrade' event at all, so the TCP
- * handshake just gets dropped and the browser reports a generic
- * "WebSocket connection ... failed". This proxies the upgrade through to
- * the real chatgpt.com WebSocket endpoint, the same way proxyChatGpt()
- * proxies ordinary HTTP requests: same auth headers, same path+query,
- * bytes piped through unmodified in both directions.
- */
-export async function proxyWebSocketUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-  if (!authorizedLocalRequest(req.headers) || !isAllowedRequestHost(req.headers.host) || !isAllowedOrigin(req.headers.origin, req.headers.host)) {
-    socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
-    return;
-  }
-  const url = req.url ?? "/";
-  const upstreamHeaders: Record<string, string> = {
-    "user-agent": USER_AGENT,
-    origin: UPSTREAM,
-  };
-  const session = getSession();
-  if (session) upstreamHeaders.cookie = `__Secure-next-auth.session-token=${session.sessionToken}`;
-  try {
-    const credentials = await getValidCredentials();
-    upstreamHeaders.authorization = `Bearer ${credentials.accessToken}`;
-    upstreamHeaders["oai-device-id"] = credentials.deviceId;
-    const accountId = await resolveAccountId(credentials);
-    if (accountId) upstreamHeaders["chatgpt-account-id"] = accountId;
-  } catch (error) {
-    socket.destroy();
-    return;
-  }
-
-  const upstreamUrl = `${UPSTREAM.replace(/^https:/, "wss:")}${url}`;
-  const upstreamSocket = new WebSocket(upstreamUrl, { headers: upstreamHeaders, handshakeTimeout: 15_000 });
-
-  upstreamSocket.on("error", () => socket.destroy());
-  upstreamSocket.on("unexpected-response", () => socket.destroy());
-
-  websocketServer.handleUpgrade(req, socket, head, (clientSocket) => {
-    const pending: Array<{ data: WebSocket.RawData; isBinary: boolean }> = [];
-    let pendingBytes = 0;
-    let upstreamOpen = false;
-
-    upstreamSocket.on("open", () => {
-      upstreamOpen = true;
-      for (const message of pending.splice(0)) upstreamSocket.send(message.data, { binary: message.isBinary });
-      pendingBytes = 0;
-    });
-    clientSocket.on("message", (data, isBinary) => {
-      if (upstreamOpen) upstreamSocket.send(data, { binary: isBinary });
-      else {
-        const bytes = typeof data === "string" ? Buffer.byteLength(data) : data instanceof ArrayBuffer ? data.byteLength : Array.isArray(data) ? data.reduce((sum, part) => sum + part.byteLength, 0) : data.byteLength;
-        if (pending.length >= MAX_PENDING_WEBSOCKET_MESSAGES || pendingBytes + bytes > MAX_PENDING_WEBSOCKET_BYTES) {
-          clientSocket.close(1009, "Pending WebSocket queue limit exceeded");
-          upstreamSocket.close();
-          return;
-        }
-        pendingBytes += bytes;
-        pending.push({ data, isBinary });
-      }
-    });
-    upstreamSocket.on("message", (data, isBinary) => {
-      if (clientSocket.readyState === clientSocket.OPEN) clientSocket.send(data, { binary: isBinary });
-    });
-
-    const closeBoth = () => {
-      try { clientSocket.close(); } catch { /* already closed */ }
-      try { upstreamSocket.close(); } catch { /* already closed */ }
-    };
-    clientSocket.on("close", closeBoth);
-    clientSocket.on("error", closeBoth);
-    upstreamSocket.on("close", closeBoth);
-    upstreamSocket.on("error", closeBoth);
-  });
-}
-
 export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (req.url.startsWith("/api/auth/session")) return mirrorAuthSession(reply);
 
   const headers = safeRequestHeaders(req);
-
-  const wantsHtml = (req.headers.accept ?? "").includes("text/html");
-  let htmlAccessToken: string | null = null;
-  const session = getSession();
-  if (session) {
-    headers.set("cookie", `__Secure-next-auth.session-token=${session.sessionToken}`);
-    if (wantsHtml) htmlAccessToken = (await getValidCredentials()).accessToken;
-  }
 
   // Determine which paths need authentication headers
   const needsAuthHeaders =
@@ -413,6 +319,8 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   // protocol. Explicitly sending "clear" (RFC 7838 §4) also purges any such entry the
   // browser already cached from before this fix.
   responseHeaders["alt-svc"] = "clear";
+  const rotatedSessionToken = getRotatedRequestSessionToken();
+  if (rotatedSessionToken) responseHeaders["x-mirror-session-token"] = rotatedSessionToken;
   reply.raw.writeHead(upstream.status, responseHeaders);
 
   if (contentType.includes("text/html")) {
@@ -422,7 +330,6 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
     // dynamically constructed URLs that were not present in the HTML source.
     if (proxyOrigin) html = rewriteChatGptUrls(html, proxyOrigin);
     html = stripDatadogScripts(html);
-    if (htmlAccessToken) html = html.split(htmlAccessToken).join(BROWSER_TOKEN);
     html = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (tag) => `${tag}${EARLY_PATCH}`) : `${EARLY_PATCH}${html}`;
     reply.raw.end(html);
     return;
