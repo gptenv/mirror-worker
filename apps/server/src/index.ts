@@ -88,8 +88,8 @@ function isPublicApiPath(url: string): boolean {
 
 function sessionAuthenticationError(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  const status = message.match(/^GET \/api\/auth\/session returned (\d{3})$/)?.[1];
-  if (status) return `ChatGPT's session endpoint returned HTTP ${status}.`;
+  const failure = message.match(/^GET \/api\/auth\/session returned (\d{3})(?: \(([^)\n]{1,180})\))?$/);
+  if (failure) return `ChatGPT's session endpoint returned HTTP ${failure[1]}${failure[2] ? ` (${failure[2]})` : ""}.`;
   if (error instanceof Error && error.name === "SessionTokenInvalidError")
     return "ChatGPT's session endpoint did not return an accessToken.";
   return "The Worker could not complete the ChatGPT session exchange.";

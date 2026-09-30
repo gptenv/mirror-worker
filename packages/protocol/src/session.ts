@@ -77,7 +77,19 @@ export async function mintAccessToken(sessionToken: string): Promise<MintedAcces
   });
 
   if (!res.ok) {
-    throw new SessionTokenInvalidError(`GET /api/auth/session returned ${res.status}`);
+    const contentType = res.headers.get("content-type")?.split(";", 1)[0] ?? "unknown response type";
+    const ray = res.headers.get("cf-ray");
+    let isChallenge = false;
+    if (res.status === 403 && contentType === "text/html") {
+      const body = await res.text().catch(() => "");
+      isChallenge = /cf-chl-|challenge-platform|just a moment|sorry, you have been blocked/i.test(body);
+    }
+    const details = [
+      contentType,
+      ...(isChallenge ? ["Cloudflare challenge page"] : []),
+      ...(ray ? [`Ray ID ${ray}`] : []),
+    ].join(", ");
+    throw new SessionTokenInvalidError(`GET /api/auth/session returned ${res.status} (${details})`);
   }
 
   const json: any = await res.json().catch(() => null);
