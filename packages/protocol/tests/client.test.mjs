@@ -22,6 +22,33 @@ function withFetch(handler, fn) {
 // --- fetchMe ------------------------------------------------------------------------
 
 test.describe("protocol / client", () => {
+test("tries the stored accessToken first and exchanges the saved sessionToken only after auth denial", () =>
+  withFetch(async (input, init = {}) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/backend-api/me") {
+      const authorization = new Headers(init.headers).get("authorization");
+      if (authorization === "Bearer current-access") return new Response("unauthorized", { status: 401 });
+      assert.equal(authorization, "Bearer minted-access");
+      return Response.json({ account: { account_user_id: "account-1" } });
+    }
+    if (url.pathname === "/api/auth/session") {
+      assert.match(new Headers(init.headers).get("cookie"), /browser-session/);
+      return new Response(JSON.stringify({ accessToken: "minted-access" }), {
+        headers: {
+          "content-type": "application/json",
+          "set-cookie": "__Secure-next-auth.session-token=rotated-session; Path=/; Secure",
+        },
+      });
+    }
+    throw new Error(`unexpected ${url.href}`);
+  }, async () => {
+    const creds = { accessToken: "current-access", sessionToken: "browser-session", deviceId: "device-1" };
+    const client = new ChatGptBackendClient(creds);
+    await client.fetchMe();
+    assert.equal(creds.accessToken, "minted-access");
+    assert.equal(creds.rotatedSessionToken, "rotated-session");
+  }));
+
 test("fetchMe captures accountId from account.account_user_id", () =>
   withFetch(
     async () => Response.json({ account: { account_user_id: "acc-1" } }),

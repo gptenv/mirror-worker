@@ -360,7 +360,7 @@ test("the bearer credential is sent as an authorization header on model discover
     [
       /^\/v1\/models$/,
       (_url, init) => {
-        seen.push((init?.headers as Record<string, string> | undefined)?.authorization ?? null);
+        seen.push(new Headers(init?.headers).get("authorization"));
         return jsonResponse({ data: [] });
       },
     ],
@@ -479,7 +479,8 @@ test("a non-streaming run posts the right body/headers, shows the raw JSON, appe
       /^\/v1\/chat\/completions$/,
       (_url, init) => {
         capturedBody = JSON.parse(String(init?.body));
-        capturedHeaders = init?.headers as Record<string, string>;
+        const headers = new Headers(init?.headers);
+        capturedHeaders = { authorization: headers.get("authorization") ?? "" };
         return jsonResponse(
           { choices: [{ message: { content: "Hello there" } }] },
           { headers: { "x-mirror-conversation-id": "conv-xyz" } },
@@ -1272,7 +1273,7 @@ test("Test connection reports a supplied bearer credential separately from brows
     [
       /^\/v1\/models$/,
       (_url, init) => {
-        modelsAuth = (init?.headers as Record<string, string> | undefined)?.authorization;
+        modelsAuth = new Headers(init?.headers).get("authorization") ?? undefined;
         return jsonResponse({ data: [{ id: "m1" }] });
       },
     ],

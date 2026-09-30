@@ -11,12 +11,28 @@ export function ConnectionTools({ domain, apiKey, generationSucceeded, onSession
       const health = await fetch("/api/diagnostics");
       if (!health.ok) throw new Error(`Diagnostics returned HTTP ${health.status}`);
       setDiagnostics(await health.json());
+      const headers = new Headers();
+      let stored = "";
+      try { stored = localStorage.getItem("mirror_access_token") || localStorage.getItem("mirror_session_token") || ""; } catch { /* Storage may be unavailable. */ }
+      const bearer = stored;
+      if (bearer) headers.set("authorization", `Bearer ${bearer}`);
+      let sessionToken = "";
+      try { sessionToken = localStorage.getItem("mirror_session_token") || ""; } catch { /* Storage may be unavailable. */ }
+      if (sessionToken) headers.set("x-mirror-session-token", sessionToken);
       const models = await fetch(`${domain.replace(/\/$/, "")}/v1/models`, {
-        headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+        headers,
         signal: AbortSignal.timeout(30_000),
       });
-      const rotated = models.headers.get("x-mirror-session-token");
-      if (rotated) onSessionToken?.(rotated);
+      const accessToken = models.headers.get("x-mirror-access-token");
+      if (accessToken) {
+        try {
+          const rotatedSessionToken = models.headers.get("x-mirror-session-token");
+          if (rotatedSessionToken) localStorage.setItem("mirror_session_token", rotatedSessionToken);
+          else if (bearer && bearer !== accessToken && !sessionToken) localStorage.setItem("mirror_session_token", bearer);
+          localStorage.setItem("mirror_access_token", accessToken);
+        } catch { /* Browser storage may be unavailable. */ }
+        onSessionToken?.(accessToken);
+      }
       if (!models.ok) throw new Error(`Model discovery returned HTTP ${models.status}. Check the key and saved session.`);
       const body = await models.json();
       if (!Array.isArray(body.data)) throw new Error("Model discovery returned an unsupported response.");

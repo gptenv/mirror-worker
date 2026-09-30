@@ -1,7 +1,7 @@
 import { EARLY_PATCH } from "./browser-patch.js";
 export { injectionCss, injectionJs } from "./mirror-controls.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { getRotatedRequestSessionToken, getValidCredentials } from "./auth.js";
+import { fetchWithAccessTokenFallback, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials } from "./auth.js";
 import { getSession, setSessionAccountId } from "./store.js";
 import { isRewritableContentType, requestOrigin, rewriteChatGptUrls } from "./url-rewrite.js";
 import { authorizedLocalRequest, isAllowedOrigin, isAllowedRequestHost } from "./security.js";
@@ -151,12 +151,12 @@ function safeRequestHeaders(req: FastifyRequest): Headers {
 
 async function mirrorAuthSession(reply: FastifyReply): Promise<void> {
   const credentials = await getValidCredentials();
-  const meResponse = await fetch(`${UPSTREAM}/backend-api/me`, {
+  const meResponse = await fetchWithAccessTokenFallback(`${UPSTREAM}/backend-api/me`, {
     headers: {
       accept: "application/json", authorization: `Bearer ${credentials.accessToken}`,
       "oai-device-id": credentials.deviceId, "user-agent": USER_AGENT,
     },
-  });
+  }, credentials);
   const me = meResponse.ok ? await meResponse.json().catch(() => ({})) as Record<string, unknown> : {};
   const account = me.account && typeof me.account === "object" ? me.account as Record<string, unknown> : {};
   reply.header("Cache-Control", "no-store").send({
@@ -183,12 +183,12 @@ async function resolveAccountId(credentials: { accessToken: string; deviceId: st
   const session = getSession();
   if (session?.accountId) return session.accountId;
   try {
-    const meResponse = await fetch(`${UPSTREAM}/backend-api/me`, {
+    const meResponse = await fetchWithAccessTokenFallback(`${UPSTREAM}/backend-api/me`, {
       headers: {
         accept: "application/json", authorization: `Bearer ${credentials.accessToken}`,
         "oai-device-id": credentials.deviceId, "user-agent": USER_AGENT,
       },
-    });
+    }, credentials as import("@mirror/protocol").SessionCredentials);
     if (!meResponse.ok) return null;
     const me = await meResponse.json().catch(() => ({})) as Record<string, unknown>;
     const account = me.account && typeof me.account === "object" ? me.account as Record<string, unknown> : null;
@@ -210,6 +210,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   if (req.url.startsWith("/api/auth/session")) return mirrorAuthSession(reply);
 
   const headers = safeRequestHeaders(req);
+  let credentials: import("@mirror/protocol").SessionCredentials | undefined;
 
   // Determine which paths need authentication headers
   const needsAuthHeaders =
@@ -220,7 +221,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   // Note: /sentinel/* endpoints don't need auth headers (real ChatGPT doesn't send them)
 
   if (needsAuthHeaders) {
-    const credentials = await getValidCredentials();
+    credentials = await getValidCredentials();
     headers.set("authorization", `Bearer ${credentials.accessToken}`);
     headers.set("oai-device-id", credentials.deviceId);
 
@@ -237,10 +238,12 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
       // which can silently reroute to a different plan/entitlement (and thus a
       // different available model) than the one the UI displays. Only fall
       // back to our resolved id when the frontend didn't send one at all.
-      if (!headers.has("chatgpt-account-id")) {
+      if (!headers.has("chatgpt-account-id") && !req.url.startsWith("/backend-api/me")) {
         const accountId = await resolveAccountId(credentials);
         if (accountId) headers.set("chatgpt-account-id", accountId);
       }
+      // resolveAccountId may itself have refreshed an expired accessToken.
+      headers.set("authorization", `Bearer ${credentials.accessToken}`);
     }
   }
 
@@ -251,9 +254,12 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   reply.raw.once("close", () => { if (!reply.raw.writableEnded) abortUpstream(); });
 
   try {
-    upstream = await fetch(`${UPSTREAM}${req.url}`, {
+    const init: RequestInit = {
       method: req.method, headers, body: requestBody(req), redirect: "manual", signal: controller.signal,
-    });
+    };
+    upstream = credentials
+      ? await fetchWithAccessTokenFallback(`${UPSTREAM}${req.url}`, init, credentials)
+      : await fetch(`${UPSTREAM}${req.url}`, init);
   } catch (error) {
     req.log.error({ error, path: req.url }, "mirror upstream request failed");
     reply.code(502).send({ error: "upstream_request_failed", path: req.url });
@@ -319,8 +325,13 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   // protocol. Explicitly sending "clear" (RFC 7838 §4) also purges any such entry the
   // browser already cached from before this fix.
   responseHeaders["alt-svc"] = "clear";
-  const rotatedSessionToken = getRotatedRequestSessionToken();
-  if (rotatedSessionToken) responseHeaders["x-mirror-session-token"] = rotatedSessionToken;
+  const accessToken = await getRotatedRequestAccessToken();
+  if (accessToken) {
+    responseHeaders["x-mirror-access-token"] = accessToken;
+    responseHeaders["cache-control"] = "no-store";
+  }
+  const sessionToken = await getRotatedRequestSessionToken();
+  if (sessionToken) responseHeaders["x-mirror-session-token"] = sessionToken;
   reply.raw.writeHead(upstream.status, responseHeaders);
 
   if (contentType.includes("text/html")) {

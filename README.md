@@ -20,7 +20,7 @@ You need Docker and an active ChatGPT account in your browser.
 
 3. Open [http://127.0.0.1:8799](http://127.0.0.1:8799). Select **Mirror controls** in the ChatGPT sidebar, paste the token, and choose **Save & reload**.
 
-Mirror keeps the session token in this browser's local storage and sends it as a Bearer credential with requests. A second browser cookie is scoped only to native asset downloads, which cannot send Authorization headers. The server uses the token only while handling a request to obtain the upstream access token; it does not save the session token or minted access token. The Playground uses this same browser-stored value as its Mirror API bearer credential.
+Mirror keeps credentials in this browser's local storage. It tries the Bearer value as a ChatGPT accessToken first; only after an upstream authentication denial does it exchange a sessionToken. If ChatGPT rotates the session token during that exchange, Mirror returns the new value to the browser. The Worker does not persist either token. A cookie scoped to native asset downloads is used only where the browser cannot send Authorization headers.
 
 ## ChatGPT features
 
@@ -57,7 +57,7 @@ for chunk in response:
 
 Mirror provides `GET /v1/models` and `POST /v1/chat/completions` (streaming and non-streaming). The supported request fields and known differences from OpenAI are documented in [COMPATIBILITY.md](COMPATIBILITY.md). Mirror does not call `api.openai.com`; `OPENAI_API_KEY`, when set, is accepted as an inbound Mirror API key.
 
-Programmatic clients pass their ChatGPT session token as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror uses that same value to authenticate the upstream ChatGPT account. Optional `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` secrets can additionally authorize control routes; they do not provide ChatGPT account access on their own. Native browser navigation can establish a same-origin control cookie; the Worker deployment requires the client-held session token for control API requests.
+Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. The accessToken is tried first. To allow a client to renew it after it expires, it may also send its client-held session token in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Optional `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` secrets can additionally authorize control routes; they do not provide ChatGPT account access on their own. Native browser navigation can establish a same-origin control cookie; the Worker deployment requires a client-held ChatGPT token for control API requests.
 
 Generate an optional control-route key with:
 
@@ -112,7 +112,7 @@ Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. Worker bindings a
 
 Mirror binds to loopback by default and rejects non-loopback hosts. It is not designed for remote or multi-user deployment. A remote deployment would require additional authentication, TLS, CSRF defenses, and a security review.
 
-The browser stores the ChatGPT session token in local storage and sends it in the Authorization header. A second cookie scoped to `/api/asset-content` supports native browser downloads. Mirror uses the session token transiently to mint upstream access tokens, but does not store either token in its database. Older encrypted server-side session copies are removed when the store initializes. Conversation text, instructions, and events are stored locally without encryption. Request logs redact common credential headers, but should still be treated as sensitive.
+The browser stores the accessToken and, when available, the sessionToken in local storage. It builds Authorization from the stored accessToken, overriding any Authorization value supplied by application code. It sends the stored sessionToken separately so the Worker can exchange it only after an upstream auth denial. A cookie scoped to `/api/asset-content` supports native browser downloads. The Worker holds tokens only while handling requests and does not persist them. Older encrypted server-side session copies are removed when the store initializes. Conversation text, instructions, and events are stored locally without encryption. Request logs redact both credential headers, but should still be treated as sensitive.
 
 Backups may contain plaintext conversations and instructions, plus the generated master key. Protect the complete backup and retain a supplied `MIRROR_STORE_KEY` separately. Example maintenance commands:
 

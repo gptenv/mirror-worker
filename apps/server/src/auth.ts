@@ -1,118 +1,86 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
 import {
-  mintAccessToken,
+  isAccessDeniedResponse,
+  mintAccessTokenShared,
   SessionTokenInvalidError,
   type SessionCredentials,
 } from "@mirror/protocol";
 import { getOrCreateDeviceId } from "./store.js";
 
 interface RequestAuthentication {
-  sessionToken: string;
+  bearerToken: string;
+  sessionToken?: string;
   credentials?: Promise<SessionCredentials>;
-  rotatedSessionToken?: string;
-}
-
-interface CachedAccessToken {
-  accessToken: string;
-  expiresAt: number;
-  deviceId: string;
 }
 
 const requestAuthentication = new AsyncLocalStorage<RequestAuthentication>();
-const activeMints = new Map<string, ReturnType<typeof mintAccessToken>>();
-const cachedAccessTokens = new Map<string, CachedAccessToken>();
-const REFRESH_BUFFER_MS = 60_000;
 
-function sessionTokenKey(sessionToken: string): string {
-  return createHash("sha256").update(sessionToken).digest("hex");
+/** Make the browser-provided bearer available only for this request. */
+export function setRequestSessionToken(token: string, sessionToken?: string): void {
+  if (token && (requestAuthentication.getStore()?.bearerToken !== token || requestAuthentication.getStore()?.sessionToken !== sessionToken))
+    requestAuthentication.enterWith({ bearerToken: token, sessionToken });
 }
 
-function cacheAccessToken(sessionToken: string, cached: CachedAccessToken): void {
-  const now = Date.now();
-  for (const [key, entry] of cachedAccessTokens) {
-    if (entry.expiresAt - now < REFRESH_BUFFER_MS) cachedAccessTokens.delete(key);
-  }
-  cachedAccessTokens.set(sessionTokenKey(sessionToken), cached);
-  // The upstream may rotate the browser-held session cookie during a mint.
-  // Cache against both token hashes so the following request can reuse this
-  // access token without persisting either session-token value.
-  if (cachedAccessTokens.size > 16) {
-    const oldest = cachedAccessTokens.keys().next().value;
-    if (oldest) cachedAccessTokens.delete(oldest);
-  }
+export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T, sessionToken?: string): T {
+  return token ? requestAuthentication.run({ bearerToken: token, sessionToken }, callback) : callback();
 }
 
-/** Share concurrent rotations so parallel browser requests do not race one cookie value. */
-function mintShared(sessionToken: string): ReturnType<typeof mintAccessToken> {
-  const key = createHash("sha256").update(sessionToken).digest("hex");
-  const active = activeMints.get(key);
-  if (active) return active;
-  let pending: ReturnType<typeof mintAccessToken>;
-  pending = mintAccessToken(sessionToken).finally(() => {
-    if (activeMints.get(key) === pending) activeMints.delete(key);
-  });
-  activeMints.set(key, pending);
-  return pending;
-}
-
-/** Make an incoming browser/API bearer available only for this request. */
-export function setRequestSessionToken(token: string): void {
-  if (token && requestAuthentication.getStore()?.sessionToken !== token)
-    requestAuthentication.enterWith({ sessionToken: token });
-}
-
-export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T): T {
-  return token ? requestAuthentication.run({ sessionToken: token }, callback) : callback();
-}
-
-export function getRotatedRequestSessionToken(): string | undefined {
-  return requestAuthentication.getStore()?.rotatedSessionToken;
-}
-
+/** Compatibility name retained for existing call sites; this is now the client-held bearer. */
 export function getRequestSessionToken(): string | undefined {
+  return requestAuthentication.getStore()?.bearerToken;
+}
+
+export function getRequestFallbackSessionToken(): string | undefined {
   return requestAuthentication.getStore()?.sessionToken;
 }
 
-/** Mint once per request. Neither the input nor minted credentials are persisted. */
+/** Return the supplied bearer unchanged: it may already be an accessToken. */
 export async function getValidCredentials(): Promise<SessionCredentials> {
   const request = requestAuthentication.getStore();
-  if (!request?.sessionToken) {
-    const err = new Error("Supply your ChatGPT session token as a Bearer credential.");
+  if (!request?.bearerToken) {
+    const err = new Error("Supply a ChatGPT accessToken or sessionToken as a Bearer credential.");
     (err as any).statusCode = 401;
     throw err;
   }
-  request.credentials ??= (async () => {
-    try {
-      const key = sessionTokenKey(request.sessionToken);
-      const cached = cachedAccessTokens.get(key);
-      if (cached && cached.expiresAt - Date.now() >= REFRESH_BUFFER_MS) {
-        return {
-          accessToken: cached.accessToken,
-          deviceId: cached.deviceId,
-          sessionToken: request.sessionToken,
-        };
-      }
-      const minted = await mintShared(request.sessionToken);
-      request.rotatedSessionToken = minted.rotatedSessionToken ?? undefined;
-      const credentials = {
-        accessToken: minted.accessToken,
-        deviceId: getOrCreateDeviceId(),
-        sessionToken: minted.rotatedSessionToken ?? request.sessionToken,
-      };
-      const cachedCredentials = {
-        accessToken: credentials.accessToken,
-        expiresAt: minted.expiresAt,
-        deviceId: credentials.deviceId,
-      };
-      cacheAccessToken(request.sessionToken, cachedCredentials);
-      if (minted.rotatedSessionToken)
-        cacheAccessToken(minted.rotatedSessionToken, cachedCredentials);
-      return credentials;
-    } catch (err) {
-      if (err instanceof SessionTokenInvalidError) (err as any).statusCode = 401;
-      throw err;
-    }
-  })();
+  request.credentials ??= Promise.resolve({
+    accessToken: request.bearerToken,
+    sessionToken: request.sessionToken || request.bearerToken,
+    deviceId: getOrCreateDeviceId(),
+  });
   return request.credentials;
+}
+
+/** Newly minted access tokens are returned for the browser to store. */
+export async function getRotatedRequestAccessToken(): Promise<string | undefined> {
+  const request = requestAuthentication.getStore();
+  if (!request?.credentials) return undefined;
+  const credentials = await request.credentials;
+  return credentials.accessToken !== request.bearerToken ? credentials.accessToken : undefined;
+}
+
+export async function getRotatedRequestSessionToken(): Promise<string | undefined> {
+  const request = requestAuthentication.getStore();
+  if (!request?.credentials) return undefined;
+  const credentials = await request.credentials;
+  return credentials.rotatedSessionToken || undefined;
+}
+
+/** Use an accessToken first, then exchange the same original bearer after a clear auth denial. */
+export async function fetchWithAccessTokenFallback(
+  input: string | URL | Request,
+  init: RequestInit,
+  credentials: SessionCredentials,
+): Promise<Response> {
+  const first = await fetch(input, init);
+  if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
+  const minted = await mintAccessTokenShared(credentials.sessionToken).catch((error) => {
+    if (error instanceof SessionTokenInvalidError) (error as any).statusCode = 401;
+    throw error;
+  });
+  credentials.accessToken = minted.accessToken;
+  credentials.rotatedSessionToken = minted.rotatedSessionToken;
+  const headers = new Headers(init.headers);
+  headers.set("authorization", `Bearer ${minted.accessToken}`);
+  await first.body?.cancel().catch(() => {});
+  return fetch(input, { ...init, headers });
 }

@@ -1,5 +1,5 @@
 export interface SessionCredentials {
-  /** Bearer token minted from the long-lived ChatGPT sessionToken. */
+  /** Current browser-provided or freshly minted accessToken sent as Bearer first. */
   accessToken: string;
   /** Optional cookie string. The working PoC currently succeeds bearer-only. */
   cookie?: string;
@@ -7,8 +7,10 @@ export interface SessionCredentials {
   deviceId: string;
   /** Optional Cloudflare Turnstile token for sentinel requirements. */
   turnstileToken?: string | null;
-  /** Long-lived session token (cookie value) when available. */
+  /** Client-held long-lived sessionToken used only after an accessToken denial. */
   sessionToken?: string | null;
+  /** New client-held session value returned only when ChatGPT rotates it during exchange. */
+  rotatedSessionToken?: string | null;
 }
 
 export interface ConversationInitResult {

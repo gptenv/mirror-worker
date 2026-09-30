@@ -13,23 +13,35 @@ function rel(u){
   return u;
 }
 function wrapFetch(delegate){
-  function rememberToken(token){
-    localStorage.setItem('mirror_session_token',token);
-    document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+  function storedToken(){
+    return localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token');
+  }
+  function rememberToken(token,previous,rotatedSessionToken){
+    if(rotatedSessionToken)localStorage.setItem('mirror_session_token',rotatedSessionToken);
+    else if(previous&&previous!==token&&!localStorage.getItem('mirror_session_token'))localStorage.setItem('mirror_session_token',previous);
+    localStorage.setItem('mirror_access_token',token);
+    var cookieToken=localStorage.getItem('mirror_session_token')||token;
+    document.cookie='mirror_asset_session='+encodeURIComponent(cookieToken)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
   }
   function send(input,init){
+    var mirrorRequest=false;
     try{
-      var token=localStorage.getItem('mirror_session_token');
+      var token=storedToken();
       var url=typeof input==='string'?input:(input&&typeof input.url==='string'?input.url:String(input));
       if(token&&new URL(url,location.href).origin===location.origin){
+        mirrorRequest=true;
         var opts=Object.assign({},init||{});
         var headers=new Headers(opts.headers||(input&&input.headers)||undefined);
         headers.set('authorization','Bearer '+token);
+        var sessionToken=localStorage.getItem('mirror_session_token');
+        headers.delete('x-mirror-session-token');
+        if(sessionToken)headers.set('x-mirror-session-token',sessionToken);
         opts.headers=headers;init=opts;
       }
     }catch(e){}
+    var sentToken='';try{sentToken=storedToken();}catch(e){}
     return Promise.resolve(delegate.call(this,input,init)).then(function(response){
-      try{var rotated=response.headers.get('x-mirror-session-token');if(rotated)rememberToken(rotated);}catch(e){}
+      try{var accessToken=mirrorRequest&&response.headers.get('x-mirror-access-token');if(accessToken)rememberToken(accessToken,sentToken,response.headers.get('x-mirror-session-token'));}catch(e){}
       return response;
     });
   }
@@ -102,6 +114,11 @@ if(currentFetch){
   }catch(e){window.fetch=patchedFetch;}
 }
 var open=XMLHttpRequest.prototype.open;
+var xhrSetRequestHeader=XMLHttpRequest.prototype.setRequestHeader;
+XMLHttpRequest.prototype.setRequestHeader=function(name,value){
+  try{if(this.__mirrorSameOrigin&&(/^(authorization|x-mirror-session-token)$/i).test(name)&&(localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')))return;}catch(e){}
+  return xhrSetRequestHeader.call(this,name,value);
+};
 XMLHttpRequest.prototype.open=function(method,url){
   var args=Array.prototype.slice.call(arguments);
   try{if(typeof url==="string")args[1]=rel(url);}catch(e){}
@@ -111,7 +128,27 @@ XMLHttpRequest.prototype.open=function(method,url){
 };
 var xhrSend=XMLHttpRequest.prototype.send;
 XMLHttpRequest.prototype.send=function(){
-  try{var token=localStorage.getItem('mirror_session_token');if(token&&this.__mirrorSameOrigin)this.setRequestHeader('Authorization','Bearer '+token);}catch(e){}
+  try{
+    var token=localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token');
+    if(token&&this.__mirrorSameOrigin){
+      this.__mirrorSentToken=token;
+      xhrSetRequestHeader.call(this,'Authorization','Bearer '+token);
+      var sessionToken=localStorage.getItem('mirror_session_token');
+      if(sessionToken)xhrSetRequestHeader.call(this,'x-mirror-session-token',sessionToken);
+      this.addEventListener('loadend',function(){
+        try{
+          var accessToken=this.getResponseHeader('x-mirror-access-token');
+          if(!accessToken)return;
+          var rotatedSessionToken=this.getResponseHeader('x-mirror-session-token');
+          if(rotatedSessionToken)localStorage.setItem('mirror_session_token',rotatedSessionToken);
+          else if(this.__mirrorSentToken!==accessToken&&!localStorage.getItem('mirror_session_token'))localStorage.setItem('mirror_session_token',this.__mirrorSentToken);
+          localStorage.setItem('mirror_access_token',accessToken);
+          var cookieToken=localStorage.getItem('mirror_session_token')||accessToken;
+          document.cookie='mirror_asset_session='+encodeURIComponent(cookieToken)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+        }catch(e){}
+      });
+    }
+  }catch(e){}
   return xhrSend.apply(this,arguments);
 };
 var OrigWorker=window.Worker;

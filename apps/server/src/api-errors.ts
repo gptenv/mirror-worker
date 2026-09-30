@@ -1,7 +1,7 @@
 /** Public errors and diagnostics contain no upstream payloads or exception text. */
 const categories: Record<number, [string, string, string]> = {
   400: ["invalid_request_error", "invalid_request", "Invalid request. Check the supported fields and message history."],
-  401: ["authentication_error", "authentication_required", "Supply a valid ChatGPT session token as the Bearer credential."],
+  401: ["authentication_error", "authentication_required", "Supply a valid ChatGPT accessToken or sessionToken as the Bearer credential."],
   403: ["permission_error", "request_forbidden", "Request rejected. Check the browser origin and account permissions."],
   404: ["invalid_request_error", "not_found", "The requested resource was not found."],
   409: ["invalid_request_error", "conversation_conflict", "Conversation or session changed. Reload before continuing."],

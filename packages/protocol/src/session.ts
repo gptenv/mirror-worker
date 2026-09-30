@@ -1,3 +1,6 @@
+
+import { createHash } from "node:crypto";
+
 /**
  * Turns a long-lived NextAuth session token into short-lived backend-api
  * accessTokens, minting fresh ones on demand.
@@ -16,6 +19,7 @@ const SESSION_URL = "https://chatgpt.com/api/auth/session";
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 const SESSION_COOKIE_NAME = "__Secure-next-auth.session-token";
+const activeMints = new Map<string, Promise<MintedAccessToken>>();
 
 export interface MintedAccessToken {
   accessToken: string;
@@ -66,6 +70,14 @@ export class SessionTokenInvalidError extends Error {
   }
 }
 
+/** A response that indicates the bearer itself was rejected, rather than a policy or edge challenge. */
+export async function isAccessDeniedResponse(response: Response): Promise<boolean> {
+  if (response.status === 401) return true;
+  if (response.status !== 403 || !response.headers.get("content-type")?.includes("json")) return false;
+  const body = await response.clone().text().catch(() => "");
+  return /unauthori[sz]ed|authentication required|invalid (?:access )?token|token (?:is )?(?:expired|invalid)|invalid_api_key/i.test(body);
+}
+
 /** Exchange a session token for a fresh accessToken. Throws SessionTokenInvalidError if the session token itself is no good. */
 export async function mintAccessToken(sessionToken: string): Promise<MintedAccessToken> {
   const res = await fetch(SESSION_URL, {
@@ -105,4 +117,17 @@ export async function mintAccessToken(sessionToken: string): Promise<MintedAcces
     expiresAt,
     rotatedSessionToken: extractRotatedSessionToken(res),
   };
+}
+
+/** Share only concurrent exchanges, keyed by a one-way digest; no token is retained after completion. */
+export function mintAccessTokenShared(sessionToken: string): Promise<MintedAccessToken> {
+  const key = createHash("sha256").update(sessionToken).digest("hex");
+  const active = activeMints.get(key);
+  if (active) return active;
+  let pending: Promise<MintedAccessToken>;
+  pending = mintAccessToken(sessionToken).finally(() => {
+    if (activeMints.get(key) === pending) activeMints.delete(key);
+  });
+  activeMints.set(key, pending);
+  return pending;
 }

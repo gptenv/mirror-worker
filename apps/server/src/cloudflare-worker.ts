@@ -36,7 +36,8 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     }
     workerHandlerPromise ??= this.startServer();
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-    return runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)));
+    const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
+    return runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)), sessionToken);
   }
 
   private async startServer(): Promise<HttpServerHandler> {

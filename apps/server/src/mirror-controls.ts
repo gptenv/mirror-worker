@@ -47,7 +47,7 @@ function buildWidget(){
   var root=document.createElement('div');
   root.id='mirror-launcher';
   root.innerHTML='<button type="button" class="mirror-row"><span class="mirror-dot"></span><span>Mirror controls</span></button>'
-    +'<div class="mirror-panel"><strong>Mirror controls</strong><p>Connect with your ChatGPT session token. <a class="mirror-session-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">Get it from ChatGPT</a>. It stays in this browser and is sent as the Bearer credential for Mirror requests.</p><label>ChatGPT session token / Mirror API bearer</label><textarea autocomplete="off" spellcheck="false" placeholder="Paste session token"></textarea><div class="mirror-actions"><button class="mirror-save">Save &amp; reload</button><a class="mirror-play" href="/mirror/playground" target="_blank" rel="noopener noreferrer">API tester</a><a class="mirror-docs" href="/mirror/api-docs" target="_blank" rel="noopener noreferrer">API docs</a></div><div class="mirror-status"></div></div>';
+    +'<div class="mirror-panel"><strong>Mirror controls</strong><p>Connect with a ChatGPT accessToken or sessionToken. <a class="mirror-session-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">Get it from ChatGPT</a>. It stays in this browser and is sent as the Bearer credential for Mirror requests.</p><label>ChatGPT accessToken / sessionToken</label><textarea autocomplete="off" spellcheck="false" placeholder="Paste accessToken or sessionToken"></textarea><div class="mirror-actions"><button class="mirror-save">Save &amp; reload</button><a class="mirror-play" href="/mirror/playground" target="_blank" rel="noopener noreferrer">API tester</a><a class="mirror-docs" href="/mirror/api-docs" target="_blank" rel="noopener noreferrer">API docs</a></div><div class="mirror-status"></div></div>';
   var decoder=document.createElement('button');
   decoder.type='button';decoder.className='mirror-docs';decoder.textContent='Decoder challenges';
   decoder.onclick=function(){root.querySelector('.mirror-panel').classList.remove('open');window.dispatchEvent(new Event('mirror:decoder-open'));};
@@ -72,7 +72,7 @@ function wireWidget(root){
   root.dataset.wired='1';
   var row=root.querySelector('.mirror-row'),panel=root.querySelector('.mirror-panel'),
       status=root.querySelector('.mirror-status'),area=root.querySelector('textarea');
-  try{area.value=localStorage.getItem('mirror_session_token')||'';}catch(e){}
+  try{area.value=localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')||'';}catch(e){}
   row.onclick=function(){
     var willOpen=!panel.classList.contains('open');
     if(willOpen)positionPanel(row,panel);
@@ -91,13 +91,13 @@ function wireWidget(root){
     var token=area.value.trim();if(!token)return;
     status.textContent='Verifying…';
     try{
-      localStorage.setItem('mirror_session_token',token);
+      localStorage.setItem('mirror_access_token',token);localStorage.removeItem('mirror_session_token');
       document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
       var r=await fetch('/api/session',{method:'POST'});
       var b=await r.json();
       if(!r.ok)throw Error(b.error||'Could not connect');
       area.value='';status.textContent='Connected. Reloading…';location.reload();
-    }catch(e){try{localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');}catch(_){}status.textContent=e.message||String(e);}
+    }catch(e){try{localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');}catch(_){}status.textContent=e.message||String(e);}
   };
   fetch('/api/session').then(function(r){return r.json();}).then(function(s){
     root.querySelector('.mirror-dot').style.background=s.configured?'#19c59a':'#e7a83d';

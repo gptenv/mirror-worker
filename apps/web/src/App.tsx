@@ -17,6 +17,23 @@ import {
   type PlaygroundAttachment,
 } from "./playground-history.js";
 
+const ACCESS_TOKEN_KEY = "mirror_access_token";
+const LEGACY_TOKEN_KEY = "mirror_session_token";
+function readStoredBearer(): string {
+  try { return localStorage.getItem(ACCESS_TOKEN_KEY) || localStorage.getItem(LEGACY_TOKEN_KEY) || ""; }
+  catch { return ""; }
+}
+function readStoredSessionToken(): string {
+  try { return localStorage.getItem(LEGACY_TOKEN_KEY) || ""; } catch { return ""; }
+}
+function storeAccessToken(token: string, previousBearer?: string, rotatedSessionToken?: string | null): void {
+  if (rotatedSessionToken) localStorage.setItem(LEGACY_TOKEN_KEY, rotatedSessionToken);
+  else if (previousBearer && previousBearer !== token && !readStoredSessionToken())
+    localStorage.setItem(LEGACY_TOKEN_KEY, previousBearer);
+  localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  document.cookie = `mirror_asset_session=${encodeURIComponent(readStoredSessionToken() || token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+}
+
 /** Turns a PlaygroundMessage's text + attachments into the wire shape the OpenAI-compatible
  * endpoints expect: a plain string when there are no attachments (unchanged, back-compat), or
  * a content-part array when there are. Preserve filenames for images too;
@@ -135,7 +152,7 @@ export default function App() {
   const [mode, setMode] = useState<"chat" | "responses">("chat");
   const [path, setPath] = useState("/v1/chat/completions");
   const [apiKey, setApiKey] = useState(() => {
-    try { return localStorage.getItem("mirror_session_token") ?? ""; } catch { return ""; }
+    return readStoredBearer();
   });
   const credentialRotationRef = useRef(false);
   const [models, setModels] = useState<ApiModel[]>([]);
@@ -261,15 +278,19 @@ export default function App() {
       credentialRotationRef.current = false;
       return;
     }
-    fetch(`${domain.replace(/\/$/, "")}/v1/models`, { headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {} })
+    const bearer = readStoredBearer();
+    const headers = new Headers();
+    if (bearer) headers.set("authorization", `Bearer ${bearer}`);
+    const sessionToken = readStoredSessionToken();
+    if (sessionToken) headers.set("x-mirror-session-token", sessionToken);
+    fetch(`${domain.replace(/\/$/, "")}/v1/models`, { headers })
       .then(async (res) => {
-        const rotated = res.headers.get("x-mirror-session-token");
-        if (rotated) {
-          setApiKey(rotated);
-          if (rotated !== apiKey) credentialRotationRef.current = true;
+        const accessToken = res.headers.get("x-mirror-access-token");
+        if (accessToken) {
+          setApiKey(accessToken);
+          if (accessToken !== apiKey) credentialRotationRef.current = true;
           try {
-            localStorage.setItem("mirror_session_token", rotated);
-            document.cookie = `mirror_asset_session=${encodeURIComponent(rotated)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+            storeAccessToken(accessToken, bearer, res.headers.get("x-mirror-session-token"));
           } catch { /* Browser storage may be unavailable. */ }
         }
         if (!res.ok) throw new Error(`Model discovery failed: ${res.status}`);
@@ -541,13 +562,15 @@ export default function App() {
         metadata.mirror_model = pickedModel.trim();
       if (conversationId.trim())
         metadata.conversation_id = conversationId.trim();
+      const requestHeaders = new Headers({ "content-type": "application/json" });
+      const bearer = readStoredBearer();
+      if (bearer) requestHeaders.set("authorization", `Bearer ${bearer}`);
+      const sessionToken = readStoredSessionToken();
+      if (sessionToken) requestHeaders.set("x-mirror-session-token", sessionToken);
       const response = await fetch(endpoint, {
         method: "POST",
         signal: abort.signal,
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        },
+        headers: requestHeaders,
         body: JSON.stringify({
           model,
           ...(mode === "responses"
@@ -558,13 +581,12 @@ export default function App() {
           ...(Object.keys(metadata).length ? { metadata } : {}),
         }),
       });
-      const rotated = response.headers.get("x-mirror-session-token");
-      if (rotated) {
-        setApiKey(rotated);
-        if (rotated !== apiKey) credentialRotationRef.current = true;
+        const accessToken = response.headers.get("x-mirror-access-token");
+      if (accessToken) {
+        setApiKey(accessToken);
+        if (accessToken !== apiKey) credentialRotationRef.current = true;
         try {
-          localStorage.setItem("mirror_session_token", rotated);
-          document.cookie = `mirror_asset_session=${encodeURIComponent(rotated)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+          storeAccessToken(accessToken, bearer, response.headers.get("x-mirror-session-token"));
         } catch { /* Browser storage may be unavailable. */ }
       }
       if (!response.ok)
@@ -716,18 +738,20 @@ export default function App() {
                 setApiKey(value);
                 try {
                   if (value) {
-                    localStorage.setItem("mirror_session_token", value);
+                    localStorage.setItem(ACCESS_TOKEN_KEY, value);
+                    localStorage.removeItem(LEGACY_TOKEN_KEY);
                     document.cookie = `mirror_asset_session=${encodeURIComponent(value)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                   } else {
-                    localStorage.removeItem("mirror_session_token");
+                    localStorage.removeItem(ACCESS_TOKEN_KEY);
+                    localStorage.removeItem(LEGACY_TOKEN_KEY);
                     document.cookie = `mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                   }
                 } catch { /* Browser storage may be unavailable. */ }
               }}
-              placeholder="Paste ChatGPT session token"
+              placeholder="Paste ChatGPT accessToken or sessionToken"
             />
           </label>
-          <small>Use your ChatGPT session token as the Mirror API bearer.</small>
+          <small>Use a ChatGPT accessToken or sessionToken as the Mirror bearer. If a sessionToken needs exchange, Mirror saves the returned accessToken in this browser.</small>
         </div>
         <div className="columns">
           <section className="prompt-panel">
@@ -1093,7 +1117,7 @@ export default function App() {
                 if (token !== apiKey) credentialRotationRef.current = true;
                 setApiKey(token);
                 try {
-                  localStorage.setItem("mirror_session_token", token);
+                  storeAccessToken(token);
                   document.cookie = `mirror_asset_session=${encodeURIComponent(token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                 } catch { /* Browser storage may be unavailable. */ }
               }}

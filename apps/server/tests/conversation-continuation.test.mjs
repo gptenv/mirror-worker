@@ -13,8 +13,10 @@ process.env.MIRROR_DATA_DIR = dir;
 delete process.env.MIRROR_STORE_KEY;
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
+const auth = await import("../dist/auth.js");
 const { registerOpenAiRoutes } = await import("../dist/openai.js");
 const app = Fastify();
+app.addHook("onRequest", async req => auth.setRequestSessionToken(req.headers.authorization?.replace(/^Bearer\s+/i, "") ?? ""));
 await registerOpenAiRoutes(app);
 const address = await app.listen({ host: "127.0.0.1", port: 0 });
 const localFetch = globalThis.fetch;
@@ -67,8 +69,7 @@ for (const tracking of ["history", "id-minimal", "id-full"]) {
     for (const fixture of cases) {
       test(`${tracking} / ${transport} / ${fixture.name}: turns 2 and 3 must continue`, { timeout: 10_000 }, async () => {
         const account = `${tracking}-${transport}-${fixture.name}`;
-        store.saveVerifiedSession("synthetic-session-fixture", account, "synthetic-device");
-        store.updateMintedToken("synthetic-access-fixture", Date.now() + 3_600_000, null);
+        store.saveVerifiedSession(account, "synthetic-device");
         const sent = [];
         globalThis.fetch = stubBackend(account, { sent, turnFrames: (body, turn) => {
           const upstream = body.conversation_id ?? `upstream-${account}-${turn}`;
@@ -89,7 +90,7 @@ for (const tracking of ["history", "id-minimal", "id-full"]) {
           const user = { role: "user", content: `Question ${turn}` };
           history.push(user);
           const response = await localFetch(`${address}/v1/chat/completions`, {
-            method: "POST", headers: { "content-type": "application/json" },
+            method: "POST", headers: { "content-type": "application/json", authorization: "Bearer synthetic-access-fixture" },
             body: JSON.stringify({ model: "auto", stream, ...fixture.params,
               messages: tracking === "id-minimal" && firstId ? [user] : history,
               ...(tracking !== "history" && firstId ? { metadata: { conversation_id: firstId } } : {}),

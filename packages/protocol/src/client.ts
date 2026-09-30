@@ -23,6 +23,7 @@ import {
   type RemoteConversationSummary,
 } from "./types.js";
 import { resolveTurnstileToken, type TurnstileChallenge } from "./turnstile.js";
+import { isAccessDeniedResponse, mintAccessTokenShared } from "./session.js";
 
 const ORIGIN = "https://chatgpt.com";
 const BASE_URL = `${ORIGIN}/backend-api`;
@@ -152,12 +153,21 @@ export class ChatGptBackendClient {
       signal?: AbortSignal;
     } = {},
   ): Promise<Response> {
-    const res = await fetch(`${BASE_URL}${path}`, {
+    const request = () => fetch(`${BASE_URL}${path}`, {
       method,
       headers: this.commonHeaders(path, opts.headers),
       ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
       signal: opts.signal,
     });
+    let res = await request();
+    if (this.creds.sessionToken && await isAccessDeniedResponse(res)) {
+      const minted = await mintAccessTokenShared(this.creds.sessionToken);
+      // Keep the refreshed value only in this request's credentials object;
+      // the server returns it to the browser, which owns persistent storage.
+      this.creds.accessToken = minted.accessToken;
+      this.creds.rotatedSessionToken = minted.rotatedSessionToken;
+      res = await request();
+    }
     return res;
   }
 

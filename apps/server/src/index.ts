@@ -33,7 +33,7 @@ import {
   normalizeModels,
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
-import { getRequestSessionToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
+import { getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -105,6 +105,7 @@ const app = Fastify({
   logger: options.worker ? false : {
     redact: [
       "req.headers.authorization",
+      "req.headers.x-mirror-session-token",
       "req.headers.cookie",
       "req.body.sessionToken",
     ],
@@ -133,8 +134,8 @@ await app.register(cors, {
       ? (req.headers.origin || false) : false,
     credentials: false,
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "x-mirror-device-id", "x-turnstile-token"],
-    exposedHeaders: ["x-mirror-conversation-id", "x-request-id", "x-mirror-session-token"],
+    allowedHeaders: ["Authorization", "Content-Type", "x-mirror-device-id", "x-mirror-session-token", "x-turnstile-token"],
+    exposedHeaders: ["x-mirror-conversation-id", "x-request-id", "x-mirror-access-token", "x-mirror-session-token"],
   }),
 });
 await app.register(rateLimit, {
@@ -161,18 +162,24 @@ app.addHook("onRequest", async (req, reply) => {
   let assetCookieToken: string | undefined;
   try { assetCookieToken = encodedAssetCookieToken ? decodeURIComponent(encodedAssetCookieToken) : undefined; } catch { assetCookieToken = undefined; }
   let sessionBearerAuthenticated = false;
-  const requiresUpstreamSession = isPublicApiPath(req.url) ||
+  // Routes that already authenticate by making their real upstream request
+  // must not spend an extra /me request on every operation. Local routes that
+  // read or mutate Mirror's account data still validate the bearer first.
+  const pathname = req.url.split("?", 1)[0];
+  const upstreamAuthenticates = isPublicApiPath(req.url) ||
     req.url.startsWith("/backend-api/") || req.url.startsWith("/ces/") ||
     req.url.startsWith("/realtime/") || req.url.startsWith("/api/auth/") ||
-    req.url.split("?", 1)[0] === "/api/session" || assetContentRequest;
+    assetContentRequest || (pathname === "/api/session" && req.method !== "DELETE");
   const requestSessionToken = bearer || assetCookieToken || "";
-  if (requestSessionToken) setRequestSessionToken(requestSessionToken);
-  if (requestSessionToken && requiresUpstreamSession) {
-    // A ChatGPT session token is the client-side Mirror bearer credential.
-    // Verify it before granting access to local routes, and reuse the minted
-    // token for the rest of this request.
+  const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
+  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
+  if (requestSessionToken && !upstreamAuthenticates) {
+    // Validate the browser bearer against ChatGPT. The backend client tries it
+    // directly as an accessToken and exchanges the client-held sessionToken
+    // only after an upstream authentication denial.
     try {
-      await getValidCredentials();
+      const credentials = await getValidCredentials();
+      await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
       return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
@@ -183,19 +190,19 @@ app.addHook("onRequest", async (req, reply) => {
   // Native image/download requests use a client-side cookie scoped only to
   // this exact asset route because browsers cannot attach Authorization.
   if (assetContentRequest) {
-    if (!sessionBearerAuthenticated) return reply.code(401).send({ error: "A valid session token is required for this asset." });
+    if (!requestSessionToken) return reply.code(401).send({ error: "A ChatGPT accessToken or sessionToken is required for this asset." });
     return;
   }
   const crossOriginPublicApi = isPublicApiPath(req.url) && !isAllowedOrigin(req.headers.origin, req.headers.host);
   if (crossOriginPublicApi) {
-    if (!isConfiguredApiKey && !sessionBearerAuthenticated) {
+    if (!isConfiguredApiKey && !requestSessionToken) {
       return reply.code(401).send({ error: {
-        message: "Cross-origin API requests require a ChatGPT session token Bearer credential",
+        message: "Cross-origin API requests require a ChatGPT accessToken or sessionToken Bearer credential",
         type: "authentication_error",
       } });
     }
   }
-  const authenticatedCrossOriginApi = crossOriginPublicApi && (isConfiguredApiKey || sessionBearerAuthenticated);
+  const authenticatedCrossOriginApi = crossOriginPublicApi && (isConfiguredApiKey || requestSessionToken !== "");
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(req.method);
   if (mutating && !isAllowedOrigin(req.headers.origin, req.headers.host) && !authenticatedCrossOriginApi) {
     return reply
@@ -216,9 +223,10 @@ app.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.url === "/api/health" || req.url.startsWith("/mirror/assets/")) return;
-  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey) {
+  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey && !upstreamAuthenticates) {
     try {
-      await getValidCredentials();
+      const credentials = await getValidCredentials();
+      await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
       return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
@@ -226,18 +234,21 @@ app.addHook("onRequest", async (req, reply) => {
       });
     }
   }
-  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers)) {
-    return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT session token as the Bearer credential", type: "authentication_error" } });
+  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && !(upstreamAuthenticates && requestSessionToken)) {
+    return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT accessToken or sessionToken as the Bearer credential", type: "authentication_error" } });
   }
 });
 
 app.addHook("onSend", async (req, reply, payload) => {
-  const rotatedSessionToken = getRotatedRequestSessionToken();
-  if (rotatedSessionToken) {
-    reply.header("x-mirror-session-token", rotatedSessionToken);
+  const accessToken = await getRotatedRequestAccessToken();
+  const sessionToken = await getRotatedRequestSessionToken();
+  if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
+  if (accessToken) {
+    reply.header("Cache-Control", "no-store");
+    reply.header("x-mirror-access-token", accessToken);
     if (req.url.split("?", 1)[0] === "/api/asset-content") {
       const secure = req.protocol === "https" ? "; Secure" : "";
-      reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(rotatedSessionToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
+      reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(sessionToken || getRequestFallbackSessionToken() || getRequestSessionToken() || accessToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
     }
   }
   if (req.url.startsWith("/v1/") && reply.statusCode >= 400) {
