@@ -3,7 +3,7 @@ import { registerDecoderChallengeRoutes } from "./decoder-challenges.js";
 import { registerConversionRoutes } from "./conversion-routes.js";
 import { uploadMimeType } from "./upload-mime.js";
 import { registerAssetContentRoute } from "./asset-content.js";
-import { apiError, recordFailure } from "./api-errors.js";
+import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
 import { formatStartupFailure } from "./preflight.js";
 import { syncConversationPage, hasRemoteHistory } from "./conversation-sync.js";
 import { fileURLToPath } from "node:url";
@@ -87,12 +87,38 @@ function isPublicApiPath(url: string): boolean {
 }
 
 function sessionAuthenticationError(error: unknown): string {
+  const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
+  if (typeof upstreamResponseText === "string") return upstreamResponseText;
   const message = error instanceof Error ? error.message : "";
   const failure = message.match(/^GET \/api\/auth\/session returned (\d{3})(?: \(([^)\n]{1,180})\))?$/);
   if (failure) return `ChatGPT's session endpoint returned HTTP ${failure[1]}${failure[2] ? ` (${failure[2]})` : ""}.`;
   if (error instanceof Error && error.name === "SessionTokenInvalidError")
     return "ChatGPT's session endpoint did not return an accessToken.";
   return "The Worker could not complete the ChatGPT session exchange.";
+}
+
+function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+  const sent = (error as { tokenLengths?: { accessToken?: { sentUpstream?: number }; sessionToken?: { sentUpstream?: number } } })?.tokenLengths;
+  return {
+    received: {
+      sessionToken: fallbackSessionToken?.length ?? bearer?.length ?? null,
+      accessToken: bearer?.length ?? null,
+    },
+    sent_upstream: {
+      sessionToken: sent?.sessionToken?.sentUpstream ?? null,
+      accessToken: sent?.accessToken?.sentUpstream ?? null,
+    },
+  };
+}
+
+function sessionAuthenticationErrorBody(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+  return {
+    error: {
+      message: sessionAuthenticationError(error),
+      type: "authentication_error",
+      token_lengths: sessionTokenLengthDiagnostics(error, bearer, fallbackSessionToken),
+    },
+  };
 }
 
 export interface WorkerAssets {
@@ -182,9 +208,9 @@ app.addHook("onRequest", async (req, reply) => {
       await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
-        error: { message: sessionAuthenticationError(error), type: "authentication_error" },
-      });
+      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
+        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
+      );
     }
   }
   // Native image/download requests use a client-side cookie scoped only to
@@ -229,9 +255,9 @@ app.addHook("onRequest", async (req, reply) => {
       await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send({
-        error: { message: sessionAuthenticationError(error), type: "authentication_error" },
-      });
+      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
+        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
+      );
     }
   }
   if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && !(upstreamAuthenticates && requestSessionToken)) {
@@ -260,6 +286,8 @@ app.addHook("onSend", async (req, reply, payload) => {
     // produces is shaped one of two ways: a bare string, or an object
     // with a .message (see openai.ts, insights.ts, and setErrorHandler).
     const parsed = JSON.parse(payload as string);
+    if (parsed.error && typeof parsed.error.type === "string" && typeof parsed.error.code === "string" && typeof parsed.error.message === "string")
+      return payload;
     const message = typeof parsed.error === "string" ? parsed.error : parsed.error.message;
     const envelope = apiError(reply.statusCode, message, req.id);
     recordFailure(envelope.error.code, req.id);
@@ -268,11 +296,26 @@ app.addHook("onSend", async (req, reply, payload) => {
   return payload;
 });
 
-app.setErrorHandler((error, _req, reply) => {
+app.setErrorHandler((error, req, reply) => {
   const status =
     error instanceof ZodError
       ? 400
-      : Number((error as { statusCode?: number }).statusCode ?? 500);
+      : Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 500);
+  const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
+  const hasUpstreamResponse = typeof upstreamResponseText === "string";
+  if (hasUpstreamResponse) {
+    if (req.url.startsWith("/v1/")) {
+      return reply.code(status).send(apiError(status, upstreamErrorMessage(upstreamResponseText), req.id, true));
+    }
+    const tokenLengths = (error as { tokenLengths?: unknown }).tokenLengths;
+    return reply.code(status).send({
+      error: {
+        message: upstreamResponseText,
+        upstream_response_text: upstreamResponseText,
+        ...(tokenLengths !== undefined ? { token_lengths: tokenLengths } : {}),
+      },
+    });
+  }
   const message =
     error instanceof ZodError
       ? error.issues.map((issue) => issue.message).join("; ")

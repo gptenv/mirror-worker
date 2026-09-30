@@ -194,6 +194,7 @@ export class BackendApiError extends Error {
     message: string,
     public readonly status?: number,
     public readonly body?: unknown,
+    public readonly upstreamResponseText?: string,
   ) {
     super(message);
     this.name = "BackendApiError";

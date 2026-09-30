@@ -32,7 +32,7 @@ test("worker success and failure detach the supplied abort signal", async () => 
 test("session minting handles invalid JWT payloads and legacy headers without cookies", async (t) => {
   for (const payload of ["invalid-json", JSON.stringify({}), JSON.stringify({ exp: "123" })]) {
     const token = `header.${Buffer.from(payload).toString("base64url")}.sig`;
-    t.mock.method(globalThis, "fetch", async () => ({ ok: true, json: async () => ({ accessToken: token }), headers: { get: () => null } }));
+    t.mock.method(globalThis, "fetch", async () => ({ ok: true, text: async () => JSON.stringify({ accessToken: token }), headers: { get: () => null } }));
     const before = Date.now();
     const result = await mintAccessToken("synthetic-session");
     assert.equal(result.accessToken, token);
@@ -179,8 +179,8 @@ test("mintAccessToken falls back to a single set-cookie header on runtimes witho
   globalThis.fetch = async () => ({
     ok: true,
     status: 200,
-    async json() {
-      return { accessToken: `header.${payload}.sig` };
+    async text() {
+      return JSON.stringify({ accessToken: `header.${payload}.sig` });
     },
     headers: {
       get(name) {

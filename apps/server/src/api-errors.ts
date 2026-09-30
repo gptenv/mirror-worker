@@ -10,9 +10,19 @@ const categories: Record<number, [string, string, string]> = {
   504: ["timeout_error", "deadline_exceeded", "Generation deadline exceeded. Reload history before retrying; upstream completion is uncertain."],
 };
 const recent: Array<{ at: string; code: string; requestId: string; protocolCategory: string | null }> = [];
-export function apiError(status: number, message: string, requestId: string) {
+export function apiError(status: number, message: string, requestId: string, useUpstreamMessage = false) {
   const [type, code, fallback] = categories[status] ?? ["server_error", "upstream_failure", "Generation failed. Check session readiness, then reload history before retrying."];
-  return { error: { type, code, message: status === 400 ? message : fallback, request_id: requestId } };
+  return { error: { type, code, message: useUpstreamMessage || status === 400 ? message : fallback, request_id: requestId } };
+}
+
+/** OpenAI's error.message is the upstream error message when available. */
+export function upstreamErrorMessage(responseText: string): string {
+  try {
+    const parsed = JSON.parse(responseText);
+    const message = parsed?.error?.message ?? parsed?.message;
+    if (typeof message === "string") return message;
+  } catch { /* the upstream returned text or HTML; preserve it verbatim */ }
+  return responseText;
 }
 export function recordFailure(code: string, requestId: string, protocolCategory: string | null = null) {
   recent.push({ at: new Date().toISOString(), code, requestId, protocolCategory });

@@ -42,6 +42,19 @@ function safeJson(text: string): unknown {
   }
 }
 
+function attachTokenLengths(error: unknown, accessToken: string, sessionToken: string | null | undefined, sessionExchangeAttempted: boolean): void {
+  if (error === null || typeof error !== "object") return;
+  Object.assign(error, {
+    tokenLengths: {
+      accessToken: { received: accessToken.length, sentUpstream: accessToken.length },
+      sessionToken: {
+        received: sessionToken?.length ?? null,
+        sentUpstream: sessionExchangeAttempted ? sessionToken?.length ?? null : null,
+      },
+    },
+  });
+}
+
 function modeFor(
   gizmoId: string | null | undefined,
   gizmoPayload?: Record<string, unknown> | null,
@@ -159,9 +172,22 @@ export class ChatGptBackendClient {
       ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
       signal: opts.signal,
     });
-    let res = await request();
+    const firstAccessToken = this.creds.accessToken;
+    let res: Response;
+    try {
+      res = await request();
+    } catch (error) {
+      attachTokenLengths(error, firstAccessToken, this.creds.sessionToken, false);
+      throw error;
+    }
     if (this.creds.sessionToken && await isAccessDeniedResponse(res)) {
-      const minted = await mintAccessTokenShared(this.creds.sessionToken);
+      let minted;
+      try {
+        minted = await mintAccessTokenShared(this.creds.sessionToken);
+      } catch (error) {
+        attachTokenLengths(error, firstAccessToken, this.creds.sessionToken, true);
+        throw error;
+      }
       // Keep the refreshed value only in this request's credentials object;
       // the server returns it to the browser, which owns persistent storage.
       this.creds.accessToken = minted.accessToken;
@@ -183,6 +209,7 @@ export class ChatGptBackendClient {
         `GET ${path} failed: ${res.status}`,
         res.status,
         json ?? text,
+        text,
       );
     }
     if (!isObject(json)) {
@@ -209,6 +236,7 @@ export class ChatGptBackendClient {
         `POST ${path} failed: ${res.status}`,
         res.status,
         json ?? text,
+        text,
       );
     }
     if (!isObject(json)) {
@@ -552,9 +580,12 @@ export class ChatGptBackendClient {
       signal: opts.signal,
     });
     if (!upload.ok) {
+      const text = await upload.text().catch(() => "");
       throw new BackendApiError(
         `File blob upload failed: ${upload.status}`,
         upload.status,
+        text,
+        text,
       );
     }
 
@@ -766,6 +797,7 @@ export class ChatGptBackendClient {
       throw new BackendApiError(
         `POST /f/conversation failed: ${res.status}`,
         res.status,
+        text,
         text,
       );
     }

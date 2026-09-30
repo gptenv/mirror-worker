@@ -262,7 +262,18 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
       : await fetch(`${UPSTREAM}${req.url}`, init);
   } catch (error) {
     req.log.error({ error, path: req.url }, "mirror upstream request failed");
-    reply.code(502).send({ error: "upstream_request_failed", path: req.url });
+    const details = error as { upstreamResponseText?: unknown; tokenLengths?: unknown; statusCode?: number; message?: string };
+    const upstreamResponseText = typeof details?.upstreamResponseText === "string" ? details.upstreamResponseText : undefined;
+    const tokenLengths = details?.tokenLengths;
+    reply.code(Number(details?.statusCode ?? 502)).send({
+      error: {
+        type: "upstream_request_failed",
+        message: upstreamResponseText ?? details?.message ?? "The upstream request failed before a response was received.",
+        ...(upstreamResponseText !== undefined ? { upstream_response_text: upstreamResponseText } : {}),
+        ...(tokenLengths !== undefined ? { token_lengths: tokenLengths } : {}),
+        path: req.url,
+      },
+    });
     return;
   }
   const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
@@ -333,6 +344,14 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   const sessionToken = await getRotatedRequestSessionToken();
   if (sessionToken) responseHeaders["x-mirror-session-token"] = sessionToken;
   reply.raw.writeHead(upstream.status, responseHeaders);
+
+  // Error payloads are diagnostic evidence from the upstream. Preserve the
+  // status, content type, and exact text instead of rewriting HTML/JSON or
+  // injecting browser patches into an error response.
+  if (!upstream.ok) {
+    reply.raw.end(await upstream.text());
+    return;
+  }
 
   if (contentType.includes("text/html")) {
     let html = await upstream.text();

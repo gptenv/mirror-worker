@@ -74,6 +74,14 @@ export async function fetchWithAccessTokenFallback(
   const first = await fetch(input, init);
   if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
   const minted = await mintAccessTokenShared(credentials.sessionToken).catch((error) => {
+    if (error && typeof error === "object") {
+      Object.assign(error, {
+        tokenLengths: {
+          accessToken: { received: credentials.accessToken.length, sentUpstream: credentials.accessToken.length },
+          sessionToken: { received: credentials.sessionToken!.length, sentUpstream: credentials.sessionToken!.length },
+        },
+      });
+    }
     if (error instanceof SessionTokenInvalidError) (error as any).statusCode = 401;
     throw error;
   });

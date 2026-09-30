@@ -2,7 +2,7 @@ import { needsRichOutput, renderRichOutput, type RichOutput } from "./rich-outpu
 import { createAssetLinks } from "./asset-content.js";
 import { ResponsesBody, responsesToCompletion, createResponseWriter } from "./responses.js";
 import { abortable, turnDeadline } from "./deadlines.js";
-import { apiError, recordFailure } from "./api-errors.js";
+import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
 import "./zod-openapi-init.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -1040,9 +1040,14 @@ export async function registerOpenAiRoutes(
       }), controller.signal);
     } catch (error) {
       if (reply.raw.destroyed) return;
-      const message = error instanceof Error ? error.message : "Generation failed";
-      const status = Number((error as { statusCode?: number }).statusCode ?? 502);
-      const envelope = apiError(status, message, req.id);
+      const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
+      const upstreamText = typeof upstreamResponseText === "string" ? upstreamResponseText : undefined;
+      const hasUpstreamResponse = upstreamText !== undefined;
+      const message = upstreamText !== undefined
+        ? upstreamErrorMessage(upstreamText)
+        : error instanceof Error ? error.message : "Generation failed";
+      const status = Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 502);
+      const envelope = apiError(status, message, req.id, hasUpstreamResponse);
       // Classify against the private-protocol drift taxonomy (MIR-31) so a
       // real backend-api shape change is distinguishable from an ordinary
       // expired session or rate limit in diagnostics - this never changes

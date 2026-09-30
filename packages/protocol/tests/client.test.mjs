@@ -49,6 +49,32 @@ test("tries the stored accessToken first and exchanges the saved sessionToken on
     assert.equal(creds.rotatedSessionToken, "rotated-session");
   }));
 
+test("preserves the exact session endpoint error body and reports only token lengths", () =>
+  withFetch(async (input, init = {}) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/backend-api/me") return new Response("unauthorized", { status: 401 });
+    if (url.pathname === "/api/auth/session") {
+      assert.equal(new Headers(init.headers).get("cookie"), "__Secure-next-auth.session-token=full-session-token");
+      return new Response("exact upstream denial text", { status: 403, headers: { "content-type": "text/plain" } });
+    }
+    throw new Error(`unexpected ${url.href}`);
+  }, async () => {
+    const client = new ChatGptBackendClient({
+      accessToken: "full-access-token",
+      sessionToken: "full-session-token",
+      deviceId: "device-1",
+    });
+    await assert.rejects(client.fetchMe(), (error) => {
+      assert.equal(error.upstreamResponseText, "exact upstream denial text");
+      assert.deepEqual(error.tokenLengths, {
+        accessToken: { received: "full-access-token".length, sentUpstream: "full-access-token".length },
+        sessionToken: { received: "full-session-token".length, sentUpstream: "full-session-token".length },
+      });
+      assert.equal(JSON.stringify(error).includes("full-session-token"), false);
+      return true;
+    });
+  }));
+
 test("fetchMe captures accountId from account.account_user_id", () =>
   withFetch(
     async () => Response.json({ account: { account_user_id: "acc-1" } }),

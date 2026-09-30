@@ -64,7 +64,11 @@ function extractRotatedSessionToken(res: Response): string | null {
 }
 
 export class SessionTokenInvalidError extends Error {
-  constructor(message = "Session token was rejected or has no accessToken in the response — it's likely expired.") {
+  public readonly statusCode = 401;
+  constructor(
+    message = "Session token was rejected or has no accessToken in the response — it's likely expired.",
+    public readonly upstreamResponseText?: string,
+  ) {
     super(message);
     this.name = "SessionTokenInvalidError";
   }
@@ -91,22 +95,24 @@ export async function mintAccessToken(sessionToken: string): Promise<MintedAcces
   if (!res.ok) {
     const contentType = res.headers.get("content-type")?.split(";", 1)[0] ?? "unknown response type";
     const ray = res.headers.get("cf-ray");
+    const responseText = await res.text().catch(() => "");
     let isChallenge = false;
     if (res.status === 403 && contentType === "text/html") {
-      const body = await res.text().catch(() => "");
-      isChallenge = /cf-chl-|challenge-platform|just a moment|sorry, you have been blocked/i.test(body);
+      isChallenge = /cf-chl-|challenge-platform|just a moment|sorry, you have been blocked/i.test(responseText);
     }
     const details = [
       contentType,
       ...(isChallenge ? ["Cloudflare challenge page"] : []),
       ...(ray ? [`Ray ID ${ray}`] : []),
     ].join(", ");
-    throw new SessionTokenInvalidError(`GET /api/auth/session returned ${res.status} (${details})`);
+    throw new SessionTokenInvalidError(`GET /api/auth/session returned ${res.status} (${details})`, responseText);
   }
 
-  const json: any = await res.json().catch(() => null);
+  const responseText = await res.text().catch(() => "");
+  let json: any = null;
+  try { json = JSON.parse(responseText); } catch { /* preserve the upstream response below */ }
   if (!json || typeof json.accessToken !== "string" || json.accessToken.length === 0) {
-    throw new SessionTokenInvalidError();
+    throw new SessionTokenInvalidError(undefined, responseText);
   }
 
   const expSeconds = decodeJwtExpSeconds(json.accessToken);
@@ -125,13 +131,7 @@ export function mintAccessTokenShared(sessionToken: string): Promise<MintedAcces
   const active = activeMints.get(key);
   if (active) return active;
   let pending: Promise<MintedAccessToken>;
-  pending = mintAccessToken(sessionToken).catch((error) => {
-    const name = error instanceof Error ? error.name : typeof error;
-    let message = error instanceof Error ? error.message : String(error);
-    if (message.includes(sessionToken)) message = message.split(sessionToken).join("[redacted]");
-    console.error("ChatGPT session exchange failed", { name, message: message.slice(0, 300) });
-    throw error;
-  }).finally(() => {
+  pending = mintAccessToken(sessionToken).finally(() => {
     if (activeMints.get(key) === pending) activeMints.delete(key);
   });
   activeMints.set(key, pending);
