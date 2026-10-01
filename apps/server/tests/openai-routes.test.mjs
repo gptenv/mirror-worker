@@ -895,7 +895,7 @@ test("a streaming completion emits the preamble, a delta chunk, the mirror-conve
       assert.match(res.headers["content-type"], /text\/event-stream/);
       const frames = parseSseFrames(res.body);
       assert.equal(frames[0].json.choices[0].delta.role, "assistant");
-      assert.equal(frames[0].json.choices[0].delta.content, "");
+      assert.equal(frames[0].json.choices[0].delta.content, undefined);
       const deltaFrame = frames.find((f) => f.json?.choices?.[0]?.delta?.content === "hello world");
       assert.ok(deltaFrame, "expected a delta chunk carrying the full text");
       const commentFrame = frames.find((f) => f.comment?.startsWith("mirror-conversation-id "));

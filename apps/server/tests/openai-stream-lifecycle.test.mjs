@@ -69,7 +69,7 @@ for (const responses of [false, true]) test(`a seventh full-history ${responses 
         assert.equal(event.delta, "");
       } else {
         assert.equal(event.object, "chat.completion.chunk");
-        assert.deepEqual(event.choices, [{ index: 0, delta: { content: "" }, finish_reason: null }]);
+        assert.deepEqual(event.choices, [{ index: 0, delta: {}, finish_reason: null }]);
       }
       output += text;
     }

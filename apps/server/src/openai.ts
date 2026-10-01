@@ -590,14 +590,14 @@ export async function registerOpenAiRoutes(
           choices: [
             {
               index: 0,
-              delta: { role: "assistant", content: "" },
+              delta: { role: "assistant" },
               finish_reason: null,
             },
           ],
         });
         // ChatGPTBox forwards every data event through a runtime.Port, keeping
         // Chrome's extension worker alive. SSE comments are ignored by its
-        // parser, so use an empty content delta during silent preparation or
+        // parser, so use a data event without a content field during silent preparation or
         // reasoning. This is transport activity only: never extend deadlines,
         // modify the transcript, or signal that generation has finished.
         heartbeat = setInterval(() => {
@@ -608,7 +608,7 @@ export async function registerOpenAiRoutes(
               object: "chat.completion.chunk",
               created,
               model: body.model,
-              choices: [{ index: 0, delta: { content: "" }, finish_reason: null }],
+              choices: [{ index: 0, delta: {}, finish_reason: null }],
             });
           } catch (error) {
             controller.abort(error);
@@ -899,7 +899,7 @@ export async function registerOpenAiRoutes(
         // The API transcript must be exactly what the caller can send back.
         // The upstream retains its own full tree; captured events preserve
         // the underlying snapshots independently of this logical API answer.
-        let responseText = body.stream ? streamedText : result.text;
+        let responseText = body.stream ? (streamedText || result.text) : result.text;
         if (rich) {
           const downloadClient = new ChatGptBackendClient(await getValidCredentials());
           richOutput = await renderRichOutput(capturedEvents, responseText, (pointer, messageId, image) =>
@@ -909,6 +909,9 @@ export async function registerOpenAiRoutes(
           assertSessionRevision(requestRevision);
           responseText = richOutput.text;
           responses?.setSummaries(richOutput.summaries);
+        }
+        if (!responseText.trim()) {
+          throw Object.assign(new Error("ChatGPT completed the request without returning an assistant answer."), { statusCode: 502, code: "empty_completion" });
         }
         if (body.stream) {
           const delta = remainingStreamText(responseText, emittedText);
@@ -1050,7 +1053,9 @@ export async function registerOpenAiRoutes(
         ? upstreamErrorMessage(upstreamText)
         : error instanceof Error ? error.message : "Generation failed";
       const status = Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 502);
-      const envelope = apiError(status, message, req.id, hasUpstreamResponse);
+      const emptyCompletion = (error as { code?: string })?.code === "empty_completion";
+      const envelope = apiError(status, message, req.id, hasUpstreamResponse || emptyCompletion);
+      if (emptyCompletion) envelope.error.code = "empty_completion";
       // Classify against the private-protocol drift taxonomy (MIR-31) so a
       // real backend-api shape change is distinguishable from an ordinary
       // expired session or rate limit in diagnostics - this never changes
@@ -1060,7 +1065,10 @@ export async function registerOpenAiRoutes(
       recordFailure(envelope.error.code, req.id, protocolCategory === "unknown" ? null : protocolCategory);
       if (body.stream) {
         if (responses) responses.fail(envelope.error.message, envelope.error.code);
-        else sse(reply, envelope);
+        else {
+          sse(reply, envelope);
+          sse(reply, "[DONE]");
+        }
         reply.raw.end();
         return;
       }

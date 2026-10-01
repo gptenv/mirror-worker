@@ -67,7 +67,7 @@ const cases = [
 for (const tracking of ["history", "id-minimal", "id-full"]) {
   for (const transport of ["json", "stream", "mixed"]) {
     for (const fixture of cases) {
-      test(`${tracking} / ${transport} / ${fixture.name}: turns 2 and 3 must continue`, { timeout: 10_000 }, async () => {
+      test(`${tracking} / ${transport} / ${fixture.name}: ${fixture.text ? "turns 2 and 3 must continue" : "empty output must report an error"}`, { timeout: 10_000 }, async () => {
         const account = `${tracking}-${transport}-${fixture.name}`;
         store.saveVerifiedSession(account, "synthetic-device");
         const sent = [];
@@ -96,6 +96,18 @@ for (const tracking of ["history", "id-minimal", "id-full"]) {
               ...(tracking !== "history" && firstId ? { metadata: { conversation_id: firstId } } : {}),
             }),
           });
+          if (!fixture.text) {
+            if (stream) {
+              const body = await response.text();
+              assert.match(body, /"code":"empty_completion"/);
+              assert.ok(body.endsWith("data: [DONE]\n\n"));
+              assert.doesNotMatch(body, /"finish_reason":"stop"/);
+            } else {
+              assert.equal(response.status, 502);
+              assert.equal((await response.json()).error.code, "empty_completion");
+            }
+            return;
+          }
           const answer = await readAnswer(response, stream);
           assert.equal(typeof answer.id, "string");
           firstId ??= answer.id;
