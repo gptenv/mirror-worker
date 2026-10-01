@@ -71,7 +71,7 @@ test.describe("web / ConversionTools", () => {
     mount({ fetcher: (async (_url, init) => { captured = JSON.parse(String(init?.body)); return json({ error: "bad file" }, 422); }) as typeof fetch });
     const file = new File([new Uint8Array([0, 128, 255])], "tiny.bin", { type: "application/octet-stream" });
     fireEvent.change(screen.getByLabelText(/pick a file/), { target: { files: [file] } });
-    await screen.findByText("bad file");
+    await screen.findByText('{"error":"bad file"}');
     assert.equal(captured.dataBase64, "AID/");
     assert.equal((screen.getByLabelText(/pick a file/) as HTMLInputElement).value, "");
     cleanup();
@@ -132,7 +132,7 @@ test.describe("web / ConversionTools", () => {
     await screen.findByText(/Mystery format: loaf --/);
   });
 
-  test("encodes both GIF variants and uses HTTP fallback text plus fortune error fallback", async () => {
+  test("encodes both GIF variants and preserves HTTP error bodies plus fortune errors", async () => {
     mount({ fetcher: (async (input) => {
       const url = String(input);
       if (url.includes("fortune")) throw new Error("fortune offline");
@@ -152,7 +152,7 @@ test.describe("web / ConversionTools", () => {
     await screen.findByText("fortune offline");
     selectFormat("pngspeak");
     click("Encode");
-    await screen.findByText(/HTTP 503/);
+    await screen.findByText("{}");
   });
 
   test("handles non-Error decode failures and empty file picker selections", async () => {

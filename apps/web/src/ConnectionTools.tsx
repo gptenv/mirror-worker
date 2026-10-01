@@ -9,7 +9,7 @@ export function ConnectionTools({ domain, apiKey, generationSucceeded, onSession
     setStatus("Checking API and local diagnostics…");
     try {
       const health = await fetch("/api/diagnostics");
-      if (!health.ok) throw new Error(`Diagnostics returned HTTP ${health.status}`);
+      if (!health.ok) throw new Error(await health.text());
       setDiagnostics(await health.json());
       const headers = new Headers();
       let stored = "";
@@ -33,7 +33,7 @@ export function ConnectionTools({ domain, apiKey, generationSucceeded, onSession
         } catch { /* Browser storage may be unavailable. */ }
         onSessionToken?.(accessToken);
       }
-      if (!models.ok) throw new Error(`Model discovery returned HTTP ${models.status}. Check the key and saved session.`);
+      if (!models.ok) throw new Error(await models.text());
       const body = await models.json();
       if (!Array.isArray(body.data)) throw new Error("Model discovery returned an unsupported response.");
       setStatus(`Model discovery passed (${body.data.length} models). ${apiKey ? "Bearer credential supplied." : "Browser authentication used; a client key has not been tested."}`);

@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
-import { ChatGptBackendClient, type AssetDownload } from "@mirror/protocol";
+import { BackendApiError, ChatGptBackendClient, type AssetDownload } from "@mirror/protocol";
 import { getValidCredentials } from "./auth.js";
 import { assertSessionRevision, getSessionRevision, onSessionChange, openAssetTicket, sealAssetTicket } from "./store.js";
 
@@ -32,7 +32,11 @@ export async function createAssetLinks(client: ChatGptBackendClient, origin: str
     try {
       const response = await client.fetchAssetContent(metadata.url, signal);
       const mimeType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() ?? "";
-      if (!response.ok || !response.body || !previewMimeType(mimeType)) {
+      if (!response.ok) {
+        const body = await response.text();
+        throw new BackendApiError(`Asset preview returned ${response.status}`, response.status, body, body);
+      }
+      if (!response.body || !previewMimeType(mimeType)) {
         await response.body?.cancel();
         throw new Error("Preview unavailable");
       }
@@ -50,7 +54,10 @@ export async function createAssetLinks(client: ChatGptBackendClient, origin: str
       } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
       if (!size) throw new Error("Empty preview");
       previewUrl = `data:${mimeType};base64,${Buffer.concat(chunks).toString("base64")}`;
-    } catch { previewUnavailable = true; }
+    } catch (error) {
+      if (typeof (error as { upstreamResponseText?: unknown })?.upstreamResponseText === "string") throw error;
+      previewUnavailable = true;
+    }
     signal?.throwIfAborted();
     assertSessionRevision(revision);
   }
@@ -88,10 +95,10 @@ export async function registerAssetContentRoute(app: FastifyInstance): Promise<v
       assertSessionRevision(revision);
       const response = await client.fetchAssetContent(metadata.url, controller.signal);
       assertSessionRevision(revision);
-      if (!response.ok || !response.body) {
-        await response.body?.cancel();
-        return reply.code(502).send({ error: "File is currently unavailable upstream. Request a new file link in chat." });
+      if (!response.ok) {
+        return reply.code(response.status).type(response.headers.get("content-type") || "text/plain").send(Buffer.from(await response.arrayBuffer()));
       }
+      if (!response.body) throw new Error("Asset response has no body");
       const mimeType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() || "application/octet-stream";
       const preview = query.download !== "1" && previewMimeType(mimeType);
       const fileName = assetFileName(metadata.fileName || ticket.fileName);
@@ -102,9 +109,9 @@ export async function registerAssetContentRoute(app: FastifyInstance): Promise<v
       if (req.method === "HEAD") { await response.body.cancel(); return reply.send(); }
       // Stream bytes with backpressure; never buffer a whole generated file.
       return reply.send(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream));
-    } catch {
+    } catch (error) {
       clearTimeout(timer);
-      return reply.code(502).send({ error: "File is currently unavailable. Request a new file link in chat." });
+      throw error;
     }
   });
 }

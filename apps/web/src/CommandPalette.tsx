@@ -48,7 +48,7 @@ export function CommandPalette({
     const timer = setTimeout(() => {
       fetch(`/api/conversations/search?q=${encodeURIComponent(query)}`)
         .then(async (res) => {
-          if (!res.ok) throw new Error(`Search failed (HTTP ${res.status}).`);
+          if (!res.ok) throw new Error(await res.text());
           return res.json();
         })
         .then((body: { items?: Result[] }) => {

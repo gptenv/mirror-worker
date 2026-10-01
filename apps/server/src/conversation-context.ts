@@ -12,6 +12,7 @@ import { BlockList, isIP, type LookupFunction } from "node:net";
 import { Agent } from "undici";
 import {
   ChatGptBackendClient,
+  BackendApiError,
   type NormalizedConversationEvent,
   type UploadedFile,
 } from "@mirror/protocol";
@@ -139,7 +140,10 @@ async function verifyWorkerDns(hostname: string, label: string, index: number): 
     const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`, {
       headers: { accept: "application/dns-json" },
     });
-    if (!response.ok) throw new Error(`DNS check failed for ${hostname}`);
+    if (!response.ok) {
+      const body = await response.text();
+      throw new BackendApiError(`DNS check failed for ${hostname}`, response.status, body, body);
+    }
     const result = await response.json() as { Answer?: Array<{ data?: string }> };
     return (result.Answer ?? []).map((answer) => answer.data).filter((address): address is string => Boolean(address));
   }));
@@ -163,8 +167,10 @@ async function fetchPublicResource(url: string, signal: AbortSignal | undefined,
       if (agent) init.dispatcher = agent as unknown as NonNullable<typeof init.dispatcher>;
       const res = await fetch(current, init as never);
       if (![301, 302, 303, 307, 308].includes(res.status)) {
-        if (!res.ok)
-          throw new Error(`Could not fetch ${label}[${index}]: upstream returned ${res.status}`);
+        if (!res.ok) {
+          const body = await res.text();
+          throw new BackendApiError(`Could not fetch ${label}[${index}]: upstream returned ${res.status}`, res.status, body, body);
+        }
         const cl = res.headers.get("content-length");
         if (cl && Number(cl) > MAX_IMAGE_BYTES)
           throw new Error(`${label}[${index}] is too large (${cl} bytes, max ${MAX_IMAGE_BYTES})`);
@@ -191,11 +197,12 @@ async function fetchPublicResource(url: string, signal: AbortSignal | undefined,
         }
         return { data, mimeType };
       }
-      if (redirects >= MAX_IMAGE_REDIRECTS)
-        throw new Error(`Could not fetch ${label}[${index}]: too many redirects`);
       const location = res.headers.get("location");
-      if (!location)
-        throw new Error(`Could not fetch ${label}[${index}]: redirect has no location`);
+      if (redirects >= MAX_IMAGE_REDIRECTS || !location) {
+        const body = await res.text();
+        throw new BackendApiError(`Could not fetch ${label}[${index}]: ${!location ? "redirect has no location" : "too many redirects"}`, 502, body, body);
+      }
+      await res.body?.cancel();
       current = new URL(location, current);
       if (current.protocol !== "http:" && current.protocol !== "https:")
         throw new Error(`${label}[${index}] redirect protocol is not permitted`);

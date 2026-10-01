@@ -91,12 +91,7 @@ function isPublicApiPath(url: string): boolean {
 function sessionAuthenticationError(error: unknown): string {
   const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
   if (typeof upstreamResponseText === "string") return upstreamResponseText;
-  const message = error instanceof Error ? error.message : "";
-  const failure = message.match(/^GET \/api\/auth\/session returned (\d{3})(?: \(([^)\n]{1,180})\))?$/);
-  if (failure) return `ChatGPT's session endpoint returned HTTP ${failure[1]}${failure[2] ? ` (${failure[2]})` : ""}.`;
-  if (error instanceof Error && error.name === "SessionTokenInvalidError")
-    return "ChatGPT's session endpoint did not return an accessToken.";
-  return "The Worker could not complete the ChatGPT session exchange.";
+  return error instanceof Error ? error.message : String(error);
 }
 
 function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
@@ -339,9 +334,7 @@ app.setErrorHandler((error, req, reply) => {
   const message =
     error instanceof ZodError
       ? error.issues.map((issue) => issue.message).join("; ")
-      : status >= 500
-        ? "Internal server error"
-        : error instanceof Error
+      : error instanceof Error
           ? error.message
           : "Request failed";
   if (status >= 500) app.log.error({ err: error }, "request failed");
@@ -401,9 +394,8 @@ app.get("/api/gpts", async () => {
         ownedOnly: false,
         limit: 50,
         conversationsPerGizmo: 0,
-      })
-      .catch(() => ({})),
-    client.fetchGizmoBootstrap({ limit: 20 }).catch(() => ({})),
+      }),
+    client.fetchGizmoBootstrap({ limit: 20 }),
   ]);
   const seen = new Set<string>();
   return [...normalizeGizmos(gpts), ...normalizeGizmos(projects)]
@@ -532,7 +524,7 @@ app.post("/api/files", async (req, reply) => {
   if (!part) return reply.code(400).send({ error: "No file uploaded" });
   const data = await part.toBuffer();
   const client = new ChatGptBackendClient(await getValidCredentials());
-  await client.fetchMe().catch(() => undefined);
+  await client.fetchMe();
   const file = await client.uploadFile({
     data,
     fileName: part.filename,
@@ -647,7 +639,9 @@ app.post("/api/chat", async (req, reply) => {
   } catch (error) {
     send("error", {
       message:
-        error instanceof Error && error.name === "AbortError"
+        typeof (error as { upstreamResponseText?: unknown })?.upstreamResponseText === "string"
+          ? (error as { upstreamResponseText: string }).upstreamResponseText
+          : error instanceof Error && error.name === "AbortError"
           ? "Generation stopped"
           : String((error as Error)?.message ?? error),
     });

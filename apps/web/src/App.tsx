@@ -293,7 +293,7 @@ export default function App() {
             storeAccessToken(accessToken, bearer, res.headers.get("x-mirror-session-token"));
           } catch { /* Browser storage may be unavailable. */ }
         }
-        if (!res.ok) throw new Error(`Model discovery failed: ${res.status}`);
+        if (!res.ok) throw new Error(await res.text());
         return res.json();
       })
       .then((body) => {
@@ -369,7 +369,7 @@ export default function App() {
       const res = await fetch(
         `${location.origin}/api/conversations/${encodeURIComponent(id)}`,
       );
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      if (!res.ok) throw new Error(await res.text());
       const body = await res.json();
       const loaded: StoredMessageDto[] = Array.isArray(body.messages)
         ? body.messages
@@ -590,7 +590,7 @@ export default function App() {
         } catch { /* Browser storage may be unavailable. */ }
       }
       if (!response.ok)
-        throw new Error(`${response.status} ${await response.text()}`);
+        throw new Error(await response.text());
       const returnedConversationId = response.headers.get(
         "x-mirror-conversation-id",
       );

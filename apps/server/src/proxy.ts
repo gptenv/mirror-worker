@@ -1,4 +1,4 @@
-import { upstreamFetch } from "@mirror/protocol";
+import { BackendApiError, upstreamFetch } from "@mirror/protocol";
 import { EARLY_PATCH } from "./browser-patch.js";
 export { injectionCss, injectionJs } from "./mirror-controls.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -150,6 +150,16 @@ function safeRequestHeaders(req: FastifyRequest): Headers {
   return headers;
 }
 
+async function upstreamProfile(response: Response): Promise<Record<string, unknown>> {
+  const body = await response.text();
+  if (!response.ok) throw new BackendApiError("Upstream profile request failed", response.status, body, body);
+  try {
+    const value = JSON.parse(body);
+    if (value && typeof value === "object" && !Array.isArray(value) && value.error == null) return value;
+  } catch { /* Preserve the full response below. */ }
+  throw new BackendApiError("Upstream profile returned an invalid response", 502, body, body);
+}
+
 async function mirrorAuthSession(reply: FastifyReply): Promise<void> {
   const credentials = await getValidCredentials();
   const meResponse = await fetchWithAccessTokenFallback(`${UPSTREAM}/backend-api/me`, {
@@ -158,7 +168,7 @@ async function mirrorAuthSession(reply: FastifyReply): Promise<void> {
       "oai-device-id": credentials.deviceId, "user-agent": USER_AGENT,
     },
   }, credentials);
-  const me = meResponse.ok ? await meResponse.json().catch(() => ({})) as Record<string, unknown> : {};
+  const me = await upstreamProfile(meResponse);
   const account = me.account && typeof me.account === "object" ? me.account as Record<string, unknown> : {};
   reply.header("Cache-Control", "no-store").send({
     user: {
@@ -190,8 +200,7 @@ async function resolveAccountId(credentials: { accessToken: string; deviceId: st
         "oai-device-id": credentials.deviceId, "user-agent": USER_AGENT,
       },
     }, credentials as import("@mirror/protocol").SessionCredentials);
-    if (!meResponse.ok) return null;
-    const me = await meResponse.json().catch(() => ({})) as Record<string, unknown>;
+    const me = await upstreamProfile(meResponse);
     const account = me.account && typeof me.account === "object" ? me.account as Record<string, unknown> : null;
     const orgs = me.orgs && typeof me.orgs === "object" && Array.isArray((me.orgs as Record<string, unknown>).data)
       ? (me.orgs as Record<string, unknown>).data as unknown[] : [];
@@ -202,8 +211,8 @@ async function resolveAccountId(credentials: { accessToken: string; deviceId: st
     }
     if (accountId) setSessionAccountId(accountId);
     return accountId;
-  } catch {
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 

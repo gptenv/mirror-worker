@@ -94,11 +94,11 @@ test("a response whose items field isn't an array is treated as zero results", a
 });
 
 test("a failed search reports the error as the status", async () => {
-  globalThis.fetch = (async () => new Response("", { status: 500 })) as typeof fetch;
+  globalThis.fetch = (async () => new Response("upstream search failure", { status: 500 })) as typeof fetch;
   renderPalette();
   fireEvent.change(screen.getByLabelText("Jump to a conversation"), { target: { value: "boom" } });
   await wait(250);
-  assert.match(screen.getByRole("status").textContent ?? "", /Search failed/);
+  assert.match(screen.getByRole("status").textContent ?? "", /upstream search failure/);
 });
 
 test("arrow keys move the active selection and Enter selects it", async () => {

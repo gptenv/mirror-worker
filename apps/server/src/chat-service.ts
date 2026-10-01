@@ -139,7 +139,7 @@ export async function runChat(
     const creds = await abortable(getValidCredentials(), controller.signal);
     assertSessionRevision(revision);
     const client = new ChatGptBackendClient(creds);
-    await abortable(client.fetchMe(controller.signal).catch(() => undefined), controller.signal);
+    await abortable(client.fetchMe(controller.signal), controller.signal);
     controller.signal.throwIfAborted();
 
     let init: ConversationInitResult | null = null;
@@ -175,8 +175,7 @@ export async function runChat(
     const gizmoPayload =
       conversation.gizmoId && !conversation.conversationId
         ? await abortable(client
-            .fetchGizmo(conversation.gizmoId, controller.signal)
-            .catch(() => null), controller.signal)
+            .fetchGizmo(conversation.gizmoId, controller.signal), controller.signal)
         : null;
     const result = await abortable(client.sendMessage({
       prompt: opts.prompt,
@@ -228,14 +227,18 @@ export async function runChat(
       error instanceof Error && error.name === "AbortError"
         ? "Generation stopped"
         : "Generation failed";
-    if (!transient) updateMessage(
-      assistant.id,
-      fullText,
-      message === "Generation stopped" ? "stopped" : "error",
-      null,
-      events,
-    );
-    throw error;
+    try {
+      if (!transient) updateMessage(
+        assistant.id,
+        fullText,
+        message === "Generation stopped" ? "stopped" : "error",
+        null,
+        events,
+      );
+    } finally {
+      // Recording a partial turn must never replace the original failure.
+      throw error;
+    }
   } finally {
     deadline.close();
     activeTurns.delete(conversation.id);

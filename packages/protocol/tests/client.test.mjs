@@ -456,7 +456,7 @@ test("sendMessage's follow-up turn negotiates prepareFollowup and forwards its c
   );
 });
 
-test("prepareFollowup swallows a 404/409/422 on the first prepare call and proceeds with no conduit token", () =>
+test("prepareFollowup preserves the first prepare failure body", () =>
   withFetch(
     async (url, init = {}) => {
       const u = new URL(String(url));
@@ -473,11 +473,11 @@ test("prepareFollowup swallows a 404/409/422 on the first prepare call and proce
     },
     async () => {
       const client = new ChatGptBackendClient(fakeCreds());
-      await client.sendMessage({ prompt: "again", model: "auto", conversationId: "conv-1" });
+      await assert.rejects(client.sendMessage({ prompt: "again", model: "auto", conversationId: "conv-1" }), error => error.status === 404 && error.upstreamResponseText === "gone");
     },
   ));
 
-test("prepareFollowup swallows a 400/409/422 on the second prepare call and falls back to the first conduit token", () =>
+test("prepareFollowup preserves the second prepare failure body", () =>
   withFetch(
     async (url, init = {}) => {
       const u = new URL(String(url));
@@ -496,7 +496,7 @@ test("prepareFollowup swallows a 400/409/422 on the second prepare call and fall
     },
     async () => {
       const client = new ChatGptBackendClient(fakeCreds());
-      await client.sendMessage({ prompt: "again", model: "auto", conversationId: "conv-1" });
+      await assert.rejects(client.sendMessage({ prompt: "again", model: "auto", conversationId: "conv-1" }), error => error.status === 409 && error.upstreamResponseText === "conflict");
     },
   ));
 

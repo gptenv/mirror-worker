@@ -38,10 +38,7 @@ export function ConversationTools({
 
   async function read(url: string, init?: RequestInit) {
     const response = await fetch(url, init);
-    if (!response.ok)
-      throw new Error(
-        `History request returned HTTP ${response.status}. Reload and try again.`,
-      );
+    if (!response.ok) throw new Error(await response.text());
     return response.json();
   }
 

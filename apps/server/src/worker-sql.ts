@@ -13,9 +13,11 @@ export interface SqliteDatabase {
 }
 
 export interface DurableSqlStorage {
-  exec(sql: string, ...values: unknown[]): {
-    toArray(): unknown[];
-    readonly rowsWritten: number;
+  sql: {
+    exec(sql: string, ...values: unknown[]): {
+      toArray(): unknown[];
+      readonly rowsWritten: number;
+    };
   };
   transactionSync<T>(work: () => T): T;
 }
@@ -51,19 +53,19 @@ export function wrapDurableSql(storage: DurableSqlStorage): SqliteDatabase {
       // PRAGMAs are configured by Cloudflare's SQLite-backed Durable Object
       // storage and are not part of its SQL API.
       if (/^\s*PRAGMA\b/i.test(sql)) return;
-      return storage.exec(sql);
+      return storage.sql.exec(sql);
     },
     prepare(sql) {
       return {
         run(...values) {
-          const cursor = storage.exec(sql, ...values);
+          const cursor = storage.sql.exec(sql, ...values);
           return { changes: cursor.rowsWritten };
         },
         get(...values) {
-          return storage.exec(sql, ...values).toArray()[0];
+          return storage.sql.exec(sql, ...values).toArray()[0];
         },
         all(...values) {
-          return storage.exec(sql, ...values).toArray();
+          return storage.sql.exec(sql, ...values).toArray();
         },
       };
     },

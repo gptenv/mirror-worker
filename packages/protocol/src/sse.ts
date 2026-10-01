@@ -252,6 +252,11 @@ export class ConversationStreamReducer {
       op: this.lastOp,
     });
     this.apply(event);
+    if ((event.kind === "typed" || event.kind === "unknown") && isPlainObject(event.raw)) {
+      if (typeof event.raw.error_code === "string") this.errorCode = event.raw.error_code;
+      else if (event.raw.error != null) this.errorCode = typeof event.raw.error === "string" ? event.raw.error : JSON.stringify(event.raw.error);
+      else if (event.kind === "typed" && event.type === "error") this.errorCode = "upstream_error";
+    }
     return event;
   }
 

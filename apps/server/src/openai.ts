@@ -387,9 +387,8 @@ export async function registerOpenAiRoutes(
           ownedOnly: false,
           limit: 50,
           conversationsPerGizmo: 0,
-        })
-        .catch(() => ({})),
-      client.fetchGizmoBootstrap({ limit: 20 }).catch(() => ({})),
+        }),
+      client.fetchGizmoBootstrap({ limit: 20 }),
     ]);
     const seen = new Set<string>();
     const gizmos = [

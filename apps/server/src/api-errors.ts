@@ -1,18 +1,18 @@
 /** OpenAI-shaped error envelopes; upstream bodies are preserved when available. */
-const categories: Record<number, [string, string, string]> = {
-  400: ["invalid_request_error", "invalid_request", "Invalid request. Check the supported fields and message history."],
-  401: ["authentication_error", "authentication_required", "Supply a valid ChatGPT accessToken or sessionToken as the Bearer credential."],
-  403: ["permission_error", "request_forbidden", "Request rejected. Check the browser origin and account permissions."],
-  404: ["invalid_request_error", "not_found", "The requested resource was not found."],
-  409: ["invalid_request_error", "conversation_conflict", "Conversation or session changed. Reload before continuing."],
-  428: ["challenge_required_error", "challenge_required", "ChatGPT requires an interactive challenge. Complete it in ChatGPT before retrying, or supply a fresh request-scoped challenge token."],
-  429: ["rate_limit_error", "rate_limit_exceeded", "Rate limit reached. Wait before sending another request."],
-  504: ["timeout_error", "deadline_exceeded", "Generation deadline exceeded. Reload history before retrying; upstream completion is uncertain."],
+const categories: Record<number, [string, string]> = {
+  400: ["invalid_request_error", "invalid_request"],
+  401: ["authentication_error", "authentication_required"],
+  403: ["permission_error", "request_forbidden"],
+  404: ["invalid_request_error", "not_found"],
+  409: ["invalid_request_error", "conversation_conflict"],
+  428: ["challenge_required_error", "challenge_required"],
+  429: ["rate_limit_error", "rate_limit_exceeded"],
+  504: ["timeout_error", "deadline_exceeded"],
 };
 const recent: Array<{ at: string; code: string; requestId: string; protocolCategory: string | null }> = [];
-export function apiError(status: number, message: string, requestId: string, useUpstreamMessage = false) {
-  const [type, code, fallback] = categories[status] ?? ["server_error", "upstream_failure", "Generation failed. Check session readiness, then reload history before retrying."];
-  return { error: { type, code, message: useUpstreamMessage || status === 400 ? message : fallback, request_id: requestId } };
+export function apiError(status: number, message: string, requestId: string, _useUpstreamMessage = false) {
+  const [type, code] = categories[status] ?? ["server_error", "upstream_failure"];
+  return { error: { type, code, message, request_id: requestId } };
 }
 
 /** Put the complete upstream response body in OpenAI's error.message field. */

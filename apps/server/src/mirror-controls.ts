@@ -95,7 +95,7 @@ function wireWidget(root){
       document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
       var r=await fetch('/api/session',{method:'POST'});
       var b=await r.json();
-      if(!r.ok)throw Error(b.error||'Could not connect');
+      if(!r.ok)throw Error(typeof b.error==='string'?b.error:(b.error&&b.error.message)||JSON.stringify(b));
       area.value='';status.textContent='Connected. Reloading…';location.reload();
     }catch(e){try{localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');}catch(_){}status.textContent=e.message||String(e);}
   };

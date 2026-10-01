@@ -62,7 +62,7 @@ let encryptionKey: Buffer;
 
 function initializeDurableSchema(storage: DurableSqlStorage): void {
   db = wrapDurableSql(storage);
-  storage.exec(`
+  storage.sql.exec(`
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY, account_id TEXT NOT NULL DEFAULT 'default', upstream_id TEXT,
@@ -94,7 +94,7 @@ function initializeDurableSchema(storage: DurableSqlStorage): void {
       id TEXT PRIMARY KEY, account_id TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL
     );
   `);
-  storage.exec("UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'");
+  storage.sql.exec("UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'");
 }
 
 function encrypt(value: string): string {

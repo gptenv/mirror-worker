@@ -131,7 +131,7 @@ test("GET /api/auth/session mirrors upstream /me into a NextAuth-shaped session,
     },
   ));
 
-test("GET /api/auth/session falls back to defaults when /me fails", () =>
+test("GET /api/auth/session propagates the full /me failure body", () =>
   withFetch(
     fetchRouter([
       [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
@@ -141,10 +141,7 @@ test("GET /api/auth/session falls back to defaults when /me fails", () =>
       useSession("session-me-fails");
       const req = makeReq({ url: "/api/auth/session" });
       const { reply, state } = makeReply();
-      await proxyChatGpt(req, reply);
-      assert.equal(state.sentJson.user.id, "mirror-user");
-      assert.equal(state.sentJson.user.name, "ChatGPT user");
-      assert.equal(state.sentJson.user.email, null);
+      await assert.rejects(proxyChatGpt(req, reply), error => error.status === 500 && error.upstreamResponseText === "nope");
     },
   ));
 

@@ -272,7 +272,10 @@ export async function renderRichOutput(
         if ((!localAsset && parsed.protocol !== "https:") || parsed.username || parsed.password) throw new Error("Invalid download URL");
       }
       urls.set(pointer, value); assets.push({ pointer, url: value.url, ...(value.previewUnavailable ? { previewUnavailable: true } : {}), status: "resolved" });
-    } catch { assets.push({ pointer, status: "unavailable" }); }
+    } catch (error) {
+      if (typeof (error as { upstreamResponseText?: unknown })?.upstreamResponseText === "string") throw error;
+      assets.push({ pointer, status: "unavailable" });
+    }
   }
   const used = new Set<string>();
   const escapedUrl = (url: string) => url.replace(/[<>\s\\]/g, c => encodeURIComponent(c));

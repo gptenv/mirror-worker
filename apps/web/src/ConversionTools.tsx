@@ -54,9 +54,9 @@ function tryFromBase64(base64: string): string | null {
 
 async function postJson(url: string, body: unknown): Promise<any> {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || `${url} returned HTTP ${res.status}`);
-  return json;
+  const text = await res.text();
+  if (!res.ok) throw new Error(text);
+  return JSON.parse(text);
 }
 
 export function ConversionTools({

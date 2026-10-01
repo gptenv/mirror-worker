@@ -8,7 +8,7 @@ import { runWithUpstreamFetch, type UpstreamFetch } from "@mirror/protocol";
 import { configuredApiKeys } from "./security.js";
 
 interface DurableObjectState {
-  storage: { sql: DurableSqlStorage };
+  storage: DurableSqlStorage;
 }
 
 interface WorkerEnvironment {
@@ -33,7 +33,7 @@ let workerHandlerPromise: Promise<HttpServerHandler> | undefined;
 export class MirrorStorage extends DurableObject<WorkerEnvironment> {
   constructor(ctx: DurableObjectState, env: WorkerEnvironment) {
     super(ctx, env);
-    initializeWorkerStore(ctx.storage.sql, env.MIRROR_STORE_KEY);
+    initializeWorkerStore(ctx.storage, env.MIRROR_STORE_KEY);
   }
 
   async fetch(request: Request): Promise<Response> {

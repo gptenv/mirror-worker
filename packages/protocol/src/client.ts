@@ -226,16 +226,16 @@ export class ChatGptBackendClient {
     const res = await this.request("GET", path, { signal });
     const text = await res.text();
     const json = safeJson(text);
-    if (!res.ok) {
+    if (!res.ok || (isObject(json) && json.error != null)) {
       throw this.attachLastTokenLengths(new BackendApiError(
         `GET ${path} failed: ${res.status}`,
-        res.status,
+        res.ok ? 502 : res.status,
         json ?? text,
         text,
       ));
     }
     if (!isObject(json)) {
-      throw new BackendApiError(`GET ${path} returned non-object JSON`);
+      throw new BackendApiError(`GET ${path} returned non-object JSON`, 502, text, text);
     }
     return json;
   }
@@ -253,16 +253,16 @@ export class ChatGptBackendClient {
     });
     const text = await res.text();
     const json = safeJson(text);
-    if (!res.ok) {
+    if (!res.ok || (isObject(json) && json.error != null)) {
       throw this.attachLastTokenLengths(new BackendApiError(
         `POST ${path} failed: ${res.status}`,
-        res.status,
+        res.ok ? 502 : res.status,
         json ?? text,
         text,
       ));
     }
     if (!isObject(json)) {
-      throw new BackendApiError(`POST ${path} returned non-object JSON`);
+      throw new BackendApiError(`POST ${path} returned non-object JSON`, 502, text, text);
     }
     return json;
   }
@@ -457,7 +457,6 @@ export class ChatGptBackendClient {
       opts.signal,
       );
     } catch (error) {
-      if (error instanceof BackendApiError && [400, 404, 409, 422].includes(error.status ?? 0)) return null;
       throw error;
     }
     const conduitA =
@@ -483,7 +482,6 @@ export class ChatGptBackendClient {
       );
       return typeof second.conduit_token === "string" ? second.conduit_token : conduitA;
     } catch (error) {
-      if (error instanceof BackendApiError && [400, 404, 409, 422].includes(error.status ?? 0)) return conduitA;
       throw error;
     }
   }
@@ -694,8 +692,11 @@ export class ChatGptBackendClient {
       });
       if (![301, 302, 303, 307, 308].includes(res.status)) return res;
       const location = res.headers.get("location");
+      if (!location || redirects === 3) {
+        const body = await res.text();
+        throw new BackendApiError(!location ? "Asset redirect has no destination" : "Too many asset redirects", 502, body, body);
+      }
       await res.body?.cancel();
-      if (!location) throw new BackendApiError("Asset redirect has no destination");
       url = new URL(location, url);
     }
     throw new BackendApiError("Too many asset redirects");
@@ -833,6 +834,7 @@ export class ChatGptBackendClient {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const frames = new SseFrameDecoder();
+    const upstreamBody: string[] = [];
 
     const deliver = () => {
       const events = reducer.drainEvents();
@@ -849,23 +851,27 @@ export class ChatGptBackendClient {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        for (const chunk of frames.push(decoder.decode(value, { stream: true }))) {
+        const text = decoder.decode(value, { stream: true });
+        upstreamBody.push(text);
+        for (const chunk of frames.push(text)) {
           for (const payload of iterSseDataLines(chunk)) {
             reducer.feed(payload);
             deliver();
-            if (reducer.isDone) break;
+            if (reducer.isDone && !reducer.error) break;
           }
         }
-        if (reducer.isDone) break;
+        if (reducer.isDone && !reducer.error) break;
       }
     } finally {
-      if (reducer.isDone) await reader.cancel().catch(() => undefined);
+      if (reducer.isDone && !reducer.error) await reader.cancel().catch(() => undefined);
       reader.releaseLock();
     }
 
     // Flushing UTF-8 emits only a pending replacement character, never an
     // SSE delimiter. The unterminated final frame is handled by finish().
-    frames.push(decoder.decode());
+    const tail = decoder.decode();
+    upstreamBody.push(tail);
+    frames.push(tail);
     for (const chunk of frames.finish()) {
       for (const payload of iterSseDataLines(chunk)) {
         reducer.feed(payload);
@@ -874,17 +880,17 @@ export class ChatGptBackendClient {
     }
     deliver();
 
-    if (!reducer.isDone) throw new BackendApiError("Conversation stream interrupted before completion");
+    if (reducer.error) {
+      const body = upstreamBody.join("");
+      throw new BackendApiError(`Conversation stream returned error_code=${reducer.error}`, 502, body, body);
+    }
+
+    if (!reducer.isDone) throw new BackendApiError("Conversation stream interrupted before completion", 502, undefined, upstreamBody.join(""));
 
     if (!reducer.error && !reducer.currentAssistantMessageId) {
-      throw new BackendApiError("Unsupported conversation response: no assistant node was received");
+      throw new BackendApiError("Unsupported conversation response: no assistant node was received", 502, undefined, upstreamBody.join(""));
     }
 
-    if (reducer.error) {
-      throw new BackendApiError(
-        `Conversation stream returned error_code=${reducer.error}`,
-      );
-    }
 
     return {
       text: reducer.text,
