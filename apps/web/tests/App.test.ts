@@ -1706,4 +1706,22 @@ test("a queued attachment removal cannot change the submitted message", async ()
   await screen.findByText("Completed");
   assert.ok(screen.getByText("notes.md"));
 });
+test("initial Playground settings and history requests send browser-stored credentials", async () => {
+  localStorage.setItem("mirror_access_token", "stored-access");
+  localStorage.setItem("mirror_session_token", "stored-session");
+  const seen = new Set<string>();
+  await renderApp([[/^\/api\/(settings|conversations)/, (url, init) => {
+    const headers = new Headers(init?.headers);
+    assert.equal(headers.get("authorization"), "Bearer stored-access");
+    assert.equal(headers.get("x-mirror-session-token"), "stored-session");
+    seen.add(url.pathname);
+    if (url.pathname.endsWith("default-system-instructions")) return jsonResponse({content:"Authenticated instructions"});
+    if (url.pathname.endsWith("hotkeys")) return jsonResponse({hotkeys:{}});
+    return jsonResponse({items:[],hasMore:false});
+  }]]);
+  await waitFor(() => {
+    for (const path of ["/api/settings/default-system-instructions", "/api/settings/hotkeys", "/api/conversations"]) assert.ok(seen.has(path), path);
+  });
+});
+
 });

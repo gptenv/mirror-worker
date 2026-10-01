@@ -1,3 +1,4 @@
+import { mirrorFetch as fetch } from "./client-auth.js";
 import { useEffect, useRef, useState } from "react";
 
 interface Result {

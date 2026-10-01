@@ -1,3 +1,4 @@
+import { mirrorFetch as fetch } from "./client-auth.js";
 import { useState } from "react";
 
 export function ConnectionTools({ domain, apiKey, generationSucceeded, onSessionToken }: { domain: string; apiKey: string; generationSucceeded: boolean; onSessionToken?: (token: string) => void }) {

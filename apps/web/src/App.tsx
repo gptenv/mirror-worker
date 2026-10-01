@@ -1,3 +1,4 @@
+import { mirrorFetch as fetch, readStoredBearer, readStoredSessionToken, storeAccessToken } from "./client-auth.js";
 import { readResponsesStream, responseText } from "./responses-stream.js";
 import { ConnectionTools } from "./ConnectionTools.js";
 import { ConversationTools } from "./ConversationTools.js";
@@ -16,23 +17,6 @@ import {
   type PlaygroundMessage,
   type PlaygroundAttachment,
 } from "./playground-history.js";
-
-const ACCESS_TOKEN_KEY = "mirror_access_token";
-const LEGACY_TOKEN_KEY = "mirror_session_token";
-function readStoredBearer(): string {
-  try { return localStorage.getItem(ACCESS_TOKEN_KEY) || localStorage.getItem(LEGACY_TOKEN_KEY) || ""; }
-  catch { return ""; }
-}
-function readStoredSessionToken(): string {
-  try { return localStorage.getItem(LEGACY_TOKEN_KEY) || ""; } catch { return ""; }
-}
-function storeAccessToken(token: string, previousBearer?: string, rotatedSessionToken?: string | null): void {
-  if (rotatedSessionToken) localStorage.setItem(LEGACY_TOKEN_KEY, rotatedSessionToken);
-  else if (previousBearer && previousBearer !== token && !readStoredSessionToken())
-    localStorage.setItem(LEGACY_TOKEN_KEY, previousBearer);
-  localStorage.setItem(ACCESS_TOKEN_KEY, token);
-  document.cookie = `mirror_asset_session=${encodeURIComponent(readStoredSessionToken() || token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
-}
 
 /** Turns a PlaygroundMessage's text + attachments into the wire shape the OpenAI-compatible
  * endpoints expect: a plain string when there are no attachments (unchanged, back-compat), or
@@ -738,12 +722,12 @@ export default function App() {
                 setApiKey(value);
                 try {
                   if (value) {
-                    localStorage.setItem(ACCESS_TOKEN_KEY, value);
-                    localStorage.removeItem(LEGACY_TOKEN_KEY);
+                    localStorage.setItem("mirror_access_token", value);
+                    localStorage.removeItem("mirror_session_token");
                     document.cookie = `mirror_asset_session=${encodeURIComponent(value)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                   } else {
-                    localStorage.removeItem(ACCESS_TOKEN_KEY);
-                    localStorage.removeItem(LEGACY_TOKEN_KEY);
+                    localStorage.removeItem("mirror_access_token");
+                    localStorage.removeItem("mirror_session_token");
                     document.cookie = `mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                   }
                 } catch { /* Browser storage may be unavailable. */ }

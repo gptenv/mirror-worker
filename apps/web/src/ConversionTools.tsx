@@ -1,3 +1,4 @@
+import { mirrorFetch as fetch } from "./client-auth.js";
 import { useState } from "react";
 import type { PlaygroundAttachment } from "./playground-history.js";
 
