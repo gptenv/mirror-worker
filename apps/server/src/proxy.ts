@@ -220,7 +220,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   if (((req.method === "GET" && String(req.headers.accept ?? "").includes("text/html")) || req.url.startsWith("/unauth-mweb/")) && getRequestSessionToken()) {
     const pageCredentials = await getValidCredentials();
     const sessionToken = pageCredentials.rotatedSessionToken || pageCredentials.sessionToken;
-    if (sessionToken && sessionToken !== pageCredentials.accessToken)
+    if (sessionToken && (pageCredentials.cookie || sessionToken !== pageCredentials.accessToken))
       headers.set("cookie", [...identityCookies, `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`].join("; "));
   }
 

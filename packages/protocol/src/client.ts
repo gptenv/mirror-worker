@@ -211,6 +211,9 @@ export class ChatGptBackendClient {
       this.creds.accessToken = minted.accessToken;
       this.lastTokenLengths.accessToken.sentUpstream = minted.accessToken.length;
       this.creds.rotatedSessionToken = minted.rotatedSessionToken;
+      if (minted.rotatedSessionToken) this.creds.sessionToken = minted.rotatedSessionToken;
+      if (this.creds.cookie) this.creds.cookie = this.creds.cookie.replace(/__Secure-next-auth\.session-token=[^;]*/,
+        `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || this.creds.sessionToken)}`);
       res = await request();
     }
     return res;

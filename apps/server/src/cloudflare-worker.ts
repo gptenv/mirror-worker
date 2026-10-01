@@ -5,6 +5,7 @@ import { initializeWorkerStore } from "./store.js";
 import type { DurableSqlStorage } from "./worker-sql.js";
 import { runWithRequestSessionToken } from "./auth.js";
 import { runWithUpstreamFetch, type UpstreamFetch } from "@mirror/protocol";
+import { configuredApiKeys } from "./security.js";
 
 interface DurableObjectState {
   storage: { sql: DurableSqlStorage };
@@ -15,6 +16,9 @@ interface WorkerEnvironment {
   ASSETS: WorkerAssets;
   WARP: { fetch: UpstreamFetch };
   MIRROR_STORE_KEY?: string;
+  MIRROR_API_KEY?: string;
+  MIRROR_API_KEYS?: string;
+  OPENAI_API_KEY?: string;
 }
 
 interface DurableObjectNamespace {
@@ -40,7 +44,8 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
     return runWithUpstreamFetch(this.env.WARP.fetch.bind(this.env.WARP), () =>
-      runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)), sessionToken));
+      runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)), sessionToken,
+        configuredApiKeys({ MIRROR_API_KEY: this.env.MIRROR_API_KEY, MIRROR_API_KEYS: this.env.MIRROR_API_KEYS, OPENAI_API_KEY: this.env.OPENAI_API_KEY })));
   }
 
   private async startServer(): Promise<HttpServerHandler> {

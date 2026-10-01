@@ -1,4 +1,4 @@
-/** Public errors and diagnostics contain no upstream payloads or exception text. */
+/** OpenAI-shaped error envelopes; upstream bodies are preserved when available. */
 const categories: Record<number, [string, string, string]> = {
   400: ["invalid_request_error", "invalid_request", "Invalid request. Check the supported fields and message history."],
   401: ["authentication_error", "authentication_required", "Supply a valid ChatGPT accessToken or sessionToken as the Bearer credential."],
@@ -15,13 +15,8 @@ export function apiError(status: number, message: string, requestId: string, use
   return { error: { type, code, message: useUpstreamMessage || status === 400 ? message : fallback, request_id: requestId } };
 }
 
-/** OpenAI's error.message is the upstream error message when available. */
+/** Put the complete upstream response body in OpenAI's error.message field. */
 export function upstreamErrorMessage(responseText: string): string {
-  try {
-    const parsed = JSON.parse(responseText);
-    const message = parsed?.error?.message ?? parsed?.message;
-    if (typeof message === "string") return message;
-  } catch { /* the upstream returned text or HTML; preserve it verbatim */ }
   return responseText;
 }
 export function recordFailure(code: string, requestId: string, protocolCategory: string | null = null) {

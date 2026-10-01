@@ -20,7 +20,7 @@ You need Docker and an active ChatGPT account in your browser.
 
 3. Open [http://127.0.0.1:8799](http://127.0.0.1:8799). Select **Mirror controls** in the ChatGPT sidebar, paste the token, and choose **Save & reload**.
 
-Mirror keeps credentials in this browser's local storage. It tries the Bearer value as a ChatGPT accessToken first; only after an upstream authentication denial does it exchange a sessionToken. If ChatGPT rotates the session token during that exchange, Mirror returns the new value to the browser. The Worker does not persist either token. A cookie scoped to native asset downloads is used only where the browser cannot send Authorization headers.
+By default, Mirror keeps credentials in this browser's local storage. It tries the Bearer value as a ChatGPT accessToken first; only after an upstream authentication denial does it exchange a sessionToken. If ChatGPT rotates the session token during that exchange, Mirror returns the new value to the browser. Request-supplied tokens are not persisted by the Worker; optional configured credentials are stored as Worker secrets. A cookie scoped to native asset downloads is used only where the browser cannot send Authorization headers.
 
 ## ChatGPT features
 
@@ -55,17 +55,11 @@ for chunk in response:
     print(chunk.choices[0].delta.content or "", end="")
 ```
 
-Mirror provides `GET /v1/models` and `POST /v1/chat/completions` (streaming and non-streaming). The supported request fields and known differences from OpenAI are documented in [COMPATIBILITY.md](COMPATIBILITY.md). Mirror does not call `api.openai.com`; `OPENAI_API_KEY`, when set, is accepted as an inbound Mirror API key.
+Mirror provides `GET /v1/models` and `POST /v1/chat/completions` (streaming and non-streaming). The supported request fields and known differences from OpenAI are documented in [COMPATIBILITY.md](COMPATIBILITY.md). Mirror does not call `api.openai.com`; `OPENAI_API_KEY` is an optional alias for a configured ChatGPT credential.
 
-Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. The accessToken is tried first. To allow a client to renew it after it expires, it may also send its client-held session token in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Optional `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` secrets can additionally authorize control routes; they do not provide ChatGPT account access on their own. Native browser navigation can establish a same-origin control cookie; the Worker deployment requires a client-held ChatGPT token for control API requests.
+Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror sends the session token as ChatGPT's `__Secure-next-auth.session-token` cookie on upstream API calls and tries the accessToken as Bearer authentication first. Clients may send their session token separately in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Configured tokens are selected in this order: `MIRROR_API_KEY`, entries in `MIRROR_API_KEYS`, then `OPENAI_API_KEY`. When the inbound Bearer matches a configured token, the first configured token supplies the upstream authentication cookie and access-token fallback. These settings must contain ChatGPT credentials, not an unrelated generated key. Unmatched client-held credentials authenticate independently. Native browser navigation can establish a same-origin control cookie; Worker API requests require an explicit credential.
 
-Generate an optional control-route key with:
-
-```sh
-npm run gen-api-key
-```
-
-Set the printed value in `.env` as `MIRROR_API_KEY`. The command does not modify `.env` automatically.
+To configure an upstream credential, set a ChatGPT session token in `.env` as `MIRROR_API_KEY`, or supply it as a Worker secret.
 
 ## Run without Docker
 
@@ -92,7 +86,7 @@ npx wrangler secret put MIRROR_STORE_KEY
 npx wrangler deploy
 ```
 
-Paste a securely generated key when Wrangler prompts for it. To run the Worker locally, add the same setting to `.dev.vars` and run `npm run dev:worker`. Set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` as Worker secrets when enabling programmatic control-route access. The Worker stores conversations and settings in its Durable Object; `MIRROR_STORE_KEY` encrypts stored app data and account metadata. The Worker URL is public and does not use Cloudflare Access: app and control API requests require the ChatGPT session token entered in the browser, which is stored only in that browser and sent as a Bearer credential. This is a single-account deployment, so anyone with a valid session token can access the same stored data.
+Paste a securely generated key when Wrangler prompts for it. To run the Worker locally, add the same setting to `.dev.vars` and run `npm run dev:worker`. Set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` as Worker secrets to configure upstream ChatGPT credentials. The Worker stores conversations and settings in its Durable Object; `MIRROR_STORE_KEY` encrypts stored app data and account metadata. The Worker URL is public and does not use Cloudflare Access: app and control API requests require the ChatGPT session token entered in the browser, which is stored in that browser and sent as a Bearer credential unless optional Worker token secrets are configured. This is a single-account deployment, so anyone with a valid session token can access the same stored data.
 
 ## Configuration
 
@@ -104,9 +98,9 @@ Paste a securely generated key when Wrangler prompts for it. To run the Worker l
 | `MIRROR_WEB_ORIGIN` | `http://localhost:5173` | Web origin used for development CORS. |
 | `MIRROR_DATA_DIR` | `.data` | Directory for the SQLite database and generated encryption key. |
 | `MIRROR_STORE_KEY` | generated | Optional 32-byte key (base64 or hex) for encrypting stored app data and account metadata. |
-| `MIRROR_API_KEY` | unset | Optional inbound key for control routes; ChatGPT access still requires a session-token bearer. |
-| `MIRROR_API_KEYS` | unset | Comma-separated set of accepted inbound API keys. |
-| `OPENAI_API_KEY` | unset | Additional inbound API key; not an OpenAI service credential. |
+| `MIRROR_API_KEY` | unset | First-preference ChatGPT token, forwarded as the upstream authentication cookie for matching configured clients. |
+| `MIRROR_API_KEYS` | unset | Comma-separated accepted tokens; first entry supplies the upstream cookie when `MIRROR_API_KEY` is unset. |
+| `OPENAI_API_KEY` | unset | Last-preference ChatGPT token for the upstream cookie; this is not an OpenAI platform API key. |
 
 Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. Worker bindings and secrets are configured with Wrangler.
 
@@ -114,7 +108,7 @@ Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. Worker bindings a
 
 Mirror binds to loopback by default and rejects non-loopback hosts. It is not designed for remote or multi-user deployment. A remote deployment would require additional authentication, TLS, CSRF defenses, and a security review.
 
-The browser stores the accessToken and, when available, the sessionToken in local storage. It builds Authorization from the stored accessToken, overriding any Authorization value supplied by application code. It sends the stored sessionToken separately so the Worker can exchange it only after an upstream auth denial. A cookie scoped to `/api/asset-content` supports native browser downloads. The Worker holds tokens only while handling requests and does not persist them. Older encrypted server-side session copies are removed when the store initializes. Conversation text, instructions, and events are stored locally without encryption. Request logs redact both credential headers, but should still be treated as sensitive.
+The browser stores the accessToken and, when available, the sessionToken in local storage. It builds Authorization from the stored accessToken, overriding any Authorization value supplied by application code. It sends the stored sessionToken separately so the Worker can exchange it only after an upstream auth denial. A cookie scoped to `/api/asset-content` supports native browser downloads. The Worker holds request-supplied tokens only while handling requests and does not persist them in its database. Optional configured credentials persist as Worker secrets. Older encrypted server-side session copies are removed when the store initializes. Conversation text, instructions, and events are stored locally without encryption. Request logs redact both credential headers, but should still be treated as sensitive.
 
 Backups may contain plaintext conversations and instructions, plus the generated master key. Protect the complete backup and retain a supplied `MIRROR_STORE_KEY` separately. Example maintenance commands:
 
