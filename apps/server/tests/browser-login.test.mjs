@@ -80,4 +80,44 @@ test.describe('server / browser-login', () => {
       assert.ok(calls.includes('https://chatgpt.com/'));
     } finally { test.mock.restoreAll(); await app.close(); }
   });
+
+  test('desktop API aliases preserve the query, bearer and account headers without extra session exchanges', async () => {
+    const app = await buildApp({ worker: true });
+    const calls = [];
+    const paths = ['/me', '/accounts/check/v4-2023-04-27?timezone_offset_min=-240', '/models', '/conversations?limit=28'];
+    test.mock.method(globalThis, 'fetch', async (input, init) => {
+      calls.push(String(input));
+      const headers = new Headers(init.headers);
+      assert.equal(headers.get('authorization'), 'Bearer stored-access');
+      assert.equal(headers.get('chatgpt-account-id'), 'account-test');
+      assert.equal(headers.get('x-openai-target-path'), new URL(String(input)).pathname);
+      return Response.json({ ok: true });
+    });
+    try {
+      for (const path of paths) {
+        const response = await app.inject({ url: '/__codex-api' + path, headers: {
+          authorization: 'Bearer stored-access', 'x-mirror-session-token': 'stored-session', 'chatgpt-account-id': 'account-test',
+        } });
+        assert.equal(response.statusCode, 200, response.body);
+        assert.deepEqual(response.json(), { ok: true });
+      }
+      assert.deepEqual(calls, paths.map(path => 'https://chatgpt.com/backend-api' + path));
+    } finally { test.mock.restoreAll(); await app.close(); }
+  });
+
+  test('native asset loads skip credential validation and missing Mirror assets reach ChatGPT', async () => {
+    const app = await buildApp({ worker: true, assets: { fetch: async () => new Response('missing', { status: 404 }) } });
+    const calls = [];
+    test.mock.method(globalThis, 'fetch', async (input) => {
+      calls.push(String(input));
+      return new Response('/* upstream asset */', { headers: { 'content-type': 'application/javascript' } });
+    });
+    try {
+      for (const path of ['/cdn/assets/async/chunk.js', '/unauth-mweb/assets/client.js', '/assets/upstream.js']) {
+        const response = await app.inject({ url: path, headers: { authorization: 'Bearer header-extension-session' } });
+        assert.equal(response.statusCode, 200, response.body);
+      }
+      assert.deepEqual(calls, ['https://chatgpt.com/cdn/assets/async/chunk.js', 'https://chatgpt.com/unauth-mweb/assets/client.js', 'https://chatgpt.com/assets/upstream.js']);
+    } finally { test.mock.restoreAll(); await app.close(); }
+  });
 });

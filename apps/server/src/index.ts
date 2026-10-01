@@ -19,6 +19,7 @@ import { stringify as toYaml } from "yaml";
 import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
 import { BROWSER_BOOTSTRAP } from "./browser-bootstrap.js";
+import { chatGptUpstreamPath } from "./url-rewrite.js";
 import {
   ConversationIdParam,
   ModelUpdateBody,
@@ -176,6 +177,9 @@ await app.register(multipart, {
 
 const accountKey = () => getSession()?.accountId ?? "default";
 app.addHook("onRequest", async (req, reply) => {
+  // Normalize before classifying auth: aliases need exactly the same bearer,
+  // account headers, retry behavior and upstream path as /backend-api requests.
+  req.raw.url = chatGptUpstreamPath(req.url);
   reply.header("x-request-id", req.id);
   if (!isAllowedRequestHost(req.headers.host)) {
     return reply.code(421).send({ error: "Untrusted Host header" });
@@ -193,6 +197,11 @@ app.addHook("onRequest", async (req, reply) => {
   // must not spend an extra /me request on every operation. Local routes that
   // read or mutate Mirror's account data still validate the bearer first.
   const pathname = req.url.split("?", 1)[0];
+  const publicWorkerAsset = options.worker && req.method === "GET" && (
+    /^\/(?:cdn|_next|assets|mirror\/assets)\//.test(pathname!) ||
+    /^\/unauth-mweb\/(?:assets|scripts)\//.test(pathname!) ||
+    ["/mirror/inject.js", "/mirror/inject.css", "/favicon.ico"].includes(pathname!)
+  );
   const browserDocument = options.worker && mayBootstrapBrowser(req.method, req.url, req.headers);
   if (browserDocument && !bearer && req.headers["x-mirror-document"] !== "1") {
     return reply.header("Cache-Control", "no-store").type("text/html; charset=utf-8").send(BROWSER_BOOTSTRAP);
@@ -204,7 +213,7 @@ app.addHook("onRequest", async (req, reply) => {
   const requestSessionToken = bearer || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
   if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
-  if (requestSessionToken && !upstreamAuthenticates) {
+  if (requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
     // Validate the browser bearer against ChatGPT. The backend client tries it
     // directly as an accessToken and exchanges the client-held sessionToken
     // only after an upstream authentication denial.
@@ -247,7 +256,7 @@ app.addHook("onRequest", async (req, reply) => {
     String(req.headers.accept ?? "").includes("text/html");
   const workerAsset = options.worker && req.method === "GET" &&
     (/^\/(?:assets|mirror\/assets)\//.test(req.url) || ["/favicon.ico", "/index.html"].includes(req.url.split("?", 1)[0]!));
-  if (workerPage || workerAsset) return;
+  if (workerPage || workerAsset || publicWorkerAsset) return;
   // Public upstream documents/assets contain no Mirror account data. Browser
   // navigation obtains its credential from storage using the bootstrap above.
   if (options.worker && req.method === "GET" && (
@@ -713,6 +722,7 @@ if (!options.worker) {
   app.get("/assets/*", async (req, reply) => {
     if (!options.assets) return reply.code(503).send({ error: "Static assets are unavailable" });
     const asset = await options.assets.fetch(new Request(new URL(req.url, req.protocol + "://" + req.headers.host)));
+    if (asset.status === 404) return proxyChatGpt(req, reply);
     reply.code(asset.status);
     asset.headers.forEach((value, key) => reply.header(key, value));
     return reply.send(Buffer.from(await asset.arrayBuffer()));

@@ -9,6 +9,11 @@
 
 const CHATGPT_WEB_HOSTS = String.raw`(?:[a-z0-9-]+\.)*chatgpt\.com|chat\.openai\.com`;
 
+/** The frontend can select its desktop API alias on a custom proxy origin. */
+export function chatGptUpstreamPath(path: string): string {
+  return path.replace(/^\/__codex-api(?=\/|\?|$)/, "/backend-api");
+}
+
 export function isRewritableContentType(contentType: string): boolean {
   const type = contentType.split(";", 1)[0]!.trim().toLowerCase();
   return (
