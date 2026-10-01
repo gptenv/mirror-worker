@@ -6,6 +6,7 @@ import {
   generateProofTokenAsync,
   generateProofTokenInWorker,
   mintAccessToken,
+  SessionExchangeError,
   SessionTokenInvalidError,
   BackendApiError,
   normalizeGizmos,
@@ -141,6 +142,21 @@ test("mintAccessToken throws SessionTokenInvalidError on a non-ok response", asy
   globalThis.fetch = async () => new Response("nope", { status: 401 });
   try {
     await assert.rejects(mintAccessToken("token"), SessionTokenInvalidError);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("mintAccessToken preserves non-authentication session endpoint failures", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response("temporarily unavailable", { status: 503 });
+  try {
+    await assert.rejects(mintAccessToken("synthetic-token"), error => {
+      assert.ok(error instanceof SessionExchangeError);
+      assert.equal(error.statusCode, 503);
+      assert.equal(error.upstreamResponseText, "temporarily unavailable");
+      return true;
+    });
   } finally {
     globalThis.fetch = original;
   }

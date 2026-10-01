@@ -75,6 +75,17 @@ export class SessionTokenInvalidError extends Error {
   }
 }
 
+/** Preserve non-authentication failures from the session endpoint. */
+export class SessionExchangeError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    public readonly upstreamResponseText: string,
+  ) {
+    super(`GET /api/auth/session returned ${statusCode}`);
+    this.name = "SessionExchangeError";
+  }
+}
+
 /** A response that indicates the bearer itself was rejected, rather than a policy or edge challenge. */
 export async function isAccessDeniedResponse(response: Response): Promise<boolean> {
   if (response.status === 401) return true;
@@ -106,7 +117,11 @@ export async function mintAccessToken(sessionToken: string): Promise<MintedAcces
       ...(isChallenge ? ["Cloudflare challenge page"] : []),
       ...(ray ? [`Ray ID ${ray}`] : []),
     ].join(", ");
-    throw new SessionTokenInvalidError(`GET /api/auth/session returned ${res.status} (${details})`, responseText);
+    const denied = res.status === 401 || (res.status === 403 && contentType.includes("json") &&
+      /unauthori[sz]ed|authentication required|invalid (?:access )?token|token (?:is )?(?:expired|invalid)|invalid_api_key/i.test(responseText));
+    if (denied)
+      throw new SessionTokenInvalidError(`GET /api/auth/session returned ${res.status} (${details})`, responseText);
+    throw new SessionExchangeError(res.status, responseText);
   }
 
   const responseText = await res.text().catch(() => "");
