@@ -4,6 +4,7 @@ import { buildApp, type WorkerAssets } from "./index.js";
 import { initializeWorkerStore } from "./store.js";
 import type { DurableSqlStorage } from "./worker-sql.js";
 import { runWithRequestSessionToken } from "./auth.js";
+import { runWithUpstreamFetch, type UpstreamFetch } from "@mirror/protocol";
 
 interface DurableObjectState {
   storage: { sql: DurableSqlStorage };
@@ -12,6 +13,7 @@ interface DurableObjectState {
 interface WorkerEnvironment {
   MIRROR: DurableObjectNamespace;
   ASSETS: WorkerAssets;
+  WARP: { fetch: UpstreamFetch };
   MIRROR_STORE_KEY?: string;
 }
 
@@ -37,7 +39,8 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     workerHandlerPromise ??= this.startServer();
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
-    return runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)), sessionToken);
+    return runWithUpstreamFetch(this.env.WARP.fetch.bind(this.env.WARP), () =>
+      runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)), sessionToken));
   }
 
   private async startServer(): Promise<HttpServerHandler> {

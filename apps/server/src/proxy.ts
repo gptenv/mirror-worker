@@ -1,3 +1,4 @@
+import { upstreamFetch } from "@mirror/protocol";
 import { EARLY_PATCH } from "./browser-patch.js";
 export { injectionCss, injectionJs } from "./mirror-controls.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -259,7 +260,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
     };
     upstream = credentials
       ? await fetchWithAccessTokenFallback(`${UPSTREAM}${req.url}`, init, credentials)
-      : await fetch(`${UPSTREAM}${req.url}`, init);
+      : await upstreamFetch(`${UPSTREAM}${req.url}`, init);
   } catch (error) {
     req.log.error({ error, path: req.url }, "mirror upstream request failed");
     const details = error as { upstreamResponseText?: unknown; tokenLengths?: unknown; statusCode?: number; message?: string };

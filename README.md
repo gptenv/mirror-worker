@@ -83,6 +83,8 @@ This starts the server on `127.0.0.1:8787` and the web development server on por
 
 The Worker build keeps Mirror's HTTP routes and browser assets, stores its single account's SQLite data in a SQLite-backed Durable Object, and does not proxy WebSockets. Configure the encryption key as a Worker secret; it must be 32 bytes when decoded from base64 or 64 hex characters.
 
+ChatGPT upstream traffic uses the `WARP` Workers VPC Network binding (`cf1:network`), including session exchanges, backend requests, uploads, downloads, and their response streams. This routes Worker egress through the account's Cloudflare Mesh/Gateway network and its existing policies. It does not run a WARP client inside the Worker or change the public browser-to-Worker entry point. Gateway connection failures are reported rather than retried over ordinary Worker egress. Configure the account's Zero Trust network and Gateway policies to allow the required destinations; the binding does not guarantee ChatGPT authentication acceptance. Node deployments continue using their normal fetch transport.
+
 ```sh
 npm ci
 npm run build:worker

@@ -1,3 +1,4 @@
+import { upstreamFetch } from "@mirror/protocol";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   isAccessDeniedResponse,
@@ -71,7 +72,7 @@ export async function fetchWithAccessTokenFallback(
   init: RequestInit,
   credentials: SessionCredentials,
 ): Promise<Response> {
-  const first = await fetch(input, init);
+  const first = await upstreamFetch(input, init);
   if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
   const minted = await mintAccessTokenShared(credentials.sessionToken).catch((error) => {
     if (error && typeof error === "object") {
@@ -90,5 +91,5 @@ export async function fetchWithAccessTokenFallback(
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${minted.accessToken}`);
   await first.body?.cancel().catch(() => {});
-  return fetch(input, { ...init, headers });
+  return upstreamFetch(input, { ...init, headers });
 }

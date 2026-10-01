@@ -1,3 +1,4 @@
+import { upstreamFetch } from "./transport.js";
 
 import { createHash } from "node:crypto";
 
@@ -84,7 +85,7 @@ export async function isAccessDeniedResponse(response: Response): Promise<boolea
 
 /** Exchange a session token for a fresh accessToken. Throws SessionTokenInvalidError if the session token itself is no good. */
 export async function mintAccessToken(sessionToken: string): Promise<MintedAccessToken> {
-  const res = await fetch(SESSION_URL, {
+  const res = await upstreamFetch(SESSION_URL, {
     headers: {
       cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
       accept: "application/json",

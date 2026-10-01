@@ -1,3 +1,4 @@
+import { upstreamFetch } from "./transport.js";
 /**
  * Current ChatGPT Web backend client.
  *
@@ -178,7 +179,7 @@ export class ChatGptBackendClient {
       signal?: AbortSignal;
     } = {},
   ): Promise<Response> {
-    const request = () => fetch(`${BASE_URL}${path}`, {
+    const request = () => upstreamFetch(`${BASE_URL}${path}`, {
       method,
       headers: this.commonHeaders(path, opts.headers),
       ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
@@ -586,7 +587,7 @@ export class ChatGptBackendClient {
       );
     }
 
-    const upload = await fetch(uploadUrl, {
+    const upload = await upstreamFetch(uploadUrl, {
       method: "PUT",
       headers: {
         "content-type": opts.mimeType,
@@ -684,7 +685,7 @@ export class ChatGptBackendClient {
       const cdn = url.hostname.endsWith(".oaiusercontent.com") || url.hostname === "oaiusercontent.com" || url.hostname.endsWith(".blob.core.windows.net");
       if (url.protocol !== "https:" || url.username || url.password || url.port || (!estuary && !cdn))
         throw new BackendApiError("Unsupported asset download destination");
-      const res = await fetch(url, {
+      const res = await upstreamFetch(url, {
         headers: estuary ? this.commonHeaders(url.pathname.slice("/backend-api".length), { accept: "*/*" }) : { accept: "*/*" },
         redirect: "manual", signal,
       });

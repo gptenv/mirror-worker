@@ -4,6 +4,9 @@
   "main": "apps/server/src/cloudflare-worker.ts",
   "compatibility_date": "2026-09-30",
   "compatibility_flags": ["nodejs_compat"],
+  "vpc_networks": [
+    { "binding": "WARP", "network_id": "cf1:network", "remote": true }
+  ],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
