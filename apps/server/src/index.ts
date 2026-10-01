@@ -18,6 +18,7 @@ import fastifySwaggerUi from "@fastify/swagger-ui";
 import { stringify as toYaml } from "yaml";
 import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
+import { BROWSER_BOOTSTRAP } from "./browser-bootstrap.js";
 import {
   ConversationIdParam,
   ModelUpdateBody,
@@ -192,6 +193,10 @@ app.addHook("onRequest", async (req, reply) => {
   // must not spend an extra /me request on every operation. Local routes that
   // read or mutate Mirror's account data still validate the bearer first.
   const pathname = req.url.split("?", 1)[0];
+  const browserDocument = options.worker && mayBootstrapBrowser(req.method, req.url, req.headers);
+  if (browserDocument && !bearer && req.headers["x-mirror-document"] !== "1") {
+    return reply.header("Cache-Control", "no-store").type("text/html; charset=utf-8").send(BROWSER_BOOTSTRAP);
+  }
   const upstreamAuthenticates = isPublicApiPath(req.url) ||
     req.url.startsWith("/backend-api/") || req.url.startsWith("/ces/") ||
     req.url.startsWith("/realtime/") || req.url.startsWith("/api/auth/") ||
@@ -243,6 +248,12 @@ app.addHook("onRequest", async (req, reply) => {
   const workerAsset = options.worker && req.method === "GET" &&
     (/^\/(?:assets|mirror\/assets)\//.test(req.url) || ["/favicon.ico", "/index.html"].includes(req.url.split("?", 1)[0]!));
   if (workerPage || workerAsset) return;
+  // Public upstream documents/assets contain no Mirror account data. Browser
+  // navigation obtains its credential from storage using the bootstrap above.
+  if (options.worker && req.method === "GET" && (
+    browserDocument || /^\/(?:cdn|_next)\//.test(pathname!) ||
+    ["/mirror/inject.js", "/mirror/inject.css"].includes(pathname!)
+  )) return;
   if (!options.worker && mayBootstrapBrowser(req.method, req.url, req.headers)) {
     req.log.info({ url: req.url }, "setting control cookie for bootstrap");
     reply.header("Set-Cookie", controlCookie());

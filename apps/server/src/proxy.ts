@@ -2,7 +2,7 @@ import { upstreamFetch } from "@mirror/protocol";
 import { EARLY_PATCH } from "./browser-patch.js";
 export { injectionCss, injectionJs } from "./mirror-controls.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { fetchWithAccessTokenFallback, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials } from "./auth.js";
+import { fetchWithAccessTokenFallback, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials } from "./auth.js";
 import { getSession, setSessionAccountId } from "./store.js";
 import { isRewritableContentType, requestOrigin, rewriteChatGptUrls } from "./url-rewrite.js";
 import { authorizedLocalRequest, isAllowedOrigin, isAllowedRequestHost } from "./security.js";
@@ -212,6 +212,17 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
 
   const headers = safeRequestHeaders(req);
   let credentials: import("@mirror/protocol").SessionCredentials | undefined;
+  const identityCookies = String(req.headers.cookie ?? "").split(";").map((part) => part.trim())
+    .filter((part) => /^(?:oai-client-session-epoch|oai-did)=/.test(part));
+  if (identityCookies.length) headers.set("cookie", identityCookies.join("; "));
+  // ChatGPT embeds its initial session in the document. A bearer alone cannot
+  // authenticate that server-rendered page; use the browser-held session cookie.
+  if (((req.method === "GET" && String(req.headers.accept ?? "").includes("text/html")) || req.url.startsWith("/unauth-mweb/")) && getRequestSessionToken()) {
+    const pageCredentials = await getValidCredentials();
+    const sessionToken = pageCredentials.rotatedSessionToken || pageCredentials.sessionToken;
+    if (sessionToken && sessionToken !== pageCredentials.accessToken)
+      headers.set("cookie", [...identityCookies, `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`].join("; "));
+  }
 
   // Determine which paths need authentication headers
   const needsAuthHeaders =
@@ -281,7 +292,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   const proxyOrigin = requestOrigin(req.protocol, req.headers.host);
 
   reply.hijack();
-  const responseHeaders: Record<string, string> = {};
+  const responseHeaders: Record<string, string | string[]> = {};
   for (const [name, value] of upstream.headers) {
     const lowerName = name.toLowerCase();
     if ([
@@ -296,6 +307,15 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   }
   const cookie = reply.getHeader("set-cookie");
   if (cookie) responseHeaders["set-cookie"] = String(cookie);
+  // The lightweight frontend compares its document identity to this readable
+  // epoch cookie. Preserve that marker, without persisting ChatGPT credentials.
+  const upstreamCookies = (upstream.headers.getSetCookie?.() ?? [upstream.headers.get("set-cookie") ?? ""])
+    .flatMap((value) => value.split(/,(?=\s*[^;,=\s]+=)/)).map((value) => value.trim());
+  const identityResponseCookies = upstreamCookies.filter((value) => /^(?:oai-client-session-epoch|oai-did)=/.test(value))
+    .map((value) => value.replace(/;\s*Domain=[^;]*/gi, ""));
+  if (identityResponseCookies.length) responseHeaders["set-cookie"] = [
+    ...(cookie ? [String(cookie)] : []), ...identityResponseCookies,
+  ];
   responseHeaders["content-type"] = contentType;
   // Only fall back to a 5-minute public cache for genuinely static assets
   // (CDN-hosted JS/CSS/images) that don't ship their own cache-control from
