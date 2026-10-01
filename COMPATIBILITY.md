@@ -8,7 +8,7 @@ See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics refere
 
 ### Structurally impossible — no equivalent exists in backend-api
 
-**Sampling controls** (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `seed`). ChatGPT's web client never exposes these to the account holder, and `f/conversation` has no request field for them. There's no dial to turn — the model runs with whatever sampling ChatGPT's product team configured server-side for that model slug, and it can change without notice.
+**Sampling controls** (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `seed`). ChatGPT's web client never exposes these to the account holder, and `f/conversation` has no request field for them. There's no dial to turn — the model runs with whatever sampling ChatGPT's product team configured server-side for that model slug, and it can change without notice. Chat Completions accepts `temperature` (0 through 2, or null) for client compatibility but ignores it; it does not change upstream sampling. The other sampling fields remain unsupported.
 
 **Deterministic output / `seed`.** Same root cause: no seed parameter exists upstream, and ChatGPT's own infra doesn't guarantee reproducible sampling even session-to-session.
 

@@ -148,6 +148,9 @@ const CompletionBody = z
     }),
     messages: z.array(OpenAiMessage).min(1),
     stream: z.boolean().default(false),
+    temperature: z.number().min(0).max(2).nullable().optional().openapi({
+      description: "Accepted for client compatibility; ignored. ChatGPT's web backend controls sampling and does not expose a temperature setting.",
+    }),
     /**
      * Official OpenAI field, repurposed rather than adding a new one: whether
      * this turn is attached to a continuable Mirror conversation thread.
