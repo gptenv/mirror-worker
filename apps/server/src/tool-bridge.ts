@@ -11,7 +11,10 @@ export type ToolBridgeResult =
 class ToolBridgeInputError extends Error { statusCode = 400; }
 
 export function validateToolDefinitions(value: unknown): ToolDefinition[] {
-  if (!Array.isArray(value) || value.length > 128) throw new ToolBridgeInputError("tools must be an array of at most 128 functions");
+  // Coding clients include their whole enabled tool catalog, including MCP
+  // tools, on each turn. Do not impose a separate tool-count limit here; the
+  // HTTP request body limit already bounds how much input can be received.
+  if (!Array.isArray(value)) throw new ToolBridgeInputError("tools must be an array of functions");
   const names = new Set<string>();
   return value.map((item) => {
     if (!item || typeof item !== "object" || (item as any).type !== "function") throw new ToolBridgeInputError("Only function tools are supported");
@@ -24,6 +27,45 @@ export function validateToolDefinitions(value: unknown): ToolDefinition[] {
       throw new ToolBridgeInputError(`Invalid parameters for tool ${fn.name}`);
     return { type: "function", function: { name: fn.name, description: fn.description, parameters: fn.parameters } };
   });
+}
+
+// The backend accepts one prompt, not an API tool catalog. A coding client may
+// send hundreds of MCP definitions, which can exceed ChatGPT's message length
+// before the user's actual question is considered. Select schemas relevant to
+// this turn while keeping the incoming catalog unrestricted.
+const TOOL_PROMPT_BUDGET = 12_000;
+const COMMON_TOOL_NAME = /(?:^|[_-])(bash|shell|read|write|edit|grep|glob|list|search|patch|file)(?:$|[_-])/i;
+
+export function selectToolDefinitions(messages: unknown[], tools: ToolDefinition[], choice: unknown): ToolDefinition[] {
+  if (JSON.stringify(tools).length <= TOOL_PROMPT_BUDGET) return tools;
+  const latestUser = [...messages].reverse().find((message: any) => message?.role === "user") as { content?: unknown } | undefined;
+  const query = JSON.stringify(latestUser?.content ?? "").toLowerCase();
+  const terms = [...new Set(query.match(/[a-z][a-z0-9]{2,}/g) ?? [])]
+    .filter(term => !["the", "and", "for", "with", "that", "this", "please", "you", "are"].includes(term));
+  const requestedName = typeof choice === "object" && choice !== null && (choice as any).type === "function"
+    ? (choice as any).function?.name : undefined;
+  const ranked = tools.map((tool, index) => {
+    const name = tool.function.name.toLowerCase();
+    const description = (tool.function.description ?? "").toLowerCase();
+    const score = (tool.function.name === requestedName ? 10_000 : 0)
+      + (COMMON_TOOL_NAME.test(name) ? 2 : 0)
+      + terms.reduce((sum, term) => sum + (name.includes(term) ? 8 : description.includes(term) ? 1 : 0), 0);
+    return { tool, index, score };
+  }).filter(entry => entry.score > 0 || choice === "required")
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const selected: ToolDefinition[] = [];
+  let used = 2; // JSON array brackets.
+  for (const entry of ranked) {
+    const size = JSON.stringify(entry.tool).length + (selected.length ? 1 : 0);
+    if (used + size > TOOL_PROMPT_BUDGET) continue;
+    selected.push(entry.tool);
+    used += size;
+  }
+  if (requestedName && !selected.some(tool => tool.function.name === requestedName))
+    throw new ToolBridgeInputError(`The requested function definition is too large: ${requestedName}`);
+  if (choice === "required" && !selected.length)
+    throw new ToolBridgeInputError("No function definition fits in the upstream prompt");
+  return selected;
 }
 
 export function toolBridgePrompt(messages: unknown[], tools: ToolDefinition[], choice: unknown): string {

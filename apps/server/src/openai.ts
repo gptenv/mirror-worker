@@ -30,7 +30,7 @@ import {
 } from "./conversation-context.js";
 import { getValidCredentials } from "./auth.js";
 import { runChat } from "./chat-service.js";
-import { validateToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer } from "./tool-bridge.js";
+import { validateToolDefinitions, selectToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer } from "./tool-bridge.js";
 import {
   updateMessage,
   getSessionRevision,
@@ -453,6 +453,13 @@ export async function registerOpenAiRoutes(
     if (!isResponses && (body.tools?.length || body.messages.some(message => message.role === "tool" || "tool_calls" in message))) {
       let bridgeStream = false;
       let bridgeHeartbeat: ReturnType<typeof setInterval> | undefined;
+      // The incoming Request signal is not the response-stream lifecycle.
+      // Keep generation alive until the response closes or the client aborts.
+      const bridgeController = new AbortController();
+      const abortBridge = () => bridgeController.abort(new DOMException("Completion client disconnected", "AbortError"));
+      req.raw.once("aborted", abortBridge);
+      const onBridgeClose = () => { if (!reply.raw.writableEnded) abortBridge(); };
+      reply.raw.once("close", onBridgeClose);
       try {
         const tools = validateToolDefinitions(body.tools ?? []);
         const route = routeModel(body.model, body.metadata);
@@ -463,7 +470,12 @@ export async function registerOpenAiRoutes(
           ...("tool_call_id" in message ? { tool_call_id: message.tool_call_id } : {}),
           ...("tool_calls" in message ? { tool_calls: message.tool_calls } : {}),
         }));
-        const prompt = toolBridgePrompt(rawMessages, tools, body.tool_choice);
+        const selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
+        const prompt = toolBridgePrompt(rawMessages, selectedTools, body.tool_choice);
+        const clientSessionId = typeof req.headers["x-session-id"] === "string" ? req.headers["x-session-id"]
+          : typeof req.headers["x-opencode-session-id"] === "string" ? req.headers["x-opencode-session-id"] : undefined;
+        const conversationId = body.metadata?.conversation_id ?? (clientSessionId
+          ? `opencode-${fingerprintValue([getSession()?.accountId ?? "default", clientSessionId])}` : undefined);
         const id = `chatcmpl-${crypto.randomUUID().replaceAll("-", "")}`;
         const created = Math.floor(Date.now() / 1000);
         if (body.stream) {
@@ -477,10 +489,14 @@ export async function registerOpenAiRoutes(
               choices: [{ index: 0, delta: {}, finish_reason: null }] });
           }, 10_000);
         }
-        const chat = await runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
-          private: true, ephemeral: true, signal: (req as any).raw?.signal ?? req.signal });
-        const answer = parseToolBridgeAnswer(chat.result.text, tools, body.tool_choice);
-        if (bridgeHeartbeat) clearInterval(bridgeHeartbeat);
+        const chat = await withConversationLock(conversationId ?? null, async () => {
+          const existing = conversationId ? getConversation(conversationId) : null;
+          return runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
+            ...(existing ? { conversationId: existing.id } : conversationId ? { newConversationId: conversationId } : {}),
+            private: body.metadata?.private === "true", ephemeral: body.store === false,
+            signal: bridgeController.signal });
+        });
+        const answer = parseToolBridgeAnswer(chat.result.text, selectedTools, body.tool_choice);
         const finish_reason = answer.toolCalls ? "tool_calls" : "stop";
         if (body.stream) {
           sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
@@ -497,7 +513,6 @@ export async function registerOpenAiRoutes(
           choices: [{ index: 0, message: { role: "assistant", content: answer.content,
             ...(answer.toolCalls ? { tool_calls: answer.toolCalls } : {}) }, finish_reason }], usage: null });
       } catch (error) {
-        if (bridgeHeartbeat) clearInterval(bridgeHeartbeat);
         const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
         const status = Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 502);
         const message = typeof upstreamResponseText === "string" ? upstreamErrorMessage(upstreamResponseText)
@@ -508,6 +523,10 @@ export async function registerOpenAiRoutes(
           return;
         }
         return reply.code(status).send(envelope);
+      } finally {
+        if (bridgeHeartbeat) clearInterval(bridgeHeartbeat);
+        req.raw.off("aborted", abortBridge);
+        reply.raw.off("close", onBridgeClose);
       }
     }
     if ((body.metadata?.mirror_model ?? body.model).endsWith("-wm")) return reply.code(400).send({ error: {message: "Work Mode is not supported by Mirror; select an interactive model", type: "unsupported_parameter"} });
