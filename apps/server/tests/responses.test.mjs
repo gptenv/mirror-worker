@@ -10,11 +10,16 @@ delete process.env.MIRROR_STORE_KEY;
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
 const { registerOpenAiRoutes } = await import("../dist/openai.js");
+const { ResponsesBody } = await import("../dist/responses.js");
 const app = Fastify();
 await registerOpenAiRoutes(app);
 const address = await app.listen({ host: "127.0.0.1", port: 0 });
 const localFetch = globalThis.fetch;
 test.describe("server / responses", () => {
+test("Responses stream by default and honors explicit opt-out", () => {
+  assert.equal(ResponsesBody.parse({ input: "Hello" }).stream, true);
+  assert.equal(ResponsesBody.parse({ input: "Hello", stream: false }).stream, false);
+});
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {
   store.saveVerifiedSession("synthetic-session-fixture", account, "synthetic-device");

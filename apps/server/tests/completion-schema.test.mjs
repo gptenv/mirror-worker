@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CompletionBody } from '../dist/openai.js';
+import { ResponsesBody } from '../dist/responses.js';
 
 test.describe('server / completion-schema', () => {
   const message = { messages: [{ role: 'user', content: 'Hello' }] };
@@ -10,6 +11,12 @@ test.describe('server / completion-schema', () => {
       assert.equal(parsed.temperature, temperature);
     }
     assert.equal(CompletionBody.parse(message).temperature, undefined);
+  });
+  test('streams by default but honors an explicit opt-out', () => {
+    assert.equal(CompletionBody.parse(message).stream, true);
+    assert.equal(CompletionBody.parse({ ...message, stream: false }).stream, false);
+    assert.equal(ResponsesBody.parse({ input: 'Hello' }).stream, true);
+    assert.equal(ResponsesBody.parse({ input: 'Hello', stream: false }).stream, false);
   });
   test('rejects out-of-range and nonnumeric temperatures', () => {
     for (const temperature of [-0.1, 2.1, '0.7', true, NaN, Infinity]) {

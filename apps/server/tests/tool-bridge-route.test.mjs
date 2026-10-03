@@ -14,7 +14,7 @@ const tools = [{ type: 'function', function: { name: 'read_file', parameters: { 
 
 test.describe('server / tool bridge route', () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
-  async function request(stream, text, messages = [{ role: 'user', content: 'Read a.txt' }], poisonedRequestSignal = false, requestTools = tools) {
+  async function request(stream, text, messages = [{ role: 'user', content: 'Read a.txt' }], poisonedRequestSignal = false, requestTools = tools, streamDeltas = false) {
     const app = await buildApp({ worker: true });
     if (poisonedRequestSignal) app.addHook('onRequest', async req => {
       // A request-body signal is not the response-stream lifetime. A bridge
@@ -22,9 +22,17 @@ test.describe('server / tool bridge route', () => {
       req.raw.signal = AbortSignal.abort(new DOMException('Upload complete', 'AbortError'));
     });
     test.mock.method(globalThis, 'fetch', stubBackend('tool-bridge-test'));
-    test.mock.method(ChatGptBackendClient.prototype, 'sendMessage', async () => ({
-      conversationId: 'upstream-test', messageId: 'assistant-test', userMessageId: 'user-test', status: 'done', events: [], text,
-    }));
+    test.mock.method(ChatGptBackendClient.prototype, 'sendMessage', async opts => {
+      if (streamDeltas) {
+        const encoded = text.match(/^\{"content":"([\s\S]*)"\}$/)?.[1] ?? '';
+        const halfway = Math.floor(encoded.length / 2);
+        for (const partial of [encoded.slice(0, halfway), encoded]) {
+          const full = `{"content":"${partial}`;
+          opts.onDelta?.(full, full);
+        }
+      }
+      return { conversationId: 'upstream-test', messageId: 'assistant-test', userMessageId: 'user-test', status: 'done', events: [], text };
+    });
     try {
       return await app.inject({ method: 'POST', url: '/v1/chat/completions', headers: { authorization: 'Bearer fixture-access' },
         payload: { messages, tools: requestTools, stream, stream_options: { include_usage: true }, reasoning_effort: 'high' } });
@@ -35,6 +43,12 @@ test.describe('server / tool bridge route', () => {
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.json().choices[0].finish_reason, 'tool_calls');
     assert.equal(response.json().choices[0].message.tool_calls[0].function.name, 'read_file');
+  });
+  test('defaults tool-bridge requests to SSE streaming', async () => {
+    const response = await request(undefined, '{"content":"ready"}');
+    assert.equal(response.statusCode, 200, response.body);
+    assert.match(response.headers['content-type'], /text\/event-stream/);
+    assert.match(response.body, /data: \[DONE\]/);
   });
   test('streams a function request and accepts the following tool result', async () => {
     const response = await request(true, '{"tool_calls":[{"name":"read_file","arguments":{"path":"a.txt"}}]}');
@@ -48,6 +62,15 @@ test.describe('server / tool bridge route', () => {
     ]);
     assert.equal(next.statusCode, 200, next.body);
     assert.equal(next.json().choices[0].message.content, 'The file says hello.');
+  });
+  test('streams tool-bridge final answer text before generation completes without duplicating it', async () => {
+    const response = await request(true, '{"content":"A streamed answer."}', undefined, false, tools, true);
+    assert.equal(response.statusCode, 200, response.body);
+    const chunks = response.body.split('\n').filter(line => line.startsWith('data: {')).map(line => JSON.parse(line.slice(6)));
+    const deltas = chunks.flatMap(chunk => chunk.choices?.flatMap(choice => choice.delta?.content ? [choice.delta.content] : []) ?? []);
+    assert.equal(deltas.join(''), 'A streamed answer.');
+    assert.ok(deltas.length > 1, `expected incremental content deltas, got ${JSON.stringify(deltas)}`);
+    assert.match(response.body, /data: \[DONE\]/);
   });
   test('does not cancel generation when the incoming request signal is already aborted', async () => {
     const response = await request(true, '{"content":"ready"}', undefined, true);

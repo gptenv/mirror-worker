@@ -10,6 +10,44 @@ export type ToolBridgeResult =
 
 class ToolBridgeInputError extends Error { statusCode = 400; }
 
+/** Extract the complete, currently available prefix of a streamed bridge answer.
+ * Only final-answer envelopes are exposed; tool-call JSON remains buffered so
+ * clients never see partial or malformed function calls.
+ */
+export function extractToolBridgeContent(text: string): string | null {
+  const prefix = /^\s*\{\s*"content"\s*:\s*"/.exec(text);
+  if (!prefix) return null;
+  let encoded = "";
+  let index = prefix[0].length;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === '"') break;
+    if (char === "\\") {
+      if (index + 1 >= text.length) break;
+      const escape = text[index + 1]!;
+      if (escape === "u") {
+        const hex = text.slice(index + 2, index + 6);
+        if (hex.length < 4 || !/^[0-9a-f]{4}$/i.test(hex)) break;
+        encoded += text.slice(index, index + 6);
+        index += 6;
+        continue;
+      }
+      if (!/["\\/bfnrt]/.test(escape)) break;
+      encoded += text.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char.charCodeAt(0) < 0x20) break;
+    encoded += char;
+    index++;
+  }
+  let decoded: string;
+  try { decoded = JSON.parse(`"${encoded}"`); } catch { return ""; }
+  // Wait for the low surrogate before emitting a supplementary character.
+  if (decoded.length && /[\uD800-\uDBFF]/.test(decoded.at(-1)!)) decoded = decoded.slice(0, -1);
+  return decoded;
+}
+
 export function validateToolDefinitions(value: unknown): ToolDefinition[] {
   // Coding clients include their whole enabled tool catalog, including MCP
   // tools, on each turn. Do not impose a separate tool-count limit here; the

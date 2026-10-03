@@ -30,7 +30,7 @@ import {
 } from "./conversation-context.js";
 import { getValidCredentials } from "./auth.js";
 import { runChat } from "./chat-service.js";
-import { validateToolDefinitions, selectToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer } from "./tool-bridge.js";
+import { validateToolDefinitions, selectToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer, extractToolBridgeContent } from "./tool-bridge.js";
 import {
   updateMessage,
   getSessionRevision,
@@ -148,7 +148,7 @@ const CompletionBody = z
       example: "gpt-4o",
     }),
     messages: z.array(OpenAiMessage).min(1),
-    stream: z.boolean().default(false),
+    stream: z.boolean().default(true),
     stream_options: z.object({ include_usage: z.boolean().optional() }).strict().optional(),
     reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).optional(),
     tools: z.array(z.unknown()).optional(),
@@ -472,6 +472,7 @@ export async function registerOpenAiRoutes(
         }));
         const selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
         const prompt = toolBridgePrompt(rawMessages, selectedTools, body.tool_choice);
+        let streamedBridgeContent = "";
         const clientSessionId = typeof req.headers["x-session-id"] === "string" ? req.headers["x-session-id"]
           : typeof req.headers["x-opencode-session-id"] === "string" ? req.headers["x-opencode-session-id"] : undefined;
         const conversationId = body.metadata?.conversation_id ?? (clientSessionId
@@ -494,7 +495,16 @@ export async function registerOpenAiRoutes(
           return runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
             ...(existing ? { conversationId: existing.id } : conversationId ? { newConversationId: conversationId } : {}),
             private: body.metadata?.private === "true", ephemeral: body.store === false,
-            signal: bridgeController.signal });
+            signal: bridgeController.signal,
+            onDelta: (_delta, full) => {
+              if (!body.stream) return;
+              const content = extractToolBridgeContent(full);
+              if (content === null || !content.startsWith(streamedBridgeContent)) return;
+              const delta = content.slice(streamedBridgeContent.length);
+              streamedBridgeContent = content;
+              if (delta) sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
+                choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] });
+            } });
         });
         const answer = parseToolBridgeAnswer(chat.result.text, selectedTools, body.tool_choice);
         const finish_reason = answer.toolCalls ? "tool_calls" : "stop";
@@ -502,7 +512,8 @@ export async function registerOpenAiRoutes(
           sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
             choices: [{ index: 0, delta: answer.toolCalls
               ? { tool_calls: answer.toolCalls.map((call, index) => ({ index, ...call })) }
-              : { content: answer.content }, finish_reason: null }] });
+              : { content: answer.content.startsWith(streamedBridgeContent)
+                ? answer.content.slice(streamedBridgeContent.length) : answer.content }, finish_reason: null }] });
           sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
             choices: [{ index: 0, delta: {}, finish_reason }] });
           sse(reply, "[DONE]");

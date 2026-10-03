@@ -18,7 +18,7 @@ export const ResponsesBody = z.object({
   model: z.string().default("auto"),
   input: z.union([z.string(), z.array(InputMessage).min(1)]),
   instructions: z.string().optional(),
-  stream: z.boolean().default(false),
+  stream: z.boolean().default(true),
   store: z.boolean().default(true),
   metadata: z.record(z.string()).optional(),
   reasoning: z.object({ summary: z.enum(["auto", "concise", "detailed"]).optional() }).strict().optional(),

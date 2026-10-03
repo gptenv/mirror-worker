@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateToolDefinitions, selectToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer } from '../dist/tool-bridge.js';
+import { validateToolDefinitions, selectToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer, extractToolBridgeContent } from '../dist/tool-bridge.js';
 
 test.describe('server / tool bridge', () => {
   const tools = validateToolDefinitions([{ type: 'function', function: {
@@ -19,6 +19,12 @@ test.describe('server / tool bridge', () => {
   });
   test('accepts a final answer after tool results', () => {
     assert.deepEqual(parseToolBridgeAnswer('{"content":"done"}', tools, 'auto'), { content: 'done' });
+  });
+  test('extracts only complete JSON string prefixes for streamed final answers', () => {
+    assert.equal(extractToolBridgeContent('{"content":"Hello\\n wor'), 'Hello\n wor');
+    assert.equal(extractToolBridgeContent('{"content":"Hello\\uD83D'), 'Hello');
+    assert.equal(extractToolBridgeContent('{"content":"Hello\\uD83D\\uDE00"}'), 'Hello😀');
+    assert.equal(extractToolBridgeContent('{"tool_calls":[{"name":"read_file"}]}'), null);
   });
   test('rejects unknown functions and invalid arguments', () => {
     assert.throws(() => parseToolBridgeAnswer('{"tool_calls":[{"name":"shell","arguments":{}}]}', tools, 'auto'), /unknown function/);
