@@ -21,4 +21,11 @@ test.describe('server / completion-schema', () => {
   test('keeps validation strict for unsupported fields', () => {
     assert.equal(CompletionBody.safeParse({ ...message, temperature: 0.7, unknown_option: true }).success, false);
   });
+  test('accepts OpenCode request envelope fields', () => {
+    const parsed = CompletionBody.parse({ ...message, stream: true, tools: [],
+      stream_options: { include_usage: true }, reasoning_effort: 'high', tool_choice: 'auto', parallel_tool_calls: true });
+    assert.deepEqual(parsed.tools, []);
+    assert.equal(parsed.stream_options.include_usage, true);
+    assert.equal(parsed.reasoning_effort, 'high');
+  });
 });
