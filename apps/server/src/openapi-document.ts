@@ -785,7 +785,7 @@ export function buildOpenApiDocument(): oas31.OpenAPIObject {
       "/v1/responses": {
         post: {
           summary: "Create a text response",
-          description: "Text-only Responses subset using Mirror conversation semantics. Continue with metadata.conversation_id or full input history. No previous_response_id, retrieval, tools, or background mode. max_output_tokens is accepted but ignored. store=false is a non-resumable one-shot.",
+          description: "Text-only Responses subset using Mirror conversation semantics. Mirror continues the current account conversation by default when no prior history or metadata.conversation_id is supplied. Send metadata.conversation_id to select a thread, or prefix the newest user message with /new followed by a space and the new prompt to start a fresh conversation. No previous_response_id, retrieval, tools, or background mode. max_output_tokens is accepted but ignored. store=false is a non-resumable one-shot.",
           tags: ["OpenAI-compatible"],
           requestBody: { content: { "application/json": { schema: ResponsesBody } } },
           responses: {

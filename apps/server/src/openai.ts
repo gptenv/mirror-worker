@@ -45,6 +45,8 @@ import {
   getOpenAiContext,
   getOpenAiTranscript,
   getSession,
+  getImplicitConversationId,
+  setImplicitConversationId,
   listMessages,
   rebaseConversationUpstream,
   replaceMessages,
@@ -202,7 +204,13 @@ const CompletionBody = z
      *                                       automatically, by recognizing
      *                                       its resent history. See
      *                                       findConversationByTranscript in
-     *                                       store.ts.
+     *                                       store.ts. When no prior history
+     *                                       is sent, Mirror resumes the
+     *                                       account's current API conversation.
+     *                                       Prefix the newest user message
+     *                                       with `/new ` to start a fresh
+     *                                       conversation (the command is
+     *                                       removed before forwarding).
      *
      * Editing an earlier user turn in a resent history for an explicit
      * conversation_id rebases that Mirror conversation as a new branch
@@ -471,12 +479,18 @@ export async function registerOpenAiRoutes(
           ...("tool_calls" in message ? { tool_calls: message.tool_calls } : {}),
         }));
         const selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
+        const accountId = getSession()?.accountId ?? "default";
+        const lastUser = [...rawMessages].reverse().find(message => message.role === "user");
+        const startsFresh = typeof lastUser?.content === "string" && /^\/new(?:\s+|$)/.test(lastUser.content);
+        if (startsFresh && lastUser && typeof lastUser.content === "string") {
+          lastUser.content = lastUser.content.replace(/^\/new\s*/, "").trim();
+          if (!lastUser.content) return reply.code(400).send({ error: { type: "invalid_request_error", message: "Add your prompt after /new to start a fresh conversation" } });
+          const userIndex = rawMessages.lastIndexOf(lastUser);
+          rawMessages.splice(0, userIndex, ...rawMessages.slice(0, userIndex).filter(message => message.role === "system" || message.role === "developer"));
+        }
         const prompt = toolBridgePrompt(rawMessages, selectedTools, body.tool_choice);
         let streamedBridgeContent = "";
-        const clientSessionId = typeof req.headers["x-session-id"] === "string" ? req.headers["x-session-id"]
-          : typeof req.headers["x-opencode-session-id"] === "string" ? req.headers["x-opencode-session-id"] : undefined;
-        const conversationId = body.metadata?.conversation_id ?? (clientSessionId
-          ? `opencode-${fingerprintValue([getSession()?.accountId ?? "default", clientSessionId])}` : undefined);
+        const requestedConversationId = body.store === false ? undefined : body.metadata?.conversation_id;
         const id = `chatcmpl-${crypto.randomUUID().replaceAll("-", "")}`;
         const created = Math.floor(Date.now() / 1000);
         if (body.stream) {
@@ -490,7 +504,9 @@ export async function registerOpenAiRoutes(
               choices: [{ index: 0, delta: {}, finish_reason: null }] });
           }, 10_000);
         }
-        const chat = await withConversationLock(conversationId ?? null, async () => {
+        const lockKey = requestedConversationId ?? (body.store === false ? null : `implicit:${accountId}`);
+        const chat = await withConversationLock(lockKey, async () => {
+          const conversationId = requestedConversationId ?? (startsFresh ? undefined : getImplicitConversationId(accountId) ?? undefined);
           const existing = conversationId ? getConversation(conversationId) : null;
           return runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
             ...(existing ? { conversationId: existing.id } : conversationId ? { newConversationId: conversationId } : {}),
@@ -506,6 +522,7 @@ export async function registerOpenAiRoutes(
                 choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] });
             } });
         });
+        if (body.store !== false) setImplicitConversationId(accountId, chat.conversation.id);
         const answer = parseToolBridgeAnswer(chat.result.text, selectedTools, body.tool_choice);
         const finish_reason = answer.toolCalls ? "tool_calls" : "stop";
         if (body.stream) {
@@ -516,10 +533,12 @@ export async function registerOpenAiRoutes(
                 ? answer.content.slice(streamedBridgeContent.length) : answer.content }, finish_reason: null }] });
           sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
             choices: [{ index: 0, delta: {}, finish_reason }] });
+          if (body.store !== false) reply.raw.write(`: mirror-conversation-id ${chat.conversation.id}\n\n`);
           sse(reply, "[DONE]");
           reply.raw.end();
           return;
         }
+        if (body.store !== false) reply.header("x-mirror-conversation-id", chat.conversation.id);
         return reply.send({ id, object: "chat.completion", created, model: body.model,
           choices: [{ index: 0, message: { role: "assistant", content: answer.content,
             ...(answer.toolCalls ? { tool_calls: answer.toolCalls } : {}) }, finish_reason }], usage: null });
@@ -565,6 +584,12 @@ export async function registerOpenAiRoutes(
           type: "invalid_request_error",
         },
       });
+    const newConversationCommand = /^\/new(?:\s+|$)/.test(last.content);
+    if (newConversationCommand) {
+      last.content = last.content.replace(/^\/new\s*/, "").trim();
+      if (!last.content) return reply.code(400).send({ error: { message: "Add your prompt after /new to start a fresh conversation", type: "invalid_request_error" } });
+      messages = [...messages.filter(message => message.role === "system" || message.role === "developer"), last];
+    }
     // Only the final turn can carry attachments - matches how ChatGPT's own
     // UI (and Mirror's /api/chat) treat attachments as belonging to the
     // message being sent right now, not to arbitrary history.
@@ -632,14 +657,16 @@ export async function registerOpenAiRoutes(
     // conversation on a different account. If absent entirely, resent
     // history alone can still land this on an existing conversation - see
     // findConversationByTranscript below.
-    const explicitConversationId = !oneShot
+    const explicitConversationId = !oneShot && !newConversationCommand
       ? body.metadata?.conversation_id
       : undefined;
+    const accountId = getSession()?.accountId ?? "default";
+    const implicitLockKey = `implicit:${accountId}`;
     // Same key a concurrent duplicate call (double-click, eager retry, etc)
     // for this exact conversation_id would compute, so they serialize
     // against each other rather than both reading the same "current head"
     // and branching off it at once (see withConversationLock above).
-    const lockKey = explicitConversationId ?? null;
+    const lockKey = explicitConversationId ?? (!oneShot ? implicitLockKey : null);
     const completionId = `chatcmpl-${crypto.randomUUID().replaceAll("-", "")}`;
     const created = Math.floor(Date.now() / 1000);
     const controller = new AbortController();
@@ -717,9 +744,26 @@ export async function registerOpenAiRoutes(
         // Resolve state after acquiring the lock. Two concurrent calls using a
         // brand-new caller-selected id must not both decide to INSERT it.
         const accountId = getSession()?.accountId ?? "default";
-        const explicitConversation = explicitConversationId
+        let explicitConversation = explicitConversationId
           ? getConversation(explicitConversationId)
           : null;
+        let implicitConversation = false;
+        if (!oneShot && !explicitConversationId && !newConversationCommand) {
+          // Stateless OpenAI clients commonly send only the latest user turn.
+          // Resume the account's last API conversation for those requests.
+          const hasPriorTurns = messages.slice(0, -1).some(message => message.role === "user" || message.role === "assistant");
+          const implicitId = hasPriorTurns ? null : getImplicitConversationId(accountId);
+          const candidate = implicitId ? getConversation(implicitId) : null;
+          const routeCandidate = routeModel(body.model, body.metadata);
+          if (candidate && candidate.accountId === accountId &&
+              !hasPriorTurns &&
+              (routeCandidate.gizmoId === undefined || routeCandidate.gizmoId === candidate.gizmoId) &&
+              (!routeCandidate.model || routeCandidate.model === "auto" || routeCandidate.model === candidate.model) &&
+              (routeCandidate.private === undefined || routeCandidate.private === Boolean(candidate.private))) {
+            explicitConversation = candidate;
+            implicitConversation = true;
+          }
+        }
         if (
           explicitConversation &&
           explicitConversation.accountId !== accountId
@@ -741,11 +785,12 @@ export async function registerOpenAiRoutes(
         // Expand from local canonical history before comparing or saving hashes.
         // Omitted instructions inherit; an explicitly supplied instruction block
         // remains an intentional edit, including with full-history clients.
-        if (explicitConversation && messages.length === 1) {
+        if (explicitConversation && (messages.length === 1 || implicitConversation)) {
+          const incomingInstructions = messages.slice(0, -1).filter(message => message.role === "system" || message.role === "developer");
           messages = [
-            ...getInstructions(explicitConversation.id) as ReturnType<typeof normalized>,
+            ...(incomingInstructions.length ? incomingInstructions : getInstructions(explicitConversation.id) as ReturnType<typeof normalized>),
             ...listMessages(explicitConversation.id).map(({ role, content }) => ({ role, content })),
-            ...messages,
+            messages.at(-1)!,
           ];
         }
 
@@ -991,6 +1036,7 @@ export async function registerOpenAiRoutes(
           throw error;
         }
         const { conversation, result, storedAssistantMessageId } = chat;
+        if (!oneShot) setImplicitConversationId(accountId, conversation.id);
         // The API transcript must be exactly what the caller can send back.
         // The upstream retains its own full tree; captured events preserve
         // the underlying snapshots independently of this logical API answer.

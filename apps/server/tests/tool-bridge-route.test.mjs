@@ -88,7 +88,7 @@ test.describe('server / tool bridge route', () => {
     assert.match(response.body, /"content":"OK"/);
     assert.match(response.body, /data: \[DONE\]/);
   });
-  test('keeps OpenCode turns in one non-temporary upstream conversation', async () => {
+  test('keeps implicit API turns in one non-temporary upstream conversation', async () => {
     const app = await buildApp({ worker: true });
     const turns = [];
     test.mock.method(globalThis, 'fetch', stubBackend('tool-bridge-persistent'));
@@ -100,7 +100,7 @@ test.describe('server / tool bridge route', () => {
     try {
       for (const content of ['First turn', 'Second turn']) {
         const response = await app.inject({ method: 'POST', url: '/v1/chat/completions',
-          headers: { authorization: 'Bearer fixture-access', 'x-session-id': 'ses-persistent' },
+          headers: { authorization: 'Bearer fixture-access' },
           payload: { model: 'gpt-5-6', messages: [{ role: 'user', content }], tools } });
         assert.equal(response.statusCode, 200, response.body);
       }
@@ -108,7 +108,7 @@ test.describe('server / tool bridge route', () => {
       assert.equal(turns[0].historyAndTrainingDisabled, false);
       assert.equal(turns[1].historyAndTrainingDisabled, false);
       assert.equal(turns[1].conversationId, 'upstream-persistent');
-      const id = `opencode-${store.fingerprintValue(['default', 'ses-persistent'])}`;
+      const id = store.getImplicitConversationId('default');
       const conversation = store.getConversation(id);
       assert.equal(conversation.private, false);
       assert.equal(conversation.conversationId, 'upstream-persistent');

@@ -30,7 +30,7 @@ test.describe('server / tool bridge', () => {
     assert.throws(() => parseToolBridgeAnswer('{"tool_calls":[{"name":"shell","arguments":{}}]}', tools, 'auto'), /unknown function/);
     assert.throws(() => parseToolBridgeAnswer('{"tool_calls":[{"name":"read_file","arguments":"bad"}]}', tools, 'auto'), /invalid function arguments/);
   });
-  test('accepts a large OpenCode catalog without dropping tools', () => {
+  test('accepts a large client tool catalog without dropping tools', () => {
     const catalog = Array.from({ length: 1200 }, (_, index) => ({ type: 'function', function: {
       name: `tool_${index}`, parameters: { type: 'object' },
     } }));

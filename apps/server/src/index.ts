@@ -157,14 +157,7 @@ await app.register(cors, {
       ? (req.headers.origin || false) : false,
     credentials: false,
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: [
-      "Authorization", "Content-Type", "x-mirror-device-id", "x-mirror-session-token", "x-turnstile-token",
-      // OpenCode's OpenAI-compatible provider sends these on requests. Browser
-      // clients need them accepted before the authenticated POST can be sent.
-      "x-session-affinity", "x-session-id", "x-parent-session-id",
-      "x-opencode-session-id", "x-opencode-parent-session-id",
-      "x-opencode-project", "x-opencode-session", "x-opencode-request", "x-opencode-client",
-    ],
+    allowedHeaders: ["Authorization", "Content-Type", "x-mirror-device-id", "x-mirror-session-token", "x-turnstile-token"],
     exposedHeaders: ["x-mirror-conversation-id", "x-request-id", "x-mirror-access-token", "x-mirror-session-token"],
   }),
 });

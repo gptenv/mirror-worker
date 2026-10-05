@@ -182,6 +182,17 @@ function writeSetting(key: string, value: string): void {
   ).run(key, value, new Date().toISOString());
 }
 
+/** The last implicit API conversation is scoped to the connected account. */
+export function getImplicitConversationId(accountId: string): string | null {
+  return readSetting(`implicit_conversation:${fingerprintValue(accountId)}`);
+}
+
+export function setImplicitConversationId(accountId: string, conversationId: string | null): void {
+  const key = `implicit_conversation:${fingerprintValue(accountId)}`;
+  if (conversationId === null) db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+  else writeSetting(key, conversationId);
+}
+
 function migrateLegacyStore(): void {
   if (!existsSync(LEGACY_STORE_FILE)) return;
   try {
