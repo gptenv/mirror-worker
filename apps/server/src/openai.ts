@@ -30,7 +30,6 @@ import {
 } from "./conversation-context.js";
 import { getValidCredentials } from "./auth.js";
 import { runChat } from "./chat-service.js";
-import { validateToolDefinitions, selectToolDefinitions, routeLargeToolCatalog, toolBridgePrompt, parseToolBridgeAnswer, extractToolBridgeContent } from "./tool-bridge.js";
 import {
   updateMessage,
   getSessionRevision,
@@ -153,9 +152,6 @@ const CompletionBody = z
     stream: z.boolean().default(true),
     stream_options: z.object({ include_usage: z.boolean().optional() }).strict().optional(),
     reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).optional(),
-    tools: z.array(z.unknown()).optional(),
-    tool_choice: z.union([z.enum(["none", "auto", "required"]), z.object({ type: z.literal("function"), function: z.object({ name: z.string() }).strict() }).strict()]).optional(),
-    parallel_tool_calls: z.boolean().optional(),
     temperature: z.number().min(0).max(2).nullable().optional().openapi({
       description: "Accepted for client compatibility; ignored. ChatGPT's web backend controls sampling and does not expose a temperature setting.",
     }),
@@ -296,7 +292,7 @@ const CompletionBody = z
     ref: "CompletionRequest",
     description:
       "OpenAI Chat Completions-shaped request, backed by chatgpt.com/backend-api. " +
-      "Caller-defined function tools use an experimental prompt-based translation; unsupported fields are rejected (400).",
+      "Unsupported fields are rejected (400) rather than silently ignored.",
   });
 
 
@@ -458,134 +454,6 @@ export async function registerOpenAiRoutes(
     }
     const requestRevision = getSessionRevision();
     const body = parsed.data;
-    if (!isResponses && (body.tools?.length || body.messages.some(message => message.role === "tool" || "tool_calls" in message))) {
-      let bridgeStream = false;
-      let bridgeHeartbeat: ReturnType<typeof setInterval> | undefined;
-      // The incoming Request signal is not the response-stream lifecycle.
-      // Keep generation alive until the response closes or the client aborts.
-      const bridgeController = new AbortController();
-      const abortBridge = () => bridgeController.abort(new DOMException("Completion client disconnected", "AbortError"));
-      req.raw.once("aborted", abortBridge);
-      const onBridgeClose = () => { if (!reply.raw.writableEnded) abortBridge(); };
-      reply.raw.once("close", onBridgeClose);
-      try {
-        const tools = validateToolDefinitions(body.tools ?? []);
-        const route = routeModel(body.model, body.metadata);
-        if (route.model?.endsWith("-wm")) throw Object.assign(new Error("Work Mode is not supported by Mirror"), { statusCode: 400 });
-        const rawMessages = body.messages.map(message => ({
-          role: message.role, content: message.content,
-          ...(message.name ? { name: message.name } : {}),
-          ...("tool_call_id" in message ? { tool_call_id: message.tool_call_id } : {}),
-          ...("tool_calls" in message ? { tool_calls: message.tool_calls } : {}),
-        }));
-        const accountId = getSession()?.accountId ?? "default";
-        let routedTools: ReturnType<typeof validateToolDefinitions> | null = null;
-        try {
-          routedTools = await routeLargeToolCatalog(rawMessages, tools, body.tool_choice, async prompt => {
-            const routingTurn = await runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
-              private: true, ephemeral: true, signal: bridgeController.signal });
-            return routingTurn.result.text;
-          });
-        } catch {
-          // The deterministic local selector remains a safe fallback if the
-          // optional group-routing turn is unavailable.
-          bridgeController.signal.throwIfAborted();
-        }
-        let selectedTools: ReturnType<typeof validateToolDefinitions>;
-        const localTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
-        if (routedTools) {
-          // Routing is a hint that can add candidates, not authority to hide
-          // tools already selected by the deterministic local matcher.
-          const candidates = [...localTools];
-          const names = new Set(candidates.map(tool => tool.function.name));
-          for (const tool of routedTools) {
-            if (!names.has(tool.function.name)) {
-              candidates.push(tool);
-              names.add(tool.function.name);
-            }
-          }
-          try { selectedTools = selectToolDefinitions(rawMessages, candidates, body.tool_choice); }
-          catch { selectedTools = localTools; }
-        } else selectedTools = localTools;
-        const lastUser = [...rawMessages].reverse().find(message => message.role === "user");
-        const startsFresh = typeof lastUser?.content === "string" && /^\/new(?:\s+|$)/.test(lastUser.content);
-        if (startsFresh && lastUser && typeof lastUser.content === "string") {
-          lastUser.content = lastUser.content.replace(/^\/new\s*/, "").trim();
-          if (!lastUser.content) return reply.code(400).send({ error: { type: "invalid_request_error", message: "Add your prompt after /new to start a fresh conversation" } });
-          const userIndex = rawMessages.lastIndexOf(lastUser);
-          rawMessages.splice(0, userIndex, ...rawMessages.slice(0, userIndex).filter(message => message.role === "system" || message.role === "developer"));
-        }
-        const prompt = toolBridgePrompt(rawMessages, selectedTools, body.tool_choice);
-        let streamedBridgeContent = "";
-        const requestedConversationId = body.store === false ? undefined : body.metadata?.conversation_id;
-        const id = `chatcmpl-${crypto.randomUUID().replaceAll("-", "")}`;
-        const created = Math.floor(Date.now() / 1000);
-        if (body.stream) {
-          reply.hijack();
-          reply.raw.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive" });
-          bridgeStream = true;
-          sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
-            choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }] });
-          bridgeHeartbeat = setInterval(() => {
-            if (!reply.raw.destroyed && !reply.raw.writableEnded) sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
-              choices: [{ index: 0, delta: {}, finish_reason: null }] });
-          }, 10_000);
-        }
-        const lockKey = requestedConversationId ?? (body.store === false ? null : `implicit:${accountId}`);
-        const chat = await withConversationLock(lockKey, async () => {
-          const conversationId = requestedConversationId ?? (startsFresh ? undefined : getImplicitConversationId(accountId) ?? undefined);
-          const existing = conversationId ? getConversation(conversationId) : null;
-          return runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
-            ...(existing ? { conversationId: existing.id } : conversationId ? { newConversationId: conversationId } : {}),
-            private: body.metadata?.private === "true", ephemeral: body.store === false,
-            signal: bridgeController.signal,
-            onDelta: (_delta, full) => {
-              if (!body.stream) return;
-              const content = extractToolBridgeContent(full);
-              if (content === null || !content.startsWith(streamedBridgeContent)) return;
-              const delta = content.slice(streamedBridgeContent.length);
-              streamedBridgeContent = content;
-              if (delta) sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
-                choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] });
-            } });
-        });
-        if (body.store !== false) setImplicitConversationId(accountId, chat.conversation.id);
-        const answer = parseToolBridgeAnswer(chat.result.text, selectedTools, body.tool_choice);
-        const finish_reason = answer.toolCalls ? "tool_calls" : "stop";
-        if (body.stream) {
-          sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
-            choices: [{ index: 0, delta: answer.toolCalls
-              ? { tool_calls: answer.toolCalls.map((call, index) => ({ index, ...call })) }
-              : { content: answer.content.startsWith(streamedBridgeContent)
-                ? answer.content.slice(streamedBridgeContent.length) : answer.content }, finish_reason: null }] });
-          sse(reply, { id, object: "chat.completion.chunk", created, model: body.model,
-            choices: [{ index: 0, delta: {}, finish_reason }] });
-          if (body.store !== false) reply.raw.write(`: mirror-conversation-id ${chat.conversation.id}\n\n`);
-          sse(reply, "[DONE]");
-          reply.raw.end();
-          return;
-        }
-        if (body.store !== false) reply.header("x-mirror-conversation-id", chat.conversation.id);
-        return reply.send({ id, object: "chat.completion", created, model: body.model,
-          choices: [{ index: 0, message: { role: "assistant", content: answer.content,
-            ...(answer.toolCalls ? { tool_calls: answer.toolCalls } : {}) }, finish_reason }], usage: null });
-      } catch (error) {
-        const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
-        const status = Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 502);
-        const message = typeof upstreamResponseText === "string" ? upstreamErrorMessage(upstreamResponseText)
-          : error instanceof Error ? error.message : "Tool bridge failed";
-        const envelope = apiError(status, message, req.id, typeof upstreamResponseText === "string");
-        if (bridgeStream) {
-          if (!reply.raw.destroyed) { sse(reply, envelope); sse(reply, "[DONE]"); reply.raw.end(); }
-          return;
-        }
-        return reply.code(status).send(envelope);
-      } finally {
-        if (bridgeHeartbeat) clearInterval(bridgeHeartbeat);
-        req.raw.off("aborted", abortBridge);
-        reply.raw.off("close", onBridgeClose);
-      }
-    }
     if ((body.metadata?.mirror_model ?? body.model).endsWith("-wm")) return reply.code(400).send({ error: {message: "Work Mode is not supported by Mirror; select an interactive model", type: "unsupported_parameter"} });
     let streamedText = "";
     let emittedText = "";
