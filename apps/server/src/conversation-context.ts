@@ -331,30 +331,15 @@ export function normalized(messages: z.infer<typeof OpenAiMessage>[]) {
   }));
 }
 
+/** Select the single new message to append to Mirror's existing upstream thread. */
+export function currentTurn<T>(messages: readonly T[]): T | undefined {
+  return messages.at(-1);
+}
+
 export function promptFor(
   messages: ReturnType<typeof normalized>,
-  continuation: boolean,
 ): string {
-  if (continuation) return messages.at(-1)!.content;
-  const system = messages.filter(
-    (m) => m.role === "system" || m.role === "developer",
-  );
-  const conversational = messages.filter(
-    (m) => m.role !== "system" && m.role !== "developer",
-  );
-  if (messages.length === 1 && messages[0]?.role === "user")
-    return messages[0].content;
-  return [
-    system.length
-      ? `Instructions:\n${system.map((m) => m.content).join("\n")}`
-      : "",
-    "Conversation context:",
-    conversational
-      .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-      .join("\n\n"),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return currentTurn(messages)?.content ?? "";
 }
 
 export function instructionsHash(messages: ReturnType<typeof normalized>): string {

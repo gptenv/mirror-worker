@@ -491,7 +491,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
                 conversation: StoredConversation,
                 messages: z.array(StoredMessage),
                 instructions: z.array(InstructionMessage).openapi({
-                  description: "Combined system/developer instructions synthesized for this conversation - see promptFor() in openai.ts.",
+                  description: "System and developer instructions retained with this local API conversation.",
                 }),
               }),
             },

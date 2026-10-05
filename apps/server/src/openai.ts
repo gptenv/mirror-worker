@@ -30,7 +30,7 @@ import {
 } from "./conversation-context.js";
 import { getValidCredentials } from "./auth.js";
 import { runChat } from "./chat-service.js";
-import { validateToolDefinitions, selectToolDefinitions, toolBridgePrompt, parseToolBridgeAnswer, extractToolBridgeContent } from "./tool-bridge.js";
+import { validateToolDefinitions, selectToolDefinitions, routeLargeToolCatalog, toolBridgePrompt, parseToolBridgeAnswer, extractToolBridgeContent } from "./tool-bridge.js";
 import {
   updateMessage,
   getSessionRevision,
@@ -478,8 +478,24 @@ export async function registerOpenAiRoutes(
           ...("tool_call_id" in message ? { tool_call_id: message.tool_call_id } : {}),
           ...("tool_calls" in message ? { tool_calls: message.tool_calls } : {}),
         }));
-        const selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
         const accountId = getSession()?.accountId ?? "default";
+        let routedTools: ReturnType<typeof validateToolDefinitions> | null = null;
+        try {
+          routedTools = await routeLargeToolCatalog(rawMessages, tools, body.tool_choice, async prompt => {
+            const routingTurn = await runChat({ prompt, model: route.model, gizmoId: route.gizmoId,
+              private: true, ephemeral: true, signal: bridgeController.signal });
+            return routingTurn.result.text;
+          });
+        } catch {
+          // The deterministic local selector remains a safe fallback if the
+          // optional group-routing turn is unavailable.
+          bridgeController.signal.throwIfAborted();
+        }
+        let selectedTools: ReturnType<typeof validateToolDefinitions>;
+        if (routedTools) {
+          try { selectedTools = selectToolDefinitions(rawMessages, routedTools, body.tool_choice); }
+          catch { selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice); }
+        } else selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
         const lastUser = [...rawMessages].reverse().find(message => message.role === "user");
         const startsFresh = typeof lastUser?.content === "string" && /^\/new(?:\s+|$)/.test(lastUser.content);
         if (startsFresh && lastUser && typeof lastUser.content === "string") {
@@ -971,11 +987,10 @@ export async function registerOpenAiRoutes(
           replaceMessages(explicitConversation!.id, rebasePriorMessages);
         }
 
-        // A user edit is a real ChatGPT conversation-tree branch: send only
-        // the edited final user turn under its actual predecessor. Other
-        // rebases (for example changed system instructions) still need the
-        // synthetic full-context prompt because those instructions are not
-        // materialized as editable upstream message nodes.
+        // A user edit is a real ChatGPT conversation-tree branch: attach only
+        // the latest client message under its actual predecessor. Mirror keeps
+        // the caller's full transcript locally for edit detection and history
+        // matching, but never replays that transcript as another upstream turn.
         const continuing =
           Boolean(activeConversation?.conversationId) &&
           (!needsRebase || isUserHistoryEdit);
@@ -984,7 +999,7 @@ export async function registerOpenAiRoutes(
           chat = await runChat({
             conversationId: activeConversation?.id,
             newConversationId,
-            prompt: promptFor(messages, continuing),
+            prompt: promptFor(messages),
             model: route.model,
             gizmoId: route.gizmoId,
             private: route.private || oneShot,
