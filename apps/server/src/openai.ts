@@ -492,10 +492,21 @@ export async function registerOpenAiRoutes(
           bridgeController.signal.throwIfAborted();
         }
         let selectedTools: ReturnType<typeof validateToolDefinitions>;
+        const localTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
         if (routedTools) {
-          try { selectedTools = selectToolDefinitions(rawMessages, routedTools, body.tool_choice); }
-          catch { selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice); }
-        } else selectedTools = selectToolDefinitions(rawMessages, tools, body.tool_choice);
+          // Routing is a hint that can add candidates, not authority to hide
+          // tools already selected by the deterministic local matcher.
+          const candidates = [...localTools];
+          const names = new Set(candidates.map(tool => tool.function.name));
+          for (const tool of routedTools) {
+            if (!names.has(tool.function.name)) {
+              candidates.push(tool);
+              names.add(tool.function.name);
+            }
+          }
+          try { selectedTools = selectToolDefinitions(rawMessages, candidates, body.tool_choice); }
+          catch { selectedTools = localTools; }
+        } else selectedTools = localTools;
         const lastUser = [...rawMessages].reverse().find(message => message.role === "user");
         const startsFresh = typeof lastUser?.content === "string" && /^\/new(?:\s+|$)/.test(lastUser.content);
         if (startsFresh && lastUser && typeof lastUser.content === "string") {
