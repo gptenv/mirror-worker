@@ -133,12 +133,15 @@ const OpenAiMessage = z
   .object({
     role: z.enum(["system", "developer", "user", "assistant", "tool"]).openapi({
       description:
-        "'tool' is accepted by this schema's shape but rejected at request time - tool/" +
-        "function calling is a structural two-way gap between backend-api and the official " +
-        "OpenAI tools contract. See COMPATIBILITY.md.",
+        "'tool' messages are client-executed function results. See COMPATIBILITY.md for the prompt-based tool schema behavior.",
     }),
     content: z.union([z.string(), z.array(ContentPart), z.null()]),
     name: z.string().optional(),
+    tool_call_id: z.string().optional(),
+    tool_calls: z.array(z.object({
+      id: z.string(), type: z.literal("function"),
+      function: z.object({ name: z.string(), arguments: z.string() }).strict(),
+    }).strict()).optional(),
   })
   .passthrough()
   .openapi({ ref: "ChatMessage" });
@@ -149,6 +152,13 @@ const CompletionBody = z
       example: "gpt-4o",
     }),
     messages: z.array(OpenAiMessage).min(1),
+    tools: z.array(z.unknown()).optional().openapi({
+      description: "Optional client-provided tool schemas. Mirror includes non-empty entries in the current prompt and returns compatible tool_calls for the client to execute.",
+    }),
+    tool_choice: z.union([z.enum(["none", "auto", "required"]), z.object({
+      type: z.literal("function"), function: z.object({ name: z.string() }).strict(),
+    }).strict()]).optional(),
+    parallel_tool_calls: z.boolean().optional(),
     stream: z.boolean().default(true),
     stream_options: z.object({ include_usage: z.boolean().optional() }).strict().optional(),
     reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).optional(),
@@ -294,6 +304,97 @@ const CompletionBody = z
       "OpenAI Chat Completions-shaped request, backed by chatgpt.com/backend-api. " +
       "Unsupported fields are rejected (400) rather than silently ignored.",
   });
+
+type ClientToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+
+function nonEmptyToolValues(tools: unknown[] | undefined): unknown[] {
+  return (tools ?? []).filter(value => {
+    if (!value) return false;
+    if (typeof value === "string") return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === "object") return Object.keys(value).length > 0;
+    return true;
+  });
+}
+
+function canonicalToolCallText(toolCalls: ClientToolCall[]): string {
+  return JSON.stringify({ tool_calls: toolCalls });
+}
+
+function clientToolCallNames(tools: unknown[]): Set<string> {
+  return new Set(tools.flatMap((tool: any) => {
+    const name = tool?.type === "function" ? tool.function?.name : tool?.name;
+    return typeof name === "string" ? [name] : [];
+  }));
+}
+
+function parseClientToolCalls(text: string, tools: unknown[], choice: z.infer<typeof CompletionBody>['tool_choice'], parallel: boolean | undefined): ClientToolCall[] | null {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
+  let value: any;
+  try { value = JSON.parse(cleaned); } catch {
+    if (choice === "required" || (typeof choice === "object" && choice !== null))
+      throw Object.assign(new Error("The model did not return the required tool call"), { statusCode: 502 });
+    return null;
+  }
+  if (!value || !Array.isArray(value.tool_calls)) {
+    if (choice === "required" || (typeof choice === "object" && choice !== null))
+      throw Object.assign(new Error("The model did not return the required tool call"), { statusCode: 502 });
+    return null;
+  }
+  if (choice === "none") throw Object.assign(new Error("The model returned a tool call when tool_choice was none"), { statusCode: 502 });
+  if (!value.tool_calls.length)
+    throw Object.assign(new Error("The model returned an empty tool call list"), { statusCode: 502 });
+  if (parallel === false && value.tool_calls.length > 1)
+    throw Object.assign(new Error("The model returned multiple calls while parallel_tool_calls was false"), { statusCode: 502 });
+  const knownNames = clientToolCallNames(tools);
+  const requiredName = typeof choice === "object" && choice !== null ? choice.function.name : undefined;
+  return value.tool_calls.map((item: any) => {
+    const fn = item?.function ?? item;
+    const name = fn?.name;
+    if (typeof name !== "string" || !name || (knownNames.size > 0 && !knownNames.has(name)) || (requiredName && name !== requiredName))
+      throw Object.assign(new Error("The model returned a tool name that was not supplied by the client"), { statusCode: 502 });
+    let args = fn.arguments ?? item.arguments ?? {};
+    if (typeof args === "string") {
+      try { args = JSON.parse(args); }
+      catch { throw Object.assign(new Error(`The model returned invalid JSON arguments for ${name}`), { statusCode: 502 }); }
+    }
+    if (!args || typeof args !== "object" || Array.isArray(args))
+      throw Object.assign(new Error(`The model returned non-object arguments for ${name}`), { statusCode: 502 });
+    return { id: typeof item.id === "string" && item.id ? item.id : `call_${crypto.randomUUID().replaceAll("-", "")}`,
+      type: "function" as const, function: { name, arguments: JSON.stringify(args) } };
+  });
+}
+
+function promptWithClientTools(messages: ReturnType<typeof normalized>, source: z.infer<typeof OpenAiMessage>[], tools: unknown[], choice?: z.infer<typeof CompletionBody>['tool_choice'], parallel?: boolean): string {
+  let prompt: string;
+  const latest = messages.at(-1);
+  if (latest?.role === "tool") {
+    let firstResult = source.length - 1;
+    while (firstResult > 0 && source[firstResult - 1]?.role === "tool") firstResult--;
+    const assistantCall = source[firstResult - 1];
+    const results = source.slice(firstResult).map(message => ({
+      tool_call_id: message.tool_call_id,
+      name: message.name,
+      result: textContent(message.content),
+    }));
+    prompt = [
+      "The client executed the previously requested tool call(s). Continue the task using these results:",
+      ...(assistantCall?.role === "assistant" && assistantCall.tool_calls?.length
+        ? [`Tool calls: ${JSON.stringify(assistantCall.tool_calls)}`] : []),
+      `Tool results: ${JSON.stringify(results)}`,
+    ].join("\n\n");
+  } else {
+    prompt = promptFor(messages);
+  }
+  const toolValues = nonEmptyToolValues(tools);
+  if (!toolValues.length) return prompt;
+  const choiceInstruction = choice === "none" ? "Do not call a client tool; answer normally."
+    : choice === "required" ? "You must return at least one tool call."
+    : typeof choice === "object" && choice !== null ? `Call only the function named ${choice.function.name}.`
+    : "Call tools when they help fulfill the user's request; otherwise answer normally.";
+  const parallelInstruction = parallel === false ? "Return at most one tool call." : "You may return multiple independent tool calls together.";
+  return `${prompt}\n\nTools:\n${JSON.stringify(toolValues, null, 2)}\n\nThe Tools section contains client-provided tool schemas. ${choiceInstruction} ${parallelInstruction} When calling a tool, return only a JSON object with a \"tool_calls\" array in the standard OpenAI format: each item has an \"id\", \"type\":\"function\", and \"function\" object with the exact schema \"name\" and JSON-string \"arguments\". Do not describe a tool call in prose. The client will execute each call and send its result in a later request. Never claim you executed a client tool.`;
+}
 
 
 // Slow-consumer guard. Real backpressure (a client reading slower than we
@@ -454,6 +555,8 @@ export async function registerOpenAiRoutes(
     }
     const requestRevision = getSessionRevision();
     const body = parsed.data;
+    const clientTools = nonEmptyToolValues(body.tools);
+    const toolCallsEnabled = !isResponses && clientTools.length > 0;
     if ((body.metadata?.mirror_model ?? body.model).endsWith("-wm")) return reply.code(400).send({ error: {message: "Work Mode is not supported by Mirror; select an interactive model", type: "unsupported_parameter"} });
     let streamedText = "";
     let emittedText = "";
@@ -462,24 +565,15 @@ export async function registerOpenAiRoutes(
     const streamedMessages = new Map<string | null, string>();
     const capturedEvents: NormalizedConversationEvent[] = [];
     let messages = normalized(body.messages);
-    if (messages.some((message) => message.role === "tool")) {
-      return reply.code(400).send({
-        error: {
-          message:
-            "Tool messages are not supported by Mirror's Chat Completions subset",
-          type: "unsupported_parameter",
-        },
-      });
-    }
     const last = messages.at(-1);
-    if (!last || last.role !== "user")
+    if (!last || (last.role !== "user" && last.role !== "tool"))
       return reply.code(400).send({
         error: {
-          message: "The final message must have role=user",
+          message: "The final message must have role=user or role=tool",
           type: "invalid_request_error",
         },
       });
-    const newConversationCommand = /^\/new(?:\s+|$)/.test(last.content);
+    const newConversationCommand = last.role === "user" && /^\/new(?:\s+|$)/.test(last.content);
     if (newConversationCommand) {
       last.content = last.content.replace(/^\/new\s*/, "").trim();
       if (!last.content) return reply.code(400).send({ error: { message: "Add your prompt after /new to start a fresh conversation", type: "invalid_request_error" } });
@@ -875,10 +969,13 @@ export async function registerOpenAiRoutes(
           (!needsRebase || isUserHistoryEdit);
         let chat: Awaited<ReturnType<typeof runChat>>;
         try {
+          const toolPrompt = toolCallsEnabled
+            ? promptWithClientTools(messages, body.messages, clientTools, body.tool_choice, body.parallel_tool_calls)
+            : last.role === "tool" ? promptWithClientTools(messages, body.messages, []) : promptFor(messages);
           chat = await runChat({
             conversationId: activeConversation?.id,
             newConversationId,
-            prompt: promptFor(messages),
+            prompt: toolPrompt,
             model: route.model,
             gizmoId: route.gizmoId,
             private: route.private || oneShot,
@@ -890,7 +987,7 @@ export async function registerOpenAiRoutes(
               deadline.touch();
               capturedEvents.push(event);
               rich ||= needsRichOutput(event);
-              if (!body.stream || event.kind !== "assistant_text") return;
+              if (!body.stream || event.kind !== "assistant_text" || toolCallsEnabled) return;
               const previous = streamedMessages.get(event.messageId) ?? "";
               streamedMessages.set(event.messageId, event.text);
               if (!event.text || event.text === previous) return;
@@ -945,15 +1042,22 @@ export async function registerOpenAiRoutes(
           responseText = richOutput.text;
           responses?.setSummaries(richOutput.summaries);
         }
-        if (!responseText.trim()) {
+        const clientToolCalls = toolCallsEnabled ? parseClientToolCalls(responseText, clientTools, body.tool_choice, body.parallel_tool_calls) : null;
+        if (clientToolCalls) responseText = canonicalToolCallText(clientToolCalls);
+        if (!clientToolCalls && !responseText.trim()) {
           throw Object.assign(new Error("ChatGPT completed the request without returning an assistant answer."), { statusCode: 502, code: "empty_completion" });
         }
         if (body.stream) {
-          const delta = remainingStreamText(responseText, emittedText);
-          if (delta) {
-            if (responses) responses.delta(delta);
-            else sse(reply, { id: completionId, object: "chat.completion.chunk", created, model: body.model,
-              choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] });
+          if (clientToolCalls) {
+            sse(reply, { id: completionId, object: "chat.completion.chunk", created, model: body.model,
+              choices: [{ index: 0, delta: { tool_calls: clientToolCalls.map((call, index) => ({ index, ...call })) }, finish_reason: null }] });
+          } else {
+            const delta = remainingStreamText(responseText, emittedText);
+            if (delta) {
+              if (responses) responses.delta(delta);
+              else sse(reply, { id: completionId, object: "chat.completion.chunk", created, model: body.model,
+                choices: [{ index: 0, delta: { content: delta }, finish_reason: null }] });
+            }
           }
         }
         if (!oneShot) {
@@ -1054,7 +1158,7 @@ export async function registerOpenAiRoutes(
             object: "chat.completion.chunk",
             created,
             model: conversation.model,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            choices: [{ index: 0, delta: {}, finish_reason: clientToolCalls ? "tool_calls" : "stop" }],
             ...(responseMetadata ? { metadata: responseMetadata } : {}),
           });
           sse(reply, "[DONE]");
@@ -1071,8 +1175,9 @@ export async function registerOpenAiRoutes(
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: responseText },
-              finish_reason: "stop",
+              message: { role: "assistant", content: clientToolCalls ? null : responseText,
+                ...(clientToolCalls ? { tool_calls: clientToolCalls } : {}) },
+              finish_reason: clientToolCalls ? "tool_calls" : "stop",
             },
           ],
           usage: null,

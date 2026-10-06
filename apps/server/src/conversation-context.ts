@@ -326,7 +326,9 @@ export async function resolveFileAttachment(
 export function normalized(messages: z.infer<typeof OpenAiMessage>[]) {
   return messages.map((message) => ({
     role: message.role,
-    content: textContent(message.content),
+    content: message.role === "assistant" && message.tool_calls?.length
+      ? JSON.stringify({ tool_calls: message.tool_calls })
+      : textContent(message.content),
     ...(message.name ? { name: message.name } : {}),
   }));
 }
