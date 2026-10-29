@@ -112,6 +112,7 @@
   "apps/server/tests/upstream-error-body.test.mjs": "3240e3eb0bc85195b259377a2c45d9642501a278f6ce910171f379b931613b3e",
   "apps/server/tests/upstream-errors-audit.test.mjs": "9683b267ca29f626b372d8ff684c3d9de685e33b78a48dbe9d68af1b75f1668b",
   "apps/server/tests/url-rewrite.test.mjs": "223dc5ea2d92dc97ad3f83d3ecacb30807982e411965752b562b095b52c2a803",
+  "apps/server/tests/worker-assets.test.mjs": "06df339ca73178fb69506fec09132757ec92f5b41e9039d1aed329726901a0f5",
   "apps/server/tests/worker-attachment-dns.test.mjs": "acbea12b0bd12344fba623b004e61505aa67a734b1d661d3356370695d5dfbd8",
   "apps/server/tests/worker-sql.test.mjs": "72da6ba6a88f3a8ab96932432afcdd8c4e35d7bccc3516341bd9e4eb64518391",
   "apps/server/tsconfig.json": "62447ea946852d1cd7d8648234d1a58733989bbdd11a18ba343567cb4d67815a",
