@@ -6,6 +6,7 @@ import path from "node:path";
 import { stubBackend, assistantAddFrame } from "./helpers/backend.mjs";
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-rich-routes-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "synthetic-access";
 delete process.env.MIRROR_STORE_KEY;
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
@@ -18,8 +19,8 @@ test.after(async()=>{globalThis.fetch=localFetch;await app.close();rmSync(dir,{r
 const download = "https://files.oaiusercontent.com/test?sig=synthetic";
 for (const endpoint of ["chat/completions","responses"]) for (const stream of [false,true]) test(`${endpoint} stream=${stream}: rich output, summary, downloads and three-turn continuity`,async()=>{
   const account=`rich-${endpoint}-${stream}`;
-  store.saveVerifiedSession("synthetic-session",account,"synthetic-device");
-  store.updateMintedToken("synthetic-access",Date.now()+3600000,null);
+  store.saveVerifiedSession(account,"synthetic-device");
+
   const sent=[],downloads=[];
   const backend=stubBackend(account,{sent,turnFrames:(body,turn)=>{
     if(turn>1)return [assistantAddFrame(body.conversation_id,`assistant-${turn}`,`reply-${turn}`),"[DONE]"];
@@ -84,8 +85,8 @@ for (const endpoint of ["chat/completions","responses"]) for (const stream of [f
 for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint of ["chat/completions", "responses"]) for (const stream of [false, true]) {
   test(`${model} ${endpoint} stream=${stream}: first-turn extras hidden, Python retained, follow-up unchanged`, async () => {
     const account = `visibility-${model}-${endpoint}-${stream}`;
-    store.saveVerifiedSession("synthetic-session", account, "synthetic-device");
-    store.updateMintedToken("synthetic-access", Date.now() + 3600000, null);
+    store.saveVerifiedSession(account, "synthetic-device");
+
     const sent = [], downloads = [];
     const backend = stubBackend(account, { sent, turnFrames: (body, turn) => {
       const add = (id, role, name, content, extra = {}) => ({ p: "", o: "add", v: {
@@ -109,6 +110,7 @@ for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint 
     } });
     globalThis.fetch = async (url, init) => {
       if (new URL(String(url)).pathname.endsWith("/download") || new URL(String(url)).pathname.includes("/files/download/")) { downloads.push(String(url)); return Response.json({ download_url: download }); }
+      if (new URL(String(url)).pathname === `/backend-api/gizmos/${model}`) return Response.json({ gizmo: { id: model } });
       return backend(url, init);
     };
     const history = []; let conversation;
@@ -161,8 +163,8 @@ for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint 
 
 for (const scenario of ["image", "loaded-image", "sandbox", "plain-prefix", "empty-tool"]) test(`Responses rich stream: ${scenario}`, async () => {
   const account = `rich-stream-${scenario}`;
-  store.saveVerifiedSession("synthetic-session", account, "synthetic-device");
-  store.updateMintedToken("synthetic-access", Date.now() + 3600000, null);
+  store.saveVerifiedSession(account, "synthetic-device");
+
   const downloads = [];
   const backend = stubBackend(account, { turnFrames: () => {
     const answer = assistantAddFrame("upstream", "answer", "First line\nSecond line\n");

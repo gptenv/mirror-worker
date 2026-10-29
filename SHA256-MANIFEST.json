@@ -92,7 +92,7 @@
   "apps/server/tests/proxy-websocket.test.mjs": "3550d17624374f12e92951c0e9b5def51541698ac8c2622a3d5c4d44d8b87a30",
   "apps/server/tests/reliability.test.mjs": "d8dcb6f40e0f50ebcd6e3f7df3be1292f1bd8dc4132e3ebe4e8a5f7b3e59adc2",
   "apps/server/tests/responses.test.mjs": "bb0fdc68b7e8e71a0c7a7c1ee315928fd1df2ca8959b986746c26ead72d30124",
-  "apps/server/tests/rich-output-routes.test.mjs": "69999b36ece256e9d0a85c72488b73cf23a0a523596de9140a3be82fb270c282",
+  "apps/server/tests/rich-output-routes.test.mjs": "047fb9bdb0bc60c40820260413e051261517f596e0a045294db3b7c355ab43ca",
   "apps/server/tests/rich-output.test.mjs": "e4c6acd07dab6ab5e47779e89d60fd9a2e2be9fc7213190de5f62e675c83ff38",
   "apps/server/tests/routes.test.mjs": "6f99a2427fab7afd3203347a05480e010126e4a2d154dbd7f946eedc79801a9d",
   "apps/server/tests/schema.test.mjs": "147afeb184a82b7dbd9b0976d6d1ce7a6e6d98d7bd8ea62156ce52d65cf9da53",
