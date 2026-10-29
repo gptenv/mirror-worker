@@ -14,6 +14,13 @@ import {
 } from "../dist/index.js";
 
 test.describe("protocol / proof-session-types", () => {
+test("Worker proof generation uses the asynchronous path and honors cancellation", async () => {
+  globalThis.WebSocketPair = class {};
+  try {
+    assert.match(await generateProofTokenInWorker({ required: true, seed: "fixture", difficulty: "f" }), /^gAAAAAB/);
+    await assert.rejects(generateProofTokenInWorker({ required: true, seed: "fixture", difficulty: "f" }, AbortSignal.abort()), { name: "AbortError" });
+  } finally { delete globalThis.WebSocketPair; }
+});
 test("session exchange preserves challenge responses and identifies JSON token rejection", async t => {
   t.mock.method(globalThis, "fetch", async () => new Response("just a moment", { status: 403, headers: { "content-type": "text/html", "cf-ray": "fixture-ray" } }));
   await assert.rejects(mintAccessToken("fixture"), error => error instanceof SessionExchangeError && error.statusCode === 403 && error.upstreamResponseText === "just a moment");

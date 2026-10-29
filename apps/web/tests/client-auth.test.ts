@@ -1,7 +1,7 @@
 import './dom-setup.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mirrorFetch } from '../src/client-auth.js';
+import { mirrorFetch, readStoredBearer, readStoredSessionToken, storeAccessToken } from '../src/client-auth.js';
 
 test.describe('web / client-auth', () => {
   test.afterEach(() => { test.mock.restoreAll(); localStorage.clear(); });
@@ -74,5 +74,26 @@ test.describe('web / client-auth', () => {
       return Response.json({});
     });
     await mirrorFetch('https://unrelated.example/file');
+  });
+  test('rotated access credentials preserve a prior session for fallback', async () => {
+    storeAccessToken('new-access', 'old-session');
+    assert.equal(readStoredBearer(), 'new-access');
+    assert.equal(readStoredSessionToken(), 'old-session');
+  });
+  test('empty storage strips the session header and saves a rotated session', async () => {
+    test.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(new Headers(init?.headers).get('x-mirror-session-token'), null);
+      return Response.json({}, { headers: { 'x-mirror-session-token': 'new-session' } });
+    });
+    await mirrorFetch('/api/health', { headers: { 'x-mirror-session-token': 'stale' } });
+    assert.equal(readStoredSessionToken(), 'new-session');
+  });
+  test('a storage failure does not prevent a response from being returned', async () => {
+    test.mock.method(Storage.prototype, 'getItem', () => { throw new Error('unavailable'); });
+    test.mock.method(Storage.prototype, 'setItem', () => { throw new Error('unavailable'); });
+    test.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }, { headers: { 'x-mirror-access-token': 'rotated' } }));
+    assert.equal(readStoredBearer(), '');
+    assert.equal(readStoredSessionToken(), '');
+    assert.equal((await mirrorFetch('/api/health')).status, 200);
   });
 });
