@@ -84,7 +84,7 @@
   "apps/server/tests/openai-edit-history.test.mjs": "2daadede6a7d6dd13ebe2d1eadd6487746eb1521a33d6b51979eb116f1da48c6",
   "apps/server/tests/openai-routes.test.mjs": "81ccde1b9582e7ae8cda6318407e853f0db674c91f9d8b1668d8ccee6c560e7f",
   "apps/server/tests/openai-stream-lifecycle.test.mjs": "997eaf33d452f68b8a11c86424379bb3b37cd2ccb64d550549fd3149763ae02d",
-  "apps/server/tests/openai-tool-calls.test.mjs": "27002bbdd35b278453b75e9447a3a41fad6ee1341d48386a206b5b2c134e8bf8",
+  "apps/server/tests/openai-tool-calls.test.mjs": "da0149537684d11b50637d5c6a6d77502400a77736b09408c3ff848429f17287",
   "apps/server/tests/openapi-contract.test.mjs": "6cf749dc98e49f075d4dec2d3456d0153f94d8b19ff5079bf86683a865fa6294",
   "apps/server/tests/openapi-fallback.test.mjs": "04758066c703ca3c1a14c16a6af4ecf8d7ddb261a88a351906b8f6bf24ecfc49",
   "apps/server/tests/pngspeak.test.mjs": "216e3cad4b965e54a9e9bb6698594550ab7e7d9ef413cd2d7f15e9d09ce6a795",

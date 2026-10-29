@@ -41,6 +41,37 @@ test.describe('server / client tool calls', () => {
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(response.json().choices[0].message.content, 'A sunny day.');
   });
+  test('JSON without tool calls remains an ordinary answer under automatic selection', async () => {
+    const response = await request('{"answer":"sunny"}', { tool_choice: 'auto' });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().choices[0].message.content, '{"answer":"sunny"}');
+  });
+  test('a new-conversation command starts a fresh thread and rejects an empty prompt', async () => {
+    store.saveVerifiedSession('new-command-account', 'fixture-device');
+    globalThis.fetch = stubBackend('new-command-account');
+    const post = content => app.inject({ method: 'POST', url: '/v1/chat/completions', payload: { messages: [{ role: 'user', content }], stream: false } });
+    const first = await post('first');
+    const next = await post('/new second');
+    assert.equal(next.statusCode, 200, next.body);
+    assert.notEqual(next.headers['x-mirror-conversation-id'], first.headers['x-mirror-conversation-id']);
+    assert.equal((await post('/new')).statusCode, 400);
+  });
+  test('tool results are sent as input with their call identifiers', async () => {
+    store.saveVerifiedSession('tool-result-account', 'fixture-device');
+    const sent = [];
+    globalThis.fetch = stubBackend('tool-result-account', { sent });
+    const response = await app.inject({ method: 'POST', url: '/v1/chat/completions', payload: {
+      stream: false, tools, messages: [
+        { role: 'user', content: 'weather?' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'weather', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'call-1', name: 'weather', content: 'sunny' },
+      ],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const turn = sent.find(item => item.pathname.endsWith('/f/conversation'));
+    assert.match(JSON.stringify(turn.body), /call-1/);
+    assert.match(JSON.stringify(turn.body), /sunny/);
+  });
   test('enforces selection and parallel-call restrictions', async () => {
     const call = { name: 'weather', arguments: { city: 'Toronto' } };
     const multi = await request(JSON.stringify({ tool_calls: [call, call] }), { parallel_tool_calls: false });
