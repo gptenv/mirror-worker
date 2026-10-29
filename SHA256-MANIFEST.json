@@ -133,7 +133,7 @@
   "apps/web/src/responses-stream.ts": "3744c6185c51ca8add5fbb4c09bc20c0cd74aa9255b0e2670f679969b7d7baeb",
   "apps/web/src/styles.css": "081df1df953807ee4604b20b7e13ac1bcc41c5556a32c0ed9d39ca787b8c819b",
   "apps/web/tests/App-pagination.test.ts": "1cd5962e0c9164c363f7ec94840808e27a74b7edad64695a5363712a4186fe9f",
-  "apps/web/tests/App.test.ts": "b1abc22a6cd8302926478d00d623b29ca08a32a104b4ffa6a468aa4f7753f410",
+  "apps/web/tests/App.test.ts": "635c35bdeb7515df8eaebaa69978b6c69327a0469ad3ff9f21c62b2f9d407cf3",
   "apps/web/tests/CommandPalette.test.ts": "8f79ca93270344372095856a24301dfd49e41a0f8ad4bc7f5ff091bb8071392a",
   "apps/web/tests/ConnectionTools.test.tsx": "5a9278b1fdf7ba1818832071b0d6c9461973bb1a8f528f18271147cff0f75f0d",
   "apps/web/tests/ConversionTools.test.ts": "d82969a0d97564db1c28c6e27abd614e5070e6b53f72c5eb463c3ee63f075878",

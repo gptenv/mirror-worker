@@ -1253,6 +1253,35 @@ function connectionToolsPanel() {
   return screen.getByText("Connection diagnostics and client setup").closest("details") as HTMLElement;
 }
 
+test("credential rotation from discovery, generation and diagnostics updates the Playground", async () => {
+  localStorage.setItem("mirror_access_token", "old-access");
+  let modelCalls = 0;
+  await renderApp([
+    [/^\/api\/diagnostics$/, () => jsonResponse({ ok: true })],
+    [/^\/v1\/models$/, () => {
+      modelCalls++;
+      return modelCalls > 2 ? jsonResponse({ data: [] }) : jsonResponse({ data: [] }, { headers: { "x-mirror-access-token": modelCalls === 1 ? "discovery-access" : "diagnostic-access" } });
+    }],
+    [/^\/v1\/chat\/completions$/, () => jsonResponse({ choices: [{ message: { content: "done" } }] }, { headers: { "x-mirror-access-token": "generation-access" } })],
+  ]);
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "discovery-access");
+  fireEvent.click(screen.getByLabelText("Stream response"));
+  fireEvent.change(lastUserTextarea(), { target: { value: "hello" } });
+  fireEvent.click(runButton());
+  await screen.findByDisplayValue("done");
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "generation-access");
+  const panel = connectionToolsPanel();
+  fireEvent.click(within(panel).getByRole("button", { name: "Test connection" }));
+  await within(panel).findByText(/Model discovery passed/);
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "diagnostic-access");
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "" } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  assert.equal(localStorage.getItem("mirror_access_token"), null);
+  assert.equal(localStorage.getItem("mirror_session_token"), null);
+});
+
 test("Test connection reports diagnostics and model discovery results, and offers a diagnostics export link", async () => {
   await renderApp([
     [/^\/api\/diagnostics$/, () => jsonResponse({ schemaVersion: 1, build: { revision: "abc1234" } })],
