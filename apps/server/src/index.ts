@@ -755,7 +755,7 @@ app.setNotFoundHandler(async (req, reply) => {
   // Every Mirror-owned /api route is registered above. Any remaining route may
   // belong to the official ChatGPT frontend and must be proxied upstream.
   if (req.url.startsWith("/v1/"))
-    return reply.code(404).send({ error: "Not found" });
+    return reply.code(404).send(apiError(404, "The requested resource was not found.", req.id));
   return proxyChatGpt(req, reply);
 });
 
