@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-asset-content-"));
 process.env.MIRROR_DATA_DIR = dir;
-process.env.MIRROR_API_KEY = "synthetic-mirror-key";
+process.env.MIRROR_API_KEY = "synthetic-upstream-access";
 delete process.env.MIRROR_STORE_KEY;
 const { buildApp } = await import("../dist/index.js");
 const store = await import("../dist/store.js");
@@ -16,16 +16,15 @@ const fetchBefore = globalThis.fetch;
 const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
 const pointer = "sediment://file-image";
 const session = () => {
-  store.saveVerifiedSession("synthetic-session", "asset-account", "synthetic-device");
-  store.updateMintedToken("synthetic-upstream-access", Date.now() + 3600000, null);
+  store.saveVerifiedSession("asset-account", "synthetic-device");
 };
 session();
 const ticket = () => store.sealAssetTicket({ pointer, conversationId: "upstream", messageId: "answer", fileName: "résumé [final].png" });
-const request = (value = ticket(), extra = "", method = "GET") => app.inject({ method, url: `/api/asset-content?ticket=${encodeURIComponent(value)}${extra}`, headers: { host: "127.0.0.1", origin: "https://www.google.com" } });
+const request = (value = ticket(), extra = "", method = "GET") => app.inject({ method, url: `/api/asset-content?ticket=${encodeURIComponent(value)}${extra}`, headers: { host: "127.0.0.1", origin: "https://www.google.com", authorization: "Bearer synthetic-upstream-access" } });
 test.describe("server / asset-content", () => {
 test.after(async () => { globalThis.fetch = fetchBefore; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 
-test("Google image and download requests get real bytes without a browser bearer/cookie", async () => {
+test("authenticated image and download requests get real bytes", async () => {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     const u = new URL(String(url)); calls.push({ u, init });
@@ -59,7 +58,7 @@ test("invalid, modified, expired and disconnected-account tickets never reach up
     assert.equal((await request(token)).statusCode, 404);
   }
   const old = ticket(); store.clearSession(); assert.equal((await request(old)).statusCode, 404);
-  store.saveVerifiedSession("another-synthetic-session", "other-account", "other-device");
+  store.saveVerifiedSession("other-account", "other-device");
   assert.equal((await request(old)).statusCode, 404); session();
   const badHost = await app.inject({ url: `/api/asset-content?ticket=${ticket()}`, headers: { host: "attacker.test" } });
   assert.equal(badHost.statusCode, 421);
@@ -67,14 +66,14 @@ test("invalid, modified, expired and disconnected-account tickets never reach up
   assert.equal(control.statusCode, 403);
 });
 
-test("HTML is attachment-only and upstream failure is a safe error", async () => {
+test("HTML is attachment-only and upstream failures retain their status and body", async () => {
   let failed = false;
   globalThis.fetch = async url => String(url).includes("/files/download/")
     ? Response.json({ download_url: "https://chatgpt.com/backend-api/estuary/content?id=synthetic" })
     : new Response(failed ? "private error detail" : "<html>test</html>", { status: failed ? 403 : 200, headers: { "content-type": "text/html" } });
   const html = await request(); assert.equal(html.statusCode, 200); assert.match(html.headers["content-disposition"], /^attachment;/);
   assert.match(html.headers["content-security-policy"], /sandbox/);
-  failed = true; const res = await request(); assert.equal(res.statusCode, 502); assert.doesNotMatch(res.body, /private error detail/);
+  failed = true; const res = await request(); assert.equal(res.statusCode, 403); assert.match(res.body, /private error detail/);
 });
 
 test("upstream credentials stay on the exact Estuary endpoint across redirects", async () => {
@@ -100,7 +99,7 @@ test("preview failure retains a working download capability and encoded paths re
   globalThis.fetch = async url => {
     const u = new URL(String(url)); calls.push(u);
     if (u.pathname.endsWith("/interpreter/download")) return Response.json({ download_url: "https://chatgpt.com/backend-api/estuary/content?id=synthetic", file_name: "report 20%.png" });
-    return new Response("not an image", { status: 403 });
+    return new Response("not an image", { status: 200, headers: { "content-type": "text/plain" } });
   };
   const client = new ChatGptBackendClient({ accessToken: "synthetic", deviceId: "synthetic" });
   const links = await createAssetLinks(client, "http://127.0.0.1", "sandbox:/mnt/data/report%2020%25.png", "upstream", "answer");
@@ -137,7 +136,7 @@ test("literal percent filenames, generic downloads, missing tickets and network 
   assert.equal(links.fileName, "report%.csv");
   const res = await request(new URL(links.downloadUrl).searchParams.get("ticket"));
   assert.equal(res.statusCode, 200); assert.equal(res.headers["content-type"], "application/octet-stream");
-  assert.equal((await app.inject({ url: "/api/asset-content" })).statusCode, 404);
+  assert.equal((await app.inject({ url: "/api/asset-content", headers: { authorization: "Bearer synthetic-upstream-access" } })).statusCode, 404);
   globalThis.fetch = async () => { throw new Error("private upstream failure"); };
   const failure = await request(); assert.equal(failure.statusCode, 502); assert.doesNotMatch(failure.body, /private/);
   const { assetFileName } = await import("../dist/asset-links.js");
