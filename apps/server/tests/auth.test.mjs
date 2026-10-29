@@ -11,6 +11,51 @@ const auth = await import("../dist/auth.js");
 test.describe("server / auth", () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
+  test("configured keys select the configured account while unrelated bearers stay independent", async () => {
+    await auth.runWithRequestSessionToken(undefined, async () => {
+      assert.equal((await auth.getValidCredentials()).accessToken, "configured");
+    }, undefined, ["configured"]);
+    await auth.runWithRequestSessionToken("other", async () => {
+      assert.equal((await auth.getValidCredentials()).accessToken, "other");
+      assert.equal(auth.getRequestFallbackSessionToken(), "fallback");
+    }, "fallback", ["configured"]);
+  });
+  test("failed session exchange records only token lengths", async t => {
+    t.mock.method(globalThis, "fetch", async input => new URL(String(input)).pathname === "/api/auth/session"
+      ? new Response('{"error":"invalid token"}', { status: 403, headers: { "content-type": "application/json" } })
+      : new Response("unauthorized", { status: 401 }));
+    await auth.runWithRequestSessionToken("old-access", async () => {
+      const credentials = await auth.getValidCredentials();
+      await assert.rejects(auth.fetchWithAccessTokenFallback('https://chatgpt.com/backend-api/me', { headers: { cookie: 'other=value; __Secure-next-auth.session-token=stale' } }, credentials), error => {
+        assert.equal(error.statusCode, 401);
+        assert.equal(error.tokenLengths.accessToken.received, 10);
+        assert.equal(error.tokenLengths.sessionToken.received, 10);
+        return true;
+      });
+    });
+  });
+  test("a rotated session replaces only its cookie and is returned to the caller", async t => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async (input, init) => {
+      if (new URL(String(input)).pathname === '/api/auth/session')
+        return Response.json({ accessToken: 'fresh-access' }, { headers: { 'set-cookie': '__Secure-next-auth.session-token=rotated; Path=/' } });
+      calls++;
+      const cookie = new Headers(init.headers).get('cookie');
+      if (calls === 1) {
+        assert.equal(cookie, 'other=value; __Secure-next-auth.session-token=old-session');
+        return new Response('unauthorized', { status: 401 });
+      }
+      assert.equal(cookie, 'other=value; __Secure-next-auth.session-token=rotated');
+      return Response.json({ ok: true });
+    });
+    await auth.runWithRequestSessionToken('old-access', async () => {
+      const credentials = await auth.getValidCredentials();
+      const response = await auth.fetchWithAccessTokenFallback('https://chatgpt.com/backend-api/me', { headers: { cookie: 'other=value; __Secure-next-auth.session-token=stale' } }, credentials);
+      assert.equal(response.status, 200);
+      assert.equal(await auth.getRotatedRequestSessionToken(), 'rotated');
+    }, 'old-session');
+  });
+
   test("uses the browser bearer as accessToken and keeps the saved sessionToken as fallback", async () => {
     await auth.runWithRequestSessionToken("access-from-browser", async () => {
       auth.setRequestSessionToken("access-from-browser", "session-from-browser");

@@ -114,7 +114,9 @@ export async function fetchWithAccessTokenFallback(
   credentials.cookie = `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || credentials.sessionToken)}`;
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${minted.accessToken}`);
-  headers.set("cookie", credentials.cookie);
+  const otherCookies = (headers.get("cookie") ?? "").split(";").map(value => value.trim())
+    .filter(value => value && !value.startsWith("__Secure-next-auth.session-token="));
+  headers.set("cookie", [...otherCookies, credentials.cookie].join("; "));
   await first.body?.cancel().catch(() => {});
   return upstreamFetch(input, { ...init, headers });
 }
