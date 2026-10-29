@@ -58,8 +58,7 @@ function jwtWithExp(secondsFromNow) {
 }
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-${accountId}`, accountId, `device-${accountId}`);
-  store.updateMintedToken(`cached-access-${accountId}`, Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
 }
 
 function fetchRouter(routes) {
@@ -283,7 +282,7 @@ test("POST /api/session rejects with 409 if the session changes mid-verification
       [/\/backend-api\/me$/, () => {
         // Simulate a *second, concurrent* POST /api/session completing while
         // this one's own verification is still in flight.
-        store.saveVerifiedSession("a-different-racing-session-token", "racer");
+        store.saveVerifiedSession("racer", "racing-device");
         return Response.json({ account: { account_user_id: "should-not-be-used" } });
       }],
     ]),

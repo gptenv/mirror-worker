@@ -36,6 +36,7 @@ import {
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
 import { getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
+import { optionalCatalog } from "./catalog.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -222,7 +223,7 @@ app.addHook("onRequest", async (req, reply) => {
       return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
     }
   }
-  if (!sessionBearerAuthenticated && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
+  if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
     // Validate the browser bearer against ChatGPT. The backend client tries it
     // directly as an accessToken and exchanges the client-held sessionToken
     // only after an upstream authentication denial.
@@ -365,9 +366,11 @@ app.get("/api/health", async () => ({
 }));
 
 app.post("/api/session", async (req, reply) => {
+  const revision = getSessionRevision();
   const credentials = await getValidCredentials();
   const client = new ChatGptBackendClient(credentials);
   const me = await client.fetchMe();
+  assertSessionRevision(revision);
   saveVerifiedSession(
     client.accountId ?? undefined,
     credentials.deviceId,
@@ -403,13 +406,13 @@ app.get("/api/models", async () => {
 app.get("/api/gpts", async () => {
   const client = new ChatGptBackendClient(await getValidCredentials());
   const [projects, gpts] = await Promise.all([
-    client
+    optionalCatalog(client
       .fetchGizmoSidebar({
         ownedOnly: false,
         limit: 50,
         conversationsPerGizmo: 0,
-      }),
-    client.fetchGizmoBootstrap({ limit: 20 }),
+      })),
+    optionalCatalog(client.fetchGizmoBootstrap({ limit: 20 })),
   ]);
   const seen = new Set<string>();
   return [...normalizeGizmos(gpts), ...normalizeGizmos(projects)]

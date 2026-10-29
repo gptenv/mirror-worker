@@ -3,6 +3,7 @@ import { createAssetLinks } from "./asset-content.js";
 import { ResponsesBody, responsesToCompletion, createResponseWriter } from "./responses.js";
 import { abortable, turnDeadline } from "./deadlines.js";
 import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
+import { optionalCatalog } from "./catalog.js";
 import "./zod-openapi-init.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -491,20 +492,15 @@ export async function registerOpenAiRoutes(
   app.get("/v1/models", async () => {
     const creds = await getValidCredentials();
     const client = new ChatGptBackendClient(creds);
-    const optionalGizmos = (request: Promise<Record<string, unknown>>) => request.catch((error: unknown) => {
-      const status = (error as { statusCode?: number } | null)?.statusCode;
-      if (status === 401 || status === 403) throw error;
-      return {};
-    });
     const [modelsRaw, projectsRaw, gptsRaw] = await Promise.all([
       client.fetchModels(),
-      optionalGizmos(client
+      optionalCatalog(client
         .fetchGizmoSidebar({
           ownedOnly: false,
           limit: 50,
           conversationsPerGizmo: 0,
         })),
-      optionalGizmos(client.fetchGizmoBootstrap({ limit: 20 })),
+      optionalCatalog(client.fetchGizmoBootstrap({ limit: 20 })),
     ]);
     const models = normalizeModels(modelsRaw);
     const seen = new Set<string>();

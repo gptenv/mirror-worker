@@ -9,6 +9,19 @@ const {buildApp}=await import('../dist/index.js');
 test.describe('server / local-route-auth',()=>{
   test.after(()=>rmSync(dir,{recursive:true,force:true}));
   test.afterEach(()=>test.mock.restoreAll());
+  test('a configured local control credential does not require an upstream identity request',async()=>{
+    const previous=process.env.MIRROR_API_KEY;
+    process.env.MIRROR_API_KEY='fixture-control';
+    const app=await buildApp();
+    test.mock.method(globalThis,'fetch',async()=>assert.fail('local settings should not require an upstream request'));
+    try{
+      const response=await app.inject({method:'GET',url:'/api/settings/hotkeys',headers:{authorization:'Bearer fixture-control'}});
+      assert.equal(response.statusCode,200,response.body);
+    }finally{
+      await app.close();
+      if(previous===undefined)delete process.env.MIRROR_API_KEY;else process.env.MIRROR_API_KEY=previous;
+    }
+  });
   test('Worker owner gate rejects other accounts before local or upstream routes',async()=>{
     const app=await buildApp({worker:true,ownerAccountId:'owner-account'});
     const seen=[];
