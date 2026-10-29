@@ -150,7 +150,7 @@ test("GET /v1/models merges models, GPTs, and Projects, marks -wm models unsuppo
   );
 });
 
-test("GET /v1/models tolerates the gizmo sidebar and bootstrap endpoints failing independently", async () => {
+test("GET /v1/models reports failures from either optional catalog", async () => {
   useSession("account-models-2");
   await withFetch(
     stubBackend("account-models-2", {
@@ -160,10 +160,8 @@ test("GET /v1/models tolerates the gizmo sidebar and bootstrap endpoints failing
     }),
     async () => {
       const res = await app.inject({ method: "GET", url: "/v1/models" });
-      assert.equal(res.statusCode, 200, res.body);
-      const body = res.json();
-      assert.ok(body.data.some((m) => m.id === "g-1"));
-      assert.ok(body.data.some((m) => m.id === "gpt-4o"));
+      assert.equal(res.statusCode, 500, res.body);
+      assert.match(res.body, /gizmos\/snorlax\/sidebar/);
     },
   );
   await withFetch(stubBackend("account-models-2", {
@@ -172,8 +170,8 @@ test("GET /v1/models tolerates the gizmo sidebar and bootstrap endpoints failing
     sidebarBody: { items: [{ id: "g-p-1", display: { name: "Project" } }] },
   }), async () => {
     const res = await app.inject({ method: "GET", url: "/v1/models" });
-    assert.equal(res.statusCode, 200, res.body);
-    assert.ok(res.json().data.some((m) => m.id === "gpt-4o"));
+    assert.equal(res.statusCode, 500, res.body);
+    assert.match(res.body, /gizmos\/bootstrap/);
   });
 });
 

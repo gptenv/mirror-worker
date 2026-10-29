@@ -3,7 +3,6 @@ import { createAssetLinks } from "./asset-content.js";
 import { ResponsesBody, responsesToCompletion, createResponseWriter } from "./responses.js";
 import { abortable, turnDeadline } from "./deadlines.js";
 import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
-import { optionalCatalog } from "./catalog.js";
 import "./zod-openapi-init.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -494,13 +493,13 @@ export async function registerOpenAiRoutes(
     const client = new ChatGptBackendClient(creds);
     const [modelsRaw, projectsRaw, gptsRaw] = await Promise.all([
       client.fetchModels(),
-      optionalCatalog(client
+      client
         .fetchGizmoSidebar({
           ownedOnly: false,
           limit: 50,
           conversationsPerGizmo: 0,
-        })),
-      optionalCatalog(client.fetchGizmoBootstrap({ limit: 20 })),
+        }),
+      client.fetchGizmoBootstrap({ limit: 20 }),
     ]);
     const models = normalizeModels(modelsRaw);
     const seen = new Set<string>();

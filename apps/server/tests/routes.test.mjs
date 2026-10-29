@@ -328,7 +328,7 @@ test("GET /api/models strips the raw field from normalized models", () =>
     },
   ));
 
-test("GET /api/gpts merges gizmo sidebar + bootstrap, de-duplicates by id, and tolerates one endpoint failing", () =>
+test("GET /api/gpts forwards an optional catalog failure", () =>
   withFetch(
     fetchRouter([
       [/\/backend-api\/gizmos\/snorlax\/sidebar/, () => new Response("nope", { status: 500 })],
@@ -338,11 +338,8 @@ test("GET /api/gpts merges gizmo sidebar + bootstrap, de-duplicates by id, and t
     async () => {
       useSession("acct-gpts");
       const res = await app.inject({ method: "GET", url: "/api/gpts", headers: AUTH });
-      assert.equal(res.statusCode, 200, res.body);
-      const gizmos = JSON.parse(res.body);
-      assert.equal(gizmos.length, 1);
-      assert.equal(gizmos[0].id, "g-1");
-      assert.ok(!("raw" in gizmos[0]));
+      assert.equal(res.statusCode, 500, res.body);
+      assert.equal(res.json().error.message, "nope");
     },
   ));
 

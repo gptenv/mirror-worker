@@ -36,7 +36,6 @@ import {
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
 import { getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
-import { optionalCatalog } from "./catalog.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -406,13 +405,13 @@ app.get("/api/models", async () => {
 app.get("/api/gpts", async () => {
   const client = new ChatGptBackendClient(await getValidCredentials());
   const [projects, gpts] = await Promise.all([
-    optionalCatalog(client
+    client
       .fetchGizmoSidebar({
         ownedOnly: false,
         limit: 50,
         conversationsPerGizmo: 0,
-      })),
-    optionalCatalog(client.fetchGizmoBootstrap({ limit: 20 })),
+      }),
+    client.fetchGizmoBootstrap({ limit: 20 }),
   ]);
   const seen = new Set<string>();
   return [...normalizeGizmos(gpts), ...normalizeGizmos(projects)]
