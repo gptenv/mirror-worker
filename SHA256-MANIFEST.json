@@ -82,7 +82,7 @@
   "apps/server/tests/local-route-auth.test.mjs": "90b2571a6b31a02053af0512572a17f848ac09a2b7e668bca96ac6a69642061c",
   "apps/server/tests/openai-edit-history.test.mjs": "2daadede6a7d6dd13ebe2d1eadd6487746eb1521a33d6b51979eb116f1da48c6",
   "apps/server/tests/openai-routes.test.mjs": "1fbf4792fdaa3b8095c7129f640bd0ca11e315955b85da089f650d4ae8f6ff19",
-  "apps/server/tests/openai-stream-lifecycle.test.mjs": "71f196ac8bc6bc01f010caa01309b89768ecb8fdd5da8453b4e1c584ef52d655",
+  "apps/server/tests/openai-stream-lifecycle.test.mjs": "997eaf33d452f68b8a11c86424379bb3b37cd2ccb64d550549fd3149763ae02d",
   "apps/server/tests/openapi-contract.test.mjs": "6cf749dc98e49f075d4dec2d3456d0153f94d8b19ff5079bf86683a865fa6294",
   "apps/server/tests/openapi-fallback.test.mjs": "04758066c703ca3c1a14c16a6af4ecf8d7ddb261a88a351906b8f6bf24ecfc49",
   "apps/server/tests/pngspeak.test.mjs": "216e3cad4b965e54a9e9bb6698594550ab7e7d9ef413cd2d7f15e9d09ce6a795",
