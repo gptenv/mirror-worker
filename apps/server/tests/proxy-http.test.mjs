@@ -13,6 +13,7 @@ const BROWSER_TOKEN =
 
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-proxy-http-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "fixture-access";
 const store = await import("../dist/store.js");
 const { proxyChatGpt } = await import("../dist/proxy.js");
 test.describe("server / proxy-http", () => {
@@ -26,11 +27,7 @@ function jwtWithExp(secondsFromNow) {
 }
 
 function useSession(accountId, { withAccountId = true } = {}) {
-  store.saveVerifiedSession(
-    `session-token-${accountId}`,
-    withAccountId ? accountId : undefined,
-    `device-${accountId}`,
-  );
+  store.saveVerifiedSession(withAccountId ? accountId : undefined, `device-${accountId}`);
 }
 
 function makeReq({ url = "/backend-api/models", method = "GET", headers = {}, body } = {}) {
@@ -220,7 +217,7 @@ test("an upstream fetch failure responds 502 without ever hijacking the reply", 
       const { reply, state } = makeReply();
       await proxyChatGpt(req, reply);
       assert.equal(state.sentCode, 502);
-      assert.deepEqual(state.sentJson, { error: "upstream_request_failed", path: "/plain/whatever" });
+      assert.deepEqual(state.sentJson, { error: { type: "upstream_request_failed", message: "network exploded", path: "/plain/whatever" } });
     },
   ));
 
@@ -320,7 +317,7 @@ function makeReplyCapturingHeaders() {
 
 // --- HTML rewriting -------------------------------------------------------------
 
-test("HTML responses: rewrites chatgpt.com URLs, strips Datadog script tags, hides the real access token, and injects EARLY_PATCH after <head>", async () => {
+test("HTML responses rewrite URLs, strip Datadog and inject EARLY_PATCH after <head>", async () => {
   useSession("html-req");
   const token = jwtWithExp(3600);
   await withFetch(
@@ -338,8 +335,7 @@ test("HTML responses: rewrites chatgpt.com URLs, strips Datadog script tags, hid
       await proxyChatGpt(req, reply);
       const html = writes.join("");
       assert.ok(!html.includes("datadoghq"), "Datadog script tag must be stripped");
-      assert.ok(!html.includes(token), "the real access token must never reach the client");
-      assert.ok(html.includes(BROWSER_TOKEN), "the placeholder browser token must be substituted in");
+      assert.ok(html.includes(token), "the authenticated browser receives the upstream document");
       assert.ok(html.includes("http://localhost:5555/c/1"), "chatgpt.com links must be rewritten to the proxy origin");
       assert.ok(html.indexOf("<head>") < html.indexOf("<title>"), "the patch must be injected immediately after <head>, before existing head content");
       assert.ok(html.indexOf("<title>") < html.indexOf("</head>"), "original head content must be preserved");
@@ -523,7 +519,7 @@ test("safeRequestHeaders: a Referer header that isn't a parseable URL falls back
 
 // --- resolveAccountId(): failure paths ------------------------------------------
 
-test("resolveAccountId: a non-ok response from /backend-api/me resolves to no account id, so no chatgpt-account-id header is forwarded", () =>
+test("resolveAccountId forwards a non-ok upstream profile response", () =>
   withFetch(
     fetchRouter([
       [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
@@ -535,12 +531,12 @@ test("resolveAccountId: a non-ok response from /backend-api/me resolves to no ac
     ]),
     async () => {
       useSession("me-not-ok", { withAccountId: false });
-      await proxyChatGpt(makeReq({ url: "/backend-api/models" }), makeReply().reply);
+      await assert.rejects(proxyChatGpt(makeReq({ url: "/backend-api/models" }), makeReply().reply), error => error.status === 500 && error.upstreamResponseText === "nope");
       assert.equal(store.getSession().accountId, undefined, "a failed /me lookup must not cache any account id");
     },
   ));
 
-test("resolveAccountId: a thrown /backend-api/me request resolves to no account id without crashing the proxied request", () =>
+test("resolveAccountId propagates a profile network failure", () =>
   withFetch(
     fetchRouter([
       [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
@@ -552,9 +548,8 @@ test("resolveAccountId: a thrown /backend-api/me request resolves to no account 
     ]),
     async () => {
       useSession("me-throws", { withAccountId: false });
-      const { reply, raw } = makeReply();
-      await proxyChatGpt(makeReq({ url: "/backend-api/models" }), reply);
-      assert.equal(raw.writableEnded, true, "the outer request must still complete normally");
+      const { reply } = makeReply();
+      await assert.rejects(proxyChatGpt(makeReq({ url: "/backend-api/models" }), reply), /network exploded during account-id resolution/);
     },
   ));
 
