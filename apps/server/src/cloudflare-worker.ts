@@ -28,10 +28,10 @@ interface DurableObjectNamespace {
 }
 
 type HttpServerHandler = (request: Request) => Promise<Response>;
-let workerHandlerPromise: Promise<HttpServerHandler> | undefined;
 
 /** Holds the single-account Mirror state and preserves the existing Fastify routes. */
 export class MirrorStorage extends DurableObject<WorkerEnvironment> {
+  private handlerPromise?: Promise<HttpServerHandler>;
   constructor(ctx: DurableObjectState, env: WorkerEnvironment) {
     super(ctx, env);
     if (!env.MIRROR_OWNER_ACCOUNT_ID?.trim()) throw new Error("MIRROR_OWNER_ACCOUNT_ID secret is required for Worker deployments");
@@ -42,11 +42,14 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       return new Response("WebSocket proxying is disabled in this Worker deployment.", { status: 501 });
     }
-    workerHandlerPromise ??= this.startServer();
+    this.handlerPromise ??= this.startServer().catch((error: unknown) => {
+      this.handlerPromise = undefined;
+      throw error;
+    });
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
     return runWithUpstreamFetch(this.env.WARP.fetch.bind(this.env.WARP), () =>
-      runWithRequestSessionToken(token, () => (workerHandlerPromise as Promise<HttpServerHandler>).then((handler) => handler(request)), sessionToken,
+      runWithRequestSessionToken(token, () => this.handlerPromise!.then((handler) => handler(request)), sessionToken,
         configuredApiKeys({ MIRROR_API_KEY: this.env.MIRROR_API_KEY, MIRROR_API_KEYS: this.env.MIRROR_API_KEYS, OPENAI_API_KEY: this.env.OPENAI_API_KEY })));
   }
 

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { ChatGptBackendClient } from '@mirror/protocol';
 import { stubBackend } from './helpers/backend.mjs';
-import { wrapDurableSql } from '../dist/worker-sql.js';
+import { wrapDurableSql, wrapNodeDatabase } from '../dist/worker-sql.js';
 
 // Cloudflare puts exec on storage.sql and transactionSync on storage.
 const database = new DatabaseSync(':memory:');
@@ -46,6 +46,20 @@ test.describe('server / worker-sql', () => {
     database.exec('CREATE TABLE rollback_probe (value TEXT)');
     assert.throws(() => db.transaction(() => { db.prepare('INSERT INTO rollback_probe VALUES (?)').run('discard'); throw new Error('rollback'); }), /rollback/);
     assert.deepEqual(db.prepare('SELECT * FROM rollback_probe').all(), []);
+  });
+  test('Node SQLite adapter supports queries and commits or rolls back transactions', () => {
+    const native = new DatabaseSync(':memory:');
+    try {
+      const db = wrapNodeDatabase(native);
+      db.exec('CREATE TABLE items (value TEXT)');
+      const insert = db.prepare('INSERT INTO items VALUES (?)');
+      const select = db.prepare('SELECT value FROM items');
+      db.transaction(() => insert.run('saved'));
+      assert.equal(select.get().value, 'saved');
+      assert.equal(select.all().length, 1);
+      assert.throws(() => db.transaction(() => { insert.run('rolled-back'); throw new Error('rollback'); }), /rollback/);
+      assert.equal(select.all().length, 1);
+    } finally { native.close(); }
   });
   for (const stream of [false, true]) test(`saved ${stream ? 'streaming' : 'JSON'} completion finishes and retains its answer`, async () => {
     setImplicitConversationId('default', null);
