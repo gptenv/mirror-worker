@@ -26,6 +26,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Verify Worker build and bundle
+        run: |
+          npm run build:worker
+          npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/mirror-worker-bundle"
       - run: npm run typecheck
       # .c8rc.json enables check-coverage with 100% thresholds for statements,
       # branches, functions, and lines, enforced separately for every file.

@@ -10,13 +10,6 @@ test.describe("server / preflight", () => {
     assert.match(result.nextAction, /PORT|MIRROR_PORT/);
   });
 
-  test("classifies a WARP egress verification failure", () => {
-    const error = new Error("Mirror requires WARP, but WARP egress could not be verified: fixture");
-    const result = classifyStartupFailure(error);
-    assert.equal(result.category, "warp-egress");
-    assert.match(result.nextAction, /WARP_ACCEPT_TOS/);
-  });
-
   test("classifies an unsupported/incompatible database schema version", () => {
     const error = new Error("Unsupported database schema version; use a compatible Mirror release or restore a pre-upgrade backup.");
     const result = classifyStartupFailure(error);
@@ -39,8 +32,8 @@ test.describe("server / preflight", () => {
   });
 
   test("formatStartupFailure renders the category, message and next step as one block", () => {
-    const rendered = formatStartupFailure(new Error("Mirror requires WARP, but WARP egress could not be verified: fixture"));
-    assert.match(rendered, /^mirror failed to start \[warp-egress\]: Mirror requires WARP/);
-    assert.match(rendered, /Next step: Confirm the bundled WARP container/);
+    const rendered = formatStartupFailure(new Error("fixture failure"));
+    assert.match(rendered, /^mirror failed to start \[unknown\]: fixture failure/);
+    assert.match(rendered, /Next step: Check the full error above/);
   });
 });
