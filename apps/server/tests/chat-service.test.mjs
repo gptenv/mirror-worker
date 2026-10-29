@@ -13,14 +13,14 @@ import test from "node:test";
 // `activeTurns` map that stopConversation/the 409 guard depend on.
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-chat-service-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "synthetic-access-fixture";
 const store = await import("../dist/store.js");
 const service = await import("../dist/chat-service.js");
 test.describe("server / chat-service", () => {
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
 }
 
 function sseBody(payloads) {
@@ -87,13 +87,12 @@ test("ephemeral chat uses upstream temporary mode and leaves no local rows", asy
   }
 });
 
-test("a gizmo's bootstrap payload fetch failure is swallowed and the turn still completes", async () => {
+test("a gizmo lookup failure is reported rather than silently sending without its payload", async () => {
   useSession("account-gizmo");
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = stubHappyBackend("account-gizmo");
-    const result = await service.runChat({ prompt: "hi", model: "auto", gizmoId: "g-123" });
-    assert.equal(result.result.text, "done");
+    await assert.rejects(service.runChat({ prompt: "hi", model: "auto", gizmoId: "g-123" }), /GET \/gizmos\/g-123 failed: 404/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -258,8 +257,7 @@ test("an ephemeral turn with a verified session that has no accountId also falls
   // store.ts) - distinct from the previous test's "no session at all",
   // this covers getSession() returning a truthy session object whose own
   // .accountId is still undefined.
-  store.saveVerifiedSession("session-token-no-account-ephemeral-long-enough", undefined, "device-no-account-ephemeral");
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(undefined, "device-no-account-ephemeral");
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (url) => {

@@ -66,7 +66,7 @@
   "apps/server/tests/asset-content.test.mjs": "8dd0ee859532dbfd00fb3a1f79a2d72b5b71fcb44ad0d2d16d4ba4fb346ff36c",
   "apps/server/tests/auth.test.mjs": "b07fc83b1218a9dcff24ed4fcc98fb511c1c09e51ebdc1c66d673184f2437485",
   "apps/server/tests/browser-login.test.mjs": "dee62d7679ed72c5b655a02a65139e6c36781fc5c1693537e7cac20a76921524",
-  "apps/server/tests/chat-service.test.mjs": "75a4c91eca29f7a009f849ff82e309da561d8d31ae267342b43584cd976e4f77",
+  "apps/server/tests/chat-service.test.mjs": "6d5221be01bb1b166acfb966a582dad0aad09e0fb966b9f391bb358be05fdd1b",
   "apps/server/tests/cm-integration.mjs": "ee6f012d6025d7996b94c83f74d574f8974463fc7b094a7e5161a29d6d34aa89",
   "apps/server/tests/completion-output.test.mjs": "28db0fe62df224ae2c6511b0cb3ca4f6308028703beb83972d960555b08547c9",
   "apps/server/tests/completion-schema.test.mjs": "dd2ca8a46edb01696fef6fec3ec71e10741ba9bed731ede1a56df466a0a57eaa",
