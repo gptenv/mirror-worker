@@ -7,6 +7,7 @@ import { stubBackend } from "./helpers/backend.mjs";
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-responses-"));
 process.env.MIRROR_DATA_DIR = dir;
 delete process.env.MIRROR_STORE_KEY;
+process.env.MIRROR_API_KEY = 'synthetic-access-fixture';
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
 const { registerOpenAiRoutes } = await import("../dist/openai.js");
@@ -22,12 +23,11 @@ test("Responses stream by default and honors explicit opt-out", () => {
 });
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {
-  store.saveVerifiedSession("synthetic-session-fixture", account, "synthetic-device");
-  store.updateMintedToken("synthetic-access-fixture", Date.now() + 3_600_000, null);
+  store.saveVerifiedSession(account, "synthetic-device");
   globalThis.fetch = stubBackend(account, options);
 }
 async function post(body) {
-  return localFetch(`${address}/v1/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return localFetch(`${address}/v1/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stream: false, ...body }) });
 }
 for (const minimal of [true, false]) test(`Responses three turns, mixed transport, minimal=${minimal}`, async () => {
   const sent = []; setup(`responses-${minimal}`, { sent });
@@ -86,7 +86,7 @@ test("Chat and Responses share history and reject assistant edits", async () => 
   const sent = []; setup("cross-mode", { sent });
   const first = await (await post({ input: "First question" })).json();
   const id = first.metadata.conversation_id;
-  const chat = await localFetch(`${address}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages: [{role:"user",content:"Second question"}], metadata:{conversation_id:id} }) });
+  const chat = await localFetch(`${address}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stream: false, messages: [{role:"user",content:"Second question"}], metadata:{conversation_id:id} }) });
   assert.equal(chat.status, 200); const second = await chat.json();
   assert.equal(second.choices[0].message.content, "reply-2");
   const requestCount = sent.length;

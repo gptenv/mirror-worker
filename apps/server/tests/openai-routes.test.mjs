@@ -13,6 +13,7 @@ import { recentFailures } from "../dist/api-errors.js";
 // database, session, and conversation-lock map.
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-openai-routes-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "synthetic-access-fixture";
 const [{ default: Fastify }, store, openai, context] = await Promise.all([
   import("fastify"),
   import("../dist/store.js"),
@@ -31,8 +32,7 @@ test.after(async () => {
 });
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
 }
 
 function sseBody(payloads) {
@@ -166,6 +166,15 @@ test("GET /v1/models tolerates the gizmo sidebar and bootstrap endpoints failing
       assert.ok(body.data.some((m) => m.id === "gpt-4o"));
     },
   );
+  await withFetch(stubBackend("account-models-2", {
+    modelsBody: { models: [{ slug: "gpt-4o" }] },
+    bootstrapFails: true,
+    sidebarBody: { items: [{ id: "g-p-1", display: { name: "Project" } }] },
+  }), async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/models" });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.ok(res.json().data.some((m) => m.id === "gpt-4o"));
+  });
 });
 
 // ---------------------------------------------------------------------------
