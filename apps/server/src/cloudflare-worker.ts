@@ -16,6 +16,7 @@ interface WorkerEnvironment {
   ASSETS: WorkerAssets;
   WARP: { fetch: UpstreamFetch };
   MIRROR_STORE_KEY?: string;
+  MIRROR_OWNER_ACCOUNT_ID?: string;
   MIRROR_API_KEY?: string;
   MIRROR_API_KEYS?: string;
   OPENAI_API_KEY?: string;
@@ -33,6 +34,7 @@ let workerHandlerPromise: Promise<HttpServerHandler> | undefined;
 export class MirrorStorage extends DurableObject<WorkerEnvironment> {
   constructor(ctx: DurableObjectState, env: WorkerEnvironment) {
     super(ctx, env);
+    if (!env.MIRROR_OWNER_ACCOUNT_ID?.trim()) throw new Error("MIRROR_OWNER_ACCOUNT_ID secret is required for Worker deployments");
     initializeWorkerStore(ctx.storage, env.MIRROR_STORE_KEY);
   }
 
@@ -49,7 +51,7 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
   }
 
   private async startServer(): Promise<HttpServerHandler> {
-    const app = await buildApp({ worker: true, assets: this.env.ASSETS });
+    const app = await buildApp({ worker: true, assets: this.env.ASSETS, ownerAccountId: this.env.MIRROR_OWNER_ACCOUNT_ID!.trim() });
     await app.ready();
     const handler = httpServerHandler(app.server);
     return (request) => handler.fetch(request);

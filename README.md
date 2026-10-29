@@ -83,10 +83,11 @@ ChatGPT upstream traffic uses the `WARP` Workers VPC Network binding (`cf1:netwo
 npm ci
 npm run build:worker
 npx wrangler secret put MIRROR_STORE_KEY
+npx wrangler secret put MIRROR_OWNER_ACCOUNT_ID
 npx wrangler deploy
 ```
 
-Paste a securely generated key when Wrangler prompts for it. To run the Worker locally, add the same setting to `.dev.vars` and run `npm run dev:worker`. Set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` as Worker secrets to configure upstream ChatGPT credentials. The Worker stores conversations and settings in its Durable Object; `MIRROR_STORE_KEY` encrypts stored app data and account metadata. The Worker URL is public and does not use Cloudflare Access: app and control API requests require the ChatGPT session token entered in the browser, which is stored in that browser and sent as a Bearer credential unless optional Worker token secrets are configured. This is a single-account deployment, so anyone with a valid session token can access the same stored data.
+Paste a securely generated key when Wrangler prompts for it. Set `MIRROR_OWNER_ACCOUNT_ID` to the owner's `account.account_user_id` from an authenticated ChatGPT `/backend-api/me` response; never paste the response or its credentials into logs or issues. The Worker fails to start without both settings. To run locally, add them to `.dev.vars` and run `npm run dev:worker`. Set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` as Worker secrets to configure upstream ChatGPT credentials. The Worker stores conversations and settings in its Durable Object; `MIRROR_STORE_KEY` encrypts stored app data and account metadata. Protected requests are checked against ChatGPT's `/me` endpoint and must resolve to the configured owner account; an unavailable identity check fails closed. Public browser bootstrap and static assets remain accessible. The check adds an upstream request to protected operations, and the owner ID must be updated if the account identity changes.
 
 ## Configuration
 

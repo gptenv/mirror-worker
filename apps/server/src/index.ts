@@ -122,7 +122,7 @@ export interface WorkerAssets {
   fetch(request: Request): Promise<Response>;
 }
 
-export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets } = {}) {
+export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets; ownerAccountId?: string } = {}) {
 const app = Fastify({
   trustProxy: options.worker ? true : false,
   logger: options.worker ? false : {
@@ -208,7 +208,21 @@ app.addHook("onRequest", async (req, reply) => {
   const requestSessionToken = bearer || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
   if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
-  if (requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
+  const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
+    /^\/(?:assets|mirror\/assets)\//.test(pathname!) || ["/favicon.ico", "/index.html"].includes(pathname!));
+  if (options.ownerAccountId && !workerPublicAsset && pathname !== "/api/health") {
+    if (!requestSessionToken) return reply.code(401).send({ error: { message: "A ChatGPT credential is required", type: "authentication_error" } });
+    try {
+      const client = new ChatGptBackendClient(await getValidCredentials());
+      await client.fetchMe();
+      if (!client.accountId || client.accountId !== options.ownerAccountId)
+        return reply.code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error" } });
+      sessionBearerAuthenticated = true;
+    } catch (error) {
+      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+    }
+  }
+  if (!sessionBearerAuthenticated && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
     // Validate the browser bearer against ChatGPT. The backend client tries it
     // directly as an accessToken and exchanges the client-held sessionToken
     // only after an upstream authentication denial.

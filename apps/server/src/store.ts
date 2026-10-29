@@ -141,9 +141,10 @@ if (!cloudflareRuntime) {
 
 export function initializeWorkerStore(storage: DurableSqlStorage, configuredKey?: string): void {
   if (!cloudflareRuntime) throw new Error("Worker storage can only be initialized in the Workers runtime");
-  initializeDurableSchema(storage);
   if (!configuredKey) throw new Error("MIRROR_STORE_KEY secret is required for Worker deployments");
-  encryptionKey = decodeConfiguredKey(configuredKey);
+  const key = decodeConfiguredKey(configuredKey);
+  initializeDurableSchema(storage);
+  encryptionKey = key;
   removeStoredSessionCredentials();
 }
 

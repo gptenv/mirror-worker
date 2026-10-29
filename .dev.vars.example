@@ -1,6 +1,9 @@
 # Generate a private, stable key with: openssl rand -base64 32
 MIRROR_STORE_KEY=
 
+# Owner account_user_id returned by ChatGPT's /backend-api/me.
+MIRROR_OWNER_ACCOUNT_ID=
+
 # Optional programmatic API keys.
 MIRROR_API_KEY=
 MIRROR_API_KEYS=

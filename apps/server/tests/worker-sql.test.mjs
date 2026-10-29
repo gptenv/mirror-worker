@@ -30,12 +30,17 @@ const storage = {
   },
 };
 globalThis.WebSocketPair = class {};
-const { initializeWorkerStore, getConversation, listMessages } = await import('../dist/store.js');
+const { initializeWorkerStore, getConversation, listMessages, setImplicitConversationId } = await import('../dist/store.js');
 initializeWorkerStore(storage, 'a'.repeat(64));
 const { buildApp } = await import('../dist/index.js');
 
 test.describe('server / worker-sql', () => {
   test.after(() => { database.close(); delete globalThis.WebSocketPair; });
+  test('invalid or missing encryption keys fail before touching storage', () => {
+    const untouched = { sql: { exec() { assert.fail('storage must not be accessed'); } }, transactionSync() { assert.fail('storage must not be accessed'); } };
+    assert.throws(() => initializeWorkerStore(untouched), /MIRROR_STORE_KEY secret is required/);
+    assert.throws(() => initializeWorkerStore(untouched, 'invalid'), /must decode to exactly 32 bytes/);
+  });
   test('transactions run on storage and roll back failed writes', () => {
     const db = wrapDurableSql(storage);
     database.exec('CREATE TABLE rollback_probe (value TEXT)');
@@ -43,6 +48,7 @@ test.describe('server / worker-sql', () => {
     assert.deepEqual(db.prepare('SELECT * FROM rollback_probe').all(), []);
   });
   for (const stream of [false, true]) test(`saved ${stream ? 'streaming' : 'JSON'} completion finishes and retains its answer`, async () => {
+    setImplicitConversationId('default', null);
     const app = await buildApp({ worker: true });
     test.mock.method(globalThis, 'fetch', stubBackend('worker-storage'));
     test.mock.method(ChatGptBackendClient.prototype, 'sendMessage', async () => ({ text: 'Saved answer', conversationId: 'upstream-id', messageId: 'assistant-id', userMessageId: 'user-id', status: 'done', events: [] }));
