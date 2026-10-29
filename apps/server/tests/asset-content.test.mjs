@@ -76,6 +76,25 @@ test("HTML is attachment-only and upstream failures retain their status and body
   failed = true; const res = await request(); assert.equal(res.statusCode, 403); assert.match(res.body, /private error detail/);
 });
 
+test("empty upstream bodies and explicit errors are handled without inventing file content", async () => {
+  globalThis.fetch = async url => String(url).includes('/files/download/')
+    ? Response.json({ download_url: 'https://chatgpt.com/backend-api/estuary/content?id=synthetic' })
+    : new Response(null, { status: 200 });
+  const empty = await request();
+  assert.equal(empty.statusCode, 502);
+  globalThis.fetch = async url => String(url).includes('/files/download/')
+    ? Response.json({ download_url: 'https://chatgpt.com/backend-api/estuary/content?id=synthetic' })
+    : new Response(null, { status: 403 });
+  const denied = await request();
+  assert.equal(denied.statusCode, 403);
+  assert.match(denied.headers['content-type'], /text\/plain/);
+  const mock = test.mock.method(ChatGptBackendClient.prototype, 'fetchAssetContent', async () => {
+    throw Object.assign(new Error('session changed'), { statusCode: 409 });
+  });
+  try { assert.equal((await request()).statusCode, 409); }
+  finally { mock.mock.restore(); }
+});
+
 test("upstream credentials stay on the exact Estuary endpoint across redirects", async () => {
   const client = new ChatGptBackendClient({ accessToken: "synthetic-secret", deviceId: "synthetic-device" });
   const calls = [];

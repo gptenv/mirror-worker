@@ -43,7 +43,8 @@ test.describe('server / worker-sql', () => {
   });
   test('transactions run on storage and roll back failed writes', () => {
     const db = wrapDurableSql(storage);
-    database.exec('CREATE TABLE rollback_probe (value TEXT)');
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec('CREATE TABLE rollback_probe (value TEXT)');
     assert.throws(() => db.transaction(() => { db.prepare('INSERT INTO rollback_probe VALUES (?)').run('discard'); throw new Error('rollback'); }), /rollback/);
     assert.deepEqual(db.prepare('SELECT * FROM rollback_probe').all(), []);
   });

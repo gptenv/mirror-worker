@@ -9,6 +9,10 @@ const part = url => ({ type: 'image_url', image_url: { url } });
 test.describe('server / Worker attachment DNS checks', () => {
   test.afterEach(() => { globalThis.fetch = originalFetch; });
   test.after(() => { delete globalThis.WebSocketPair; });
+  test('Worker control cookies require a secure connection', async () => {
+    const { controlCookie } = await import('../dist/security.js?worker-cookie');
+    assert.match(controlCookie(), /; Secure$/);
+  });
   test('uploads content only after both DNS answers are public', async () => {
     const seen = [];
     globalThis.fetch = async input => {
