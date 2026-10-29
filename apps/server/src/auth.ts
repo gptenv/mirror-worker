@@ -48,16 +48,16 @@ export async function getValidCredentials(): Promise<SessionCredentials> {
   const configuredToken = !request?.bearerToken || tokenMatches(request.bearerToken, configuredTokens)
     ? configuredTokens[0] : undefined;
   const accessToken = configuredToken || request?.bearerToken;
-  const sessionToken = configuredToken || request?.sessionToken || request?.bearerToken;
   if (!accessToken) {
     const err = new Error("Supply a ChatGPT accessToken or sessionToken as a Bearer credential.");
     (err as any).statusCode = 401;
     throw err;
   }
+  const sessionToken = configuredToken || request?.sessionToken || accessToken;
   const credentials = () => Promise.resolve({
     accessToken,
     sessionToken,
-    ...(sessionToken ? { cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}` } : {}),
+    cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`,
     deviceId: getOrCreateDeviceId(),
   });
   if (!request) return credentials();
@@ -71,7 +71,7 @@ export async function getRotatedRequestAccessToken(): Promise<string | undefined
   const request = requestAuthentication.getStore();
   if (!request?.credentials) return undefined;
   const credentials = await request.credentials;
-  return credentials.accessToken !== (request.initialAccessToken ?? request.bearerToken) ? credentials.accessToken : undefined;
+  return credentials.accessToken !== request.initialAccessToken ? credentials.accessToken : undefined;
 }
 
 export async function getRotatedRequestSessionToken(): Promise<string | undefined> {

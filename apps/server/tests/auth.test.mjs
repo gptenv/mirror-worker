@@ -55,6 +55,15 @@ test.describe("server / auth", () => {
       assert.equal(await auth.getRotatedRequestSessionToken(), 'rotated');
     }, 'old-session');
   });
+  test("session exchange works when a caller supplied no initial cookie", async t => {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async input => {
+      if (new URL(String(input)).pathname === '/api/auth/session') return Response.json({ accessToken: 'fresh' });
+      return ++calls === 1 ? new Response('unauthorized', { status: 401 }) : Response.json({ ok: true });
+    });
+    const credentials = { accessToken: 'old', sessionToken: 'session', deviceId: 'device' };
+    assert.equal((await auth.fetchWithAccessTokenFallback('https://chatgpt.com/backend-api/me', {}, credentials)).status, 200);
+  });
 
   test("uses the browser bearer as accessToken and keeps the saved sessionToken as fallback", async () => {
     await auth.runWithRequestSessionToken("access-from-browser", async () => {
