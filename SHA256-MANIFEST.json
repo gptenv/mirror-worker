@@ -165,7 +165,7 @@
   "packages/protocol/tests/client.test.mjs": "2c2d5064654850596be0b9e921e5d57cfe91830ce1171bf4914e8bbbdf07c873",
   "packages/protocol/tests/drift.test.mjs": "011127eb85c952292738504b53695672115dadd7f1bef1c5a98741884549453c",
   "packages/protocol/tests/models.test.mjs": "91205c74d4317918e4e876add87e559d86b51d064f75c9156394207d7ed25de6",
-  "packages/protocol/tests/proof-session-types.test.mjs": "12f16baaf8895cafd62003853ba0f5bfe0f499b258dcb50988ea064b7621f858",
+  "packages/protocol/tests/proof-session-types.test.mjs": "5a7b56dbc4b1eff837e444722089ad98c287e7997fe699b7a4a6a2f14b0ef57f",
   "packages/protocol/tests/sse.test.mjs": "073c3160fa2267d2ffa0235a63aabdf009377ffd7a53ab106855122e41fdb7dd",
   "packages/protocol/tests/transport.test.mjs": "fe07206f9e79098f4bea7212a01d5b084c96e1e3be8ed07028a772ec55a7424a",
   "packages/protocol/tests/turnstile.test.mjs": "51a53ef2ab47527a31bce47cf588cb7049bde0eb1334681c9e974bc5778bc30f",
