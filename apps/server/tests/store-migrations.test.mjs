@@ -24,8 +24,8 @@ test("MIRROR_STORE_KEY accepts a hex-encoded 32-byte key", async () => {
   process.env.MIRROR_STORE_KEY = "11".repeat(32); // 64 hex chars -> 32 bytes
   try {
     const store = await import(`../dist/store.js?store-key-hex=${Date.now()}`);
-    store.saveVerifiedSession("tok", "acct");
-    assert.equal(store.getSession().sessionToken, "tok");
+    store.saveVerifiedSession("acct", "device");
+    assert.equal(store.getSession().accountId, "acct");
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -38,8 +38,8 @@ test("MIRROR_STORE_KEY accepts a base64-encoded 32-byte key", async () => {
   process.env.MIRROR_STORE_KEY = Buffer.alloc(32, 7).toString("base64");
   try {
     const store = await import(`../dist/store.js?store-key-b64=${Date.now()}`);
-    store.saveVerifiedSession("tok2", "acct");
-    assert.equal(store.getSession().sessionToken, "tok2");
+    store.saveVerifiedSession("acct", "device");
+    assert.equal(store.getSession().accountId, "acct");
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -67,14 +67,14 @@ test("reuses the on-disk master key across restarts (no MIRROR_STORE_KEY set)", 
   delete process.env.MIRROR_STORE_KEY;
   try {
     const first = await import(`../dist/store.js?store-key-reuse-a=${Date.now()}`);
-    first.saveVerifiedSession("persisted-by-key-file", "acct");
+    first.saveVerifiedSession("persisted-by-key-file", "device");
     assert.ok(existsSync(path.join(dir, "master.key")));
 
     // A second "process" (fresh module instance, same data dir) must load the
     // same on-disk key file rather than minting a new one, or it couldn't
     // decrypt what the first instance wrote.
     const second = await import(`../dist/store.js?store-key-reuse-b=${Date.now()}`);
-    assert.equal(second.getSession().sessionToken, "persisted-by-key-file");
+    assert.equal(second.getSession().accountId, "persisted-by-key-file");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -130,7 +130,7 @@ test("migrates a pre-migration database: adds missing columns, imports legacy st
     const store = await import(`../dist/store.js?store-migrate=${Date.now()}`);
 
     // Legacy session migrated in.
-    assert.equal(store.getSession().sessionToken, "legacy-session-token");
+    assert.equal(store.getSession().sessionToken, undefined);
     assert.equal(store.getSession().accountId, "claimed-account");
     // Legacy file cleaned up once migrated.
     assert.equal(existsSync(legacyFile), false);
@@ -179,8 +179,8 @@ test("legacy store.json migration is skipped once a real session already exists"
     const store = await import(`../dist/store.js?store-migrate-skip=${Date.now()}`);
     // Establish a real session *after* the module has already loaded (and
     // thus already decided, at that load, whether to migrate).
-    store.saveVerifiedSession("current-session", "acct");
-    assert.equal(store.getSession().sessionToken, "current-session");
+    store.saveVerifiedSession("acct", "device");
+    assert.equal(store.getSession().accountId, "acct");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -587,17 +587,4 @@ test("onSessionChange notifies registered listeners on every session change and 
   }
 });
 
-test("updateMintedToken is a no-op when there is no verified session yet", async () => {
-  const dir = freshDir("minted-token-no-session");
-  process.env.MIRROR_DATA_DIR = dir;
-  try {
-    const store = await import(`../dist/store.js?store-minted-token-no-session=${Date.now()}`);
-    assert.equal(store.getSession(), null);
-    // Must not throw even with nothing to update.
-    store.updateMintedToken("cached-access", Date.now() + 60_000, null);
-    assert.equal(store.getSession(), null);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 });
