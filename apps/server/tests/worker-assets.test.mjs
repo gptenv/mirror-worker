@@ -62,6 +62,8 @@ test.describe('server / Worker assets', () => {
   test('serves Worker OpenAPI formats and supplies missing asset content type', async () => {
     const app = await buildApp({ worker: true, assets: { fetch: async () => new Response(new TextEncoder().encode('<main>fixture</main>')) } });
     try {
+      const anonymous = await app.inject({ url: '/mirror/openapi' });
+      assert.equal(anonymous.statusCode, 401, anonymous.body);
       const headers = { accept: 'text/html', 'x-mirror-document': '1' };
       const json = await app.inject({ url: '/mirror/openapi', headers });
       assert.equal(json.statusCode, 200, json.body);

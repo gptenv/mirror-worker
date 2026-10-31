@@ -1011,4 +1011,14 @@ test("Worker owner authentication handles cookie-only and non-Error failures saf
   }
 });
 
+test("upstream error handler preserves raw diagnostics when length metadata is absent", async () => {
+  const fixture = await buildApp();
+  fixture.get('/api/fixture-error', async () => { throw Object.assign(new Error('upstream failed'), { statusCode: 502, upstreamResponseText: 'synthetic upstream detail' }); });
+  try {
+    const response = await fixture.inject({ url: '/api/fixture-error', headers: AUTH });
+    assert.equal(response.statusCode, 502, response.body);
+    assert.deepEqual(response.json().error, { message: 'synthetic upstream detail', upstream_response_text: 'synthetic upstream detail' });
+  } finally { await fixture.close(); }
+});
+
 });

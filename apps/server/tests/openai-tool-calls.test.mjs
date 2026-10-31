@@ -137,6 +137,11 @@ test.describe('server / client tool calls', () => {
     assert.equal(third.statusCode, 200, third.body);
     assert.equal(third.headers['x-mirror-conversation-id'], id);
     assert.equal(store.getInstructions(id)[0].content, 'Use complete sentences');
+    const fourth = await post([{ role: 'developer', content: 'Use precise wording' }, { role: 'user', content: 'fourth' }]);
+    assert.equal(fourth.statusCode, 200, fourth.body);
+    assert.equal(fourth.headers['x-mirror-conversation-id'], id);
+    assert.equal(store.getInstructions(id)[0].role, 'developer');
+    assert.equal(store.getInstructions(id)[0].content, 'Use precise wording');
   });
 
   test('generic non-empty catalog entries preserve the generated call shape', async () => {
