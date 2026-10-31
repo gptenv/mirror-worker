@@ -842,21 +842,31 @@ export class ChatGptBackendClient {
     const frames = new SseFrameDecoder();
     const upstreamBody: string[] = [];
     let upstreamBytes = 0;
+    const cancelOnAbort = () => {
+      // Service-bound fetch adapters may leave a pending read alive after their
+      // request signal aborts. Cancel the reader directly to release that read.
+      void reader.cancel(opts.signal?.reason).catch(() => undefined);
+    };
 
     const deliver = () => {
       const events = reducer.drainEvents();
       for (const event of events) {
+        opts.signal?.throwIfAborted();
         allEvents.push(event);
         opts.onEvent?.(event);
+        opts.signal?.throwIfAborted();
         if (event.kind === "assistant_text" && event.delta) {
           opts.onDelta?.(event.delta, event.text);
         }
       }
     };
 
+    opts.signal?.addEventListener("abort", cancelOnAbort, { once: true });
     try {
+      opts.signal?.throwIfAborted();
       while (true) {
         const { done, value } = await reader.read();
+        opts.signal?.throwIfAborted();
         if (done) break;
         upstreamBytes += value.byteLength;
         if (upstreamBytes > MAX_CONVERSATION_STREAM_BYTES)
@@ -870,12 +880,14 @@ export class ChatGptBackendClient {
             if (reducer.isDone && !reducer.error) break;
           }
         }
+        opts.signal?.throwIfAborted();
         if (reducer.isDone && !reducer.error) break;
       }
     } finally {
+      opts.signal?.removeEventListener("abort", cancelOnAbort);
       // Callback failures (including downstream writes) must stop upstream
       // production too. Cancellation failure must not replace the real error.
-      await reader.cancel().catch(() => undefined);
+      await reader.cancel(opts.signal?.reason).catch(() => undefined);
       reader.releaseLock();
     }
 
@@ -891,6 +903,7 @@ export class ChatGptBackendClient {
       }
     }
     deliver();
+    opts.signal?.throwIfAborted();
 
     if (reducer.error) {
       const body = upstreamBody.join("");

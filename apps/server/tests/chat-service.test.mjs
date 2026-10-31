@@ -390,4 +390,47 @@ test("resource rejection cancels upstream, preserves partial output, and allows 
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("stopping an idle upstream releases its reader, preserves partial output, and allows retry", async () => {
+  const account = "account-idle-stream-stop";
+  useSession(account);
+  const originalFetch = globalThis.fetch;
+  const partial = Promise.withResolvers();
+  const backend = stubHappyBackend(account);
+  let cancelled = 0;
+  let source;
+  let settled;
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).endsWith("/f/conversation")) return backend(url, init);
+      // Deliberately ignore init.signal: the protocol owns the response reader.
+      return new Response(new ReadableStream({
+        start(controller) {
+          source = controller;
+          controller.enqueue(new TextEncoder().encode('data: {"p":"","o":"add","v":{"conversation_id":"upstream-partial","message":{"id":"partial","author":{"role":"assistant"},"content":{"parts":["partial answer"]}}}}\n\n'));
+        },
+        cancel() { cancelled++; },
+      }));
+    };
+    settled = service.runChat({ newConversationId: "idle-stop-turn", prompt: "hello", onDelta: () => partial.resolve() })
+      .then(result => ({ result }), error => ({ error }));
+    await partial.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(service.stopConversation("idle-stop-turn"), true);
+    assert.equal((await settled).error.name, "AbortError");
+    assert.equal(cancelled, 1);
+    const stopped = store.listMessages("idle-stop-turn").at(-1);
+    assert.equal(stopped.content, "partial answer");
+    assert.equal(stopped.status, "stopped");
+    assert.equal(stopped.upstreamNodeId, null);
+    assert.equal(store.getConversation("idle-stop-turn").currentNodeId, "client-created-root");
+    assert.equal(service.stopConversation("idle-stop-turn"), false);
+    globalThis.fetch = backend;
+    assert.equal((await service.runChat({ conversationId: "idle-stop-turn", prompt: "retry" })).result.text, "done");
+  } finally {
+    if (source && !cancelled) source.close();
+    await settled;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 });

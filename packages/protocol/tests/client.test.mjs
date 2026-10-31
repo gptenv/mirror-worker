@@ -942,6 +942,62 @@ test("sentinelHandshake uses client.turnstileSolver callback", () =>
     },
   ));
 
+for (const mode of ["pending read", "before reading", "event callback", "delta callback", "cancel rejection"]) {
+test(`abort cancels the reader even when the transport ignores the signal: ${mode}`, async () => {
+  const abort = new AbortController();
+  const reason = new DOMException("Synthetic downstream disconnected", "AbortError");
+  const partial = Promise.withResolvers();
+  let source;
+  let cancelled = 0;
+  let cancelReason;
+  let stream;
+  let deltas = 0;
+  await withFetch(async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith("/prepare")) return Response.json({});
+    if (pathname.endsWith("/finalize")) return Response.json({ token: "fixture" });
+    stream = new ReadableStream({
+      start(controller) {
+        source = controller;
+        controller.enqueue(new TextEncoder().encode('data: {"p":"","o":"add","v":{"message":{"id":"partial","author":{"role":"assistant"},"content":{"parts":["partial answer"]}}}}\n\n'));
+      },
+      cancel(value) {
+        cancelled++;
+        cancelReason = value;
+        if (mode === "cancel rejection") throw new Error("Synthetic cancellation failure");
+      },
+    });
+    if (mode === "before reading") abort.abort(reason);
+    return new Response(stream);
+  }, async () => {
+    const settled = new ChatGptBackendClient(fakeCreds()).sendMessage({
+      model: "auto", prompt: "hello", signal: abort.signal,
+      onEvent: () => {
+        if (mode === "event callback") { partial.resolve(); abort.abort(reason); }
+      },
+      onDelta: () => {
+        deltas++;
+        partial.resolve();
+        if (mode === "delta callback") abort.abort(reason);
+      },
+    }).then(result => ({ result }), error => ({ error }));
+    try {
+      if (mode !== "before reading") await partial.promise;
+      await new Promise(resolve => setImmediate(resolve));
+      abort.abort(reason);
+      assert.equal(cancelled, 1, "an idle upstream must be cancelled without waiting for another chunk");
+      assert.equal(cancelReason, reason);
+      assert.equal((await settled).error, reason);
+      assert.equal(stream.locked, false);
+      assert.equal(deltas, ["before reading", "event callback"].includes(mode) ? 0 : 1);
+    } finally {
+      if (!cancelled) source.close();
+      await settled;
+    }
+  });
+});
+}
+
 for (const mode of ["event callback", "delta callback", "success", "frame limit", "wire limit", "read failure"]) {
   test(`sendMessage cleans up the response reader after ${mode}`, async () => {
     let cancelled = 0;
