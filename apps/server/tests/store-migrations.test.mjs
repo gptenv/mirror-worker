@@ -172,15 +172,17 @@ test("legacy store.json migration is skipped once a real session already exists"
   const dir = freshDir("migrate-skip");
   process.env.MIRROR_DATA_DIR = dir;
   try {
+    const first = await import(`../dist/store.js?store-migrate-existing=${Date.now()}`);
+    first.saveVerifiedSession("acct", "device");
     writeFileSync(
       path.join(dir, "store.json"),
       JSON.stringify({ session: { sessionToken: "should-not-be-used", savedAt: "2024-01-01" } }),
     );
     const store = await import(`../dist/store.js?store-migrate-skip=${Date.now()}`);
-    // Establish a real session *after* the module has already loaded (and
-    // thus already decided, at that load, whether to migrate).
-    store.saveVerifiedSession("acct", "device");
     assert.equal(store.getSession().accountId, "acct");
+    assert.equal(store.getSession().deviceId, "device");
+    assert.equal(store.getSession().sessionToken, undefined);
+    assert.equal(existsSync(path.join(dir, "store.json")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -194,6 +196,8 @@ test("databaseHealthy reports true for a working database", async () => {
   try {
     const store = await import(`../dist/store.js?store-healthy=${Date.now()}`);
     assert.equal(store.databaseHealthy(), true);
+    assert.throws(() => store.initializeWorkerStore({}), /only be initialized in the Workers runtime/);
+    assert.equal(store.databaseHealthy(), true, "wrong-runtime initialization must leave the Node store intact");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
