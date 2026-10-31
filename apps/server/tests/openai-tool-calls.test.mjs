@@ -65,6 +65,7 @@ test.describe('server / client tool calls', () => {
         { role: 'user', content: 'weather?' },
         { role: 'assistant', content: null, tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'weather', arguments: '{}' } }] },
         { role: 'tool', tool_call_id: 'call-1', name: 'weather', content: 'sunny' },
+        { role: 'tool', tool_call_id: 'call-2', name: 'weather', content: 'warm' },
       ],
     } });
     assert.equal(response.statusCode, 200, response.body);
@@ -136,6 +137,35 @@ test.describe('server / client tool calls', () => {
     assert.equal(third.statusCode, 200, third.body);
     assert.equal(third.headers['x-mirror-conversation-id'], id);
     assert.equal(store.getInstructions(id)[0].content, 'Use complete sentences');
+  });
+
+  test('generic non-empty catalog entries preserve the generated call shape', async () => {
+    const response = await request('{"tool_calls":[{"name":"weather","arguments":{}}]}', { tools: ['weather tool', ['weather'], 1, { description: 'weather tool' }] });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().choices[0].message.tool_calls[0].function.name, 'weather');
+  });
+  test('model, gizmo and privacy changes do not silently reuse incompatible implicit conversations', async () => {
+    for (const [initial, matching, different] of [
+      [{ model: 'model-a' }, { model: 'model-a' }, { model: 'model-b' }],
+      [{ model: 'g-weather' }, { model: 'g-weather' }, { model: 'g-other' }],
+      [{ metadata: { private: 'true' } }, { metadata: { private: 'true' } }, { metadata: { private: 'false' } }],
+    ]) {
+      const account = `implicit-route-${counter++}`;
+      store.saveVerifiedSession(account, 'fixture-device');
+      const backend = stubBackend(account);
+      globalThis.fetch = (url, init) => new URL(String(url)).pathname.startsWith('/backend-api/gizmos/')
+        ? Promise.resolve(Response.json({ gizmo: { id: new URL(String(url)).pathname.split('/').at(-1) } }))
+        : backend(url, init);
+      const post = config => app.inject({ method: 'POST', url: '/v1/chat/completions', payload: { messages: [{ role: 'user', content: 'next' }], stream: false, ...config } });
+      const first = await post(initial);
+      assert.equal(first.statusCode, 200, first.body);
+      const next = await post(matching);
+      assert.equal(next.statusCode, 200, next.body);
+      assert.equal(next.headers['x-mirror-conversation-id'], first.headers['x-mirror-conversation-id']);
+      const changed = await post(different);
+      assert.equal(changed.statusCode, 200, changed.body);
+      assert.notEqual(changed.headers['x-mirror-conversation-id'], first.headers['x-mirror-conversation-id']);
+    }
   });
 
 });

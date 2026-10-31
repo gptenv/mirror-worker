@@ -132,10 +132,8 @@ export const publicLookup = makePublicLookup();
 const cloudflareRuntime = typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined";
 
 async function verifyWorkerDns(hostname: string, label: string, index: number): Promise<void> {
-  if (isIP(hostname)) {
-    if (!isPublicImageHost(hostname)) throw new Error(`${label}[${index}] host is not permitted: ${hostname}`);
-    return;
-  }
+  // The caller validates every destination before this private DNS-only check.
+  if (isIP(hostname)) return;
   const answers = await Promise.all(["A", "AAAA"].map(async (type) => {
     const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`, {
       headers: { accept: "application/dns-json" },

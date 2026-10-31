@@ -990,4 +990,25 @@ test("new Custom GPT native chat hides file-search events but forwards Python ev
     assert.match(res.body, /"name":"python"/);
     assert.match(res.body, /"text":"Normal answer"/);
   }));
+test("Worker owner authentication handles cookie-only and non-Error failures safely", async t => {
+  const { ChatGptBackendClient } = await import('@mirror/protocol');
+  const workerApp = await buildApp({ worker: true, ownerAccountId: 'expected-owner' });
+  let failure = 'fixture transport failure';
+  const mocked = t.mock.method(ChatGptBackendClient.prototype, 'fetchMe', async () => { throw failure; });
+  try {
+    const cookieOnly = await workerApp.inject({ url: '/api/asset-content', headers: { cookie: 'mirror_asset_session=cookie-fixture' } });
+    assert.equal(cookieOnly.statusCode, 401, cookieOnly.body);
+    assert.equal(cookieOnly.json().error.message, 'fixture transport failure');
+    assert.deepEqual(cookieOnly.json().error.token_lengths.received, { sessionToken: 0, accessToken: 0 });
+    failure = Object.assign(new Error('fixture unavailable'), { statusCode: 503, tokenLengths: { accessToken: { sentUpstream: 7 } } });
+    const bearer = await workerApp.inject({ url: '/api/conversations', headers: { authorization: 'Bearer fixture' } });
+    assert.equal(bearer.statusCode, 503, bearer.body);
+    assert.deepEqual(bearer.json().error.token_lengths.sent_upstream, { sessionToken: null, accessToken: 7 });
+    assert.ok(!bearer.body.includes('Bearer fixture'));
+  } finally {
+    mocked.mock.restore();
+    await workerApp.close();
+  }
+});
+
 });

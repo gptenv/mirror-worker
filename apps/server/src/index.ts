@@ -94,12 +94,12 @@ function sessionAuthenticationError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+function sessionTokenLengthDiagnostics(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   const sent = (error as { tokenLengths?: { accessToken?: { sentUpstream?: number }; sessionToken?: { sentUpstream?: number } } })?.tokenLengths;
   return {
     received: {
-      sessionToken: fallbackSessionToken?.length ?? bearer?.length ?? null,
-      accessToken: bearer?.length ?? null,
+      sessionToken: fallbackSessionToken?.length ?? bearer.length,
+      accessToken: bearer.length,
     },
     sent_upstream: {
       sessionToken: sent?.sessionToken?.sentUpstream ?? null,
@@ -108,7 +108,7 @@ function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefine
   };
 }
 
-function sessionAuthenticationErrorBody(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+function sessionAuthenticationErrorBody(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   return {
     error: {
       message: sessionAuthenticationError(error),

@@ -1922,12 +1922,12 @@ test("attachment failures cancel the upstream body and release its reader", asyn
   assert.equal(response.body.locked, false);
 });
 
-test("empty prompt helpers and bodyless redirects retain their defined behavior", async () => {
+test("empty prompt helpers and redirects with bodies retain their defined behavior", async () => {
   assert.equal(context.promptFor([]), "");
   const client = { uploadFile: async value => value };
   let requests = 0;
   await withFetch(async () => ++requests === 1
-    ? new Response(null, { status: 302, headers: { location: "/next" } })
+    ? new Response("redirect body", { status: 302, headers: { location: "/next" } })
     : new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }), async () => {
       const uploaded = await context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/start" } }, 0);
       assert.equal(uploaded.data.byteLength, 1);
