@@ -201,6 +201,9 @@ export class ChatGptBackendClient {
       throw error;
     }
     if (this.creds.sessionToken && await isAccessDeniedResponse(res)) {
+      // This response is abandoned even if minting or the retry fails. Release
+      // its body before refresh; cleanup must not replace upstream diagnostics.
+      await res.body?.cancel().catch(() => undefined);
       this.lastTokenLengths.sessionToken.sentUpstream = this.creds.sessionToken.length;
       let minted;
       try {

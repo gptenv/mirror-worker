@@ -50,6 +50,50 @@ test("tries the stored accessToken first and exchanges the saved sessionToken on
     assert.equal(creds.rotatedSessionToken, "rotated-session");
   }));
 
+for (const outcome of ["success", "mint rejection", "retry rejection"]) {
+  test(`discards the denied response before credential refresh: ${outcome}`, async () => {
+    let cancelled = 0;
+    let attempts = 0;
+    const retryFailure = new Error("synthetic retry transport failure");
+    const denied = new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("denied")); },
+      // Even failed cleanup must preserve the refresh/retry result.
+      cancel() { cancelled++; throw new Error("synthetic cancellation failure"); },
+    });
+    await withFetch(async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/api/auth/session") {
+        assert.equal(cancelled, 1, "release the abandoned response before minting");
+        return outcome === "mint rejection"
+          ? new Response("exact synthetic mint failure", { status: 503 })
+          : Response.json({ accessToken: "refreshed-access" });
+      }
+      assert.equal(pathname, "/backend-api/me");
+      if (++attempts === 1) return new Response(denied, { status: 401 });
+      if (outcome === "retry rejection") throw retryFailure;
+      return Response.json({ account: { account_user_id: "synthetic-owner" } });
+    }, async () => {
+      const client = new ChatGptBackendClient({ ...fakeCreds(), sessionToken: "synthetic-session" });
+      if (outcome === "mint rejection") {
+        await assert.rejects(client.fetchMe(), error => {
+          assert.equal(error.upstreamResponseText, "exact synthetic mint failure");
+          assert.equal(error.statusCode, 503);
+          assert.equal(error.tokenLengths.sessionToken.sentUpstream, "synthetic-session".length);
+          return true;
+        });
+      } else if (outcome === "retry rejection") {
+        await assert.rejects(client.fetchMe(), error => error === retryFailure);
+      } else {
+        await client.fetchMe();
+        assert.equal(client.accountId, "synthetic-owner");
+      }
+    });
+    assert.equal(cancelled, 1);
+    assert.equal(denied.locked, false);
+    assert.equal(attempts, outcome === "mint rejection" ? 1 : 2);
+  });
+}
+
 test("preserves the exact session endpoint error body and reports only token lengths", () =>
   withFetch(async (input, init = {}) => {
     const url = new URL(String(input));
