@@ -30,7 +30,7 @@ const storage = {
   },
 };
 globalThis.WebSocketPair = class {};
-const { initializeWorkerStore, getConversation, listMessages, setImplicitConversationId } = await import('../dist/store.js');
+const { initializeWorkerStore, storedDatabaseSchemaVersion, getConversation, listMessages, setImplicitConversationId } = await import('../dist/store.js');
 initializeWorkerStore(storage, 'a'.repeat(64));
 const { buildApp } = await import('../dist/index.js');
 
@@ -40,6 +40,12 @@ test.describe('server / worker-sql', () => {
     const untouched = { sql: { exec() { assert.fail('storage must not be accessed'); } }, transactionSync() { assert.fail('storage must not be accessed'); } };
     assert.throws(() => initializeWorkerStore(untouched), /MIRROR_STORE_KEY secret is required/);
     assert.throws(() => initializeWorkerStore(untouched, 'invalid'), /must decode to exactly 32 bytes/);
+  });
+  test('reports the persisted Worker version rather than a binary constant', () => {
+    assert.equal(storedDatabaseSchemaVersion(), 1);
+    database.exec('UPDATE mirror_schema SET version = 7');
+    try { assert.equal(storedDatabaseSchemaVersion(), 7); }
+    finally { database.exec('UPDATE mirror_schema SET version = 1'); }
   });
   test('transactions run on storage and roll back failed writes', () => {
     const db = wrapDurableSql(storage);
