@@ -11,6 +11,50 @@ const auth = await import("../dist/auth.js");
 test.describe("server / auth", () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
+  test("anonymous scopes cannot inherit enclosing credentials or rotation", async () => {
+    await auth.runWithRequestSessionToken("owner", async () => {
+      const credentials = await auth.getValidCredentials();
+      credentials.accessToken = "owner-rotated";
+      credentials.rotatedSessionToken = "owner-session-rotated";
+      await auth.runWithRequestSessionToken(undefined, async () => {
+        assert.equal(auth.getRequestSessionToken(), "");
+        assert.equal(auth.getRequestFallbackSessionToken(), undefined);
+        await assert.rejects(auth.getValidCredentials(), { statusCode: 401 });
+        assert.equal(await auth.getRotatedRequestAccessToken(), undefined);
+        assert.equal(await auth.getRotatedRequestSessionToken(), undefined);
+      });
+      assert.equal(auth.getRequestSessionToken(), "owner");
+      assert.equal(await auth.getRotatedRequestAccessToken(), "owner-rotated");
+    }, "owner-session", ["owner"]);
+  });
+
+  test("overlapping scopes retain their own bearer, fallback and rotation", async () => {
+    const started = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const owner = auth.runWithRequestSessionToken("owner", async () => {
+      const credentials = await auth.getValidCredentials();
+      started.resolve();
+      await release.promise;
+      assert.equal(auth.getRequestSessionToken(), "owner");
+      assert.equal(auth.getRequestFallbackSessionToken(), "owner-session");
+      assert.equal(credentials.accessToken, "owner");
+      assert.equal(await auth.getRotatedRequestAccessToken(), undefined);
+    }, "owner-session");
+    await started.promise;
+    try {
+      await auth.runWithRequestSessionToken("other", async () => {
+        const credentials = await auth.getValidCredentials();
+        credentials.accessToken = "other-rotated";
+        credentials.rotatedSessionToken = "other-session-rotated";
+        await Promise.resolve();
+        assert.equal(auth.getRequestFallbackSessionToken(), "other-session");
+        assert.equal(await auth.getRotatedRequestAccessToken(), "other-rotated");
+        assert.equal(await auth.getRotatedRequestSessionToken(), "other-session-rotated");
+      }, "other-session");
+    } finally { release.resolve(); }
+    await owner;
+  });
+
   test("configured keys select the configured account while unrelated bearers stay independent", async () => {
     await auth.runWithRequestSessionToken(undefined, async () => {
       assert.equal((await auth.getValidCredentials()).accessToken, "configured");

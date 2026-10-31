@@ -26,7 +26,9 @@ export function setRequestSessionToken(token: string, sessionToken?: string): vo
 }
 
 export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T, sessionToken?: string, configuredTokens?: string[]): T {
-  return token || configuredTokens?.length ? requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback) : callback();
+  // Anonymous requests need a boundary too: never inherit an enclosing
+  // request's bearer, configured credentials, or rotated token state.
+  return requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback);
 }
 
 /** Compatibility name retained for existing call sites; this is now the client-held bearer. */
