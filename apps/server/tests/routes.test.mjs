@@ -159,7 +159,23 @@ test("GET /api/health reports storage, configuration, and egress status", async 
   const after = await app.inject({ method: "GET", url: "/api/health", headers: { host: "localhost" } });
   const afterBody = JSON.parse(after.body);
   assert.equal(afterBody.configured, true);
-  assert.equal(afterBody.ok, true, "healthy db + configured session + verified egress -> ok");
+  assert.equal(afterBody.ok, true, "healthy local storage remains live without an upstream verification claim");
+});
+
+test("Worker liveness does not claim upstream verification or require a probe", async () => {
+  const originalPair = Object.getOwnPropertyDescriptor(globalThis, "WebSocketPair");
+  Object.defineProperty(globalThis, "WebSocketPair", { value: class {}, configurable: true });
+  const workerApp = await buildApp({ worker: true, ownerAccountId: "owner-account" });
+  try {
+    const response = await workerApp.inject({ url: "/api/health" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().ok, true, "local database liveness is independent of upstream reachability");
+    assert.deepEqual(response.json().egress, { mode: "warp-vpc", required: true, verified: false, checkedAt: null, error: null });
+  } finally {
+    await workerApp.close();
+    if (originalPair) Object.defineProperty(globalThis, "WebSocketPair", originalPair);
+    else delete globalThis.WebSocketPair;
+  }
 });
 
 // --- /api/settings/default-system-instructions ----------------------------

@@ -278,17 +278,7 @@ app.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.url === "/api/health" || req.url.startsWith("/mirror/assets/")) return;
-  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey && !upstreamAuthenticates) {
-    try {
-      const credentials = await getValidCredentials();
-      await new ChatGptBackendClient(credentials).fetchMe();
-      sessionBearerAuthenticated = true;
-    } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
-        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
-      );
-    }
-  }
+  // Credential validation above either authenticated this request or returned its error.
   if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && !(upstreamAuthenticates && requestSessionToken)) {
     return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT accessToken or sessionToken as the Bearer credential", type: "authentication_error" } });
   }
@@ -356,9 +346,8 @@ app.setErrorHandler((error, req, reply) => {
 });
 
 app.get("/api/health", async () => ({
-  ok:
-    databaseHealthy() &&
-    (!getEgressStatus().required || getEgressStatus().verified),
+  // Local liveness is separate from upstream connectivity, which is unverified.
+  ok: databaseHealthy(),
   storage: "sqlite",
   configured: Boolean(getSession()),
   egress: getEgressStatus(),
