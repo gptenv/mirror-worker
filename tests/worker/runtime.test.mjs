@@ -28,7 +28,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     options = convertV4MiniflareOptions({
       name: 'mirror-local-acceptance', host: '127.0.0.1', modules: true,
       scriptPath: path.join(directory, 'bundle/cloudflare-worker.js'), modulesRoot: path.join(directory, 'bundle'),
-      compatibilityDate: '2026-09-30', compatibilityFlags: ['nodejs_compat'],
+      compatibilityDate: production.compatibility_date, compatibilityFlags: production.compatibility_flags,
       durableObjects: { MIRROR: { className: 'MirrorStorage', useSQLite: true } },
       bindings: { MIRROR_STORE_KEY: 'a'.repeat(64), MIRROR_OWNER_ACCOUNT_ID: 'fixture-owner' },
       serviceBindings: {
@@ -75,6 +75,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     assert.deepEqual(await restored.json(), { content: 'Synthetic persisted instruction' });
     const diagnostics = await request('/api/diagnostics', { headers: owner });
     assert.equal(diagnostics.status, 200);
+    // Version 1 is the released baseline; a migration must update this acceptance fixture.
     assert.equal((await diagnostics.json()).storage.schemaVersion, 1);
     assert.ok(upstreamCalls.includes('/backend-api/me'));
   });
