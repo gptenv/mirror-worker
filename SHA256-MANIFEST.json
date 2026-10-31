@@ -1,7 +1,7 @@
 {
   ".c8rc.json": "26bfff095f685e8941c88375ea8403a34d542d834b37552b28b1a259a48882e2",
   ".circleci/config.yml": "f48c23433adb041d9e1071d48953cc813cec7faf74443bd4a2c04109bd1f5244",
-  ".dev.vars.example": "bf1e8adc70985f0bae6aeaa3249b7b15eb05c1f9db3284fc7764662b42d1518b",
+  ".dev.vars.example": "a331083364bfdf5d47d103485435991d5c4238ef3cb840a7d65c6db3a1dc3892",
   ".dockerignore": "d543f9bfd4f5d794472ee1b9932cf8d2e69e4a2aec40c927634cf0424332541b",
   ".env.example": "d4f5012b386f7482aeffe785b771c0a0dae49c74242b115d0c0c3eec3e19492f",
   ".github/workflows/ci.yml": "949e7c741cf380a56b779a26006ec21922815a568f36e6ea6aca0ef65d4e1d0c",
