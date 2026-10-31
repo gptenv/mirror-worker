@@ -152,13 +152,12 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
         throw new Error(`${error.message}; serviceSignalAborted=${fixture.signalAborted}; assistantStatus=${state.messages.at(-1).status}`, { cause: error });
       }
       let after;
-      await bounded((async () => {
-        do {
-          after = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
-          if (after.messages.at(-1).status !== 'streaming') return;
-          await new Promise(resolve => setTimeout(resolve, 25));
-        } while (true);
-      })(), 'Disconnected turn did not leave streaming state');
+      const until = Date.now() + 3000;
+      do {
+        after = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
+        if (after.messages.at(-1).status !== 'streaming') break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      } while (Date.now() < until);
       assert.equal(after.messages.at(-1).status, 'stopped');
       assert.equal(after.messages.at(-1).content, 'fixture-partial-answer\n');
       assert.equal(after.conversation.currentNodeId, before.conversation.currentNodeId);
