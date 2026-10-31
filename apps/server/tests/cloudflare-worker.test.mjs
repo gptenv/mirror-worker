@@ -4,20 +4,28 @@ import { registerHooks } from 'node:module';
 
 // Node cannot load Cloudflare's built-in modules. Map only those platform
 // imports to small adapters; a separate test exercises the real runtime.
+const fixtureModules = new Map([
+  [new URL('../dist/index.js', import.meta.url).href, new URL('./helpers/worker-entrypoint-app.mjs', import.meta.url).href],
+  [new URL('../dist/store.js', import.meta.url).href, new URL('./helpers/worker-entrypoint-store.mjs', import.meta.url).href],
+]);
 registerHooks({ resolve(specifier, context, next) {
   if (specifier === 'cloudflare:workers') return { url: 'data:text/javascript,export class DurableObject { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }', shortCircuit: true };
   if (specifier === 'cloudflare:node') return { url: 'data:text/javascript,export const httpServerHandler = server => ({ fetch: request => server.fetch(request) });', shortCircuit: true };
-  return next(specifier, context);
+  const resolved = next(specifier, context);
+  return fixtureModules.has(resolved.url) ? { ...resolved, url: fixtureModules.get(resolved.url) } : resolved;
 } });
 let starts = 0;
 let shouldFail = false;
 let initialized = 0;
-mock.module('../dist/index.js', { exports: { buildApp: async (options) => {
+// Give generated mock modules fixture URLs: Node's ?node-test-mock modules
+// contain different code, so mapping their offsets onto production source
+// would invent uncovered import branches in the c8 report.
+mock.module('./helpers/worker-entrypoint-app.mjs', { exports: { buildApp: async (options) => {
   starts++;
   if (shouldFail) { shouldFail = false; throw new Error('fixture startup failure'); }
   return { ready: async () => {}, server: { fetch: async request => Response.json({ owner: options.ownerAccountId, authorization: request.headers.get('authorization') }) } };
 } } });
-mock.module('../dist/store.js', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device' } });
+mock.module('./helpers/worker-entrypoint-store.mjs', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device' } });
 const { MirrorStorage, default: worker } = await import('../dist/cloudflare-worker.js');
 const env = { MIRROR_OWNER_ACCOUNT_ID: ' owner ', MIRROR_STORE_KEY: 'fixture', WARP: { fetch: async () => new Response() }, ASSETS: {} };
 
