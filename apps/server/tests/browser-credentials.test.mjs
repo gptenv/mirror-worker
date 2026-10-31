@@ -87,6 +87,15 @@ test.describe('server / injected browser credentials', () => {
     assert.deepEqual(pair(f), ['old-access', 'fresh-session']);
   });
 
+  test('bootstrap preserves accepted credential refresh when the document body is interrupted', async t => {
+    const f = fixture(t, async () => ({ headers: new Headers(rotated), ok: true, text: async () => { throw Error('interrupted HTML body'); } }));
+    const status = { textContent: '' };
+    f.context.document = { open() { assert.fail('must not render an interrupted document'); }, getElementById() { return status; } };
+    await vm.runInContext(script(BROWSER_BOOTSTRAP), f.context);
+    assert.deepEqual(pair(f), ['rotated-access', 'rotated-session']);
+    assert.equal(status.textContent, 'interrupted HTML body');
+  });
+
   for (const transport of ['fetch', 'XHR']) {
     test(`${transport} ignores stale access/session rotations after replacement, logout, or another rotation`, async t => {
       for (const responseHeaders of [rotated, { 'x-mirror-session-token': 'stale-session-only' }]) {
