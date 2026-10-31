@@ -23,14 +23,14 @@ test.describe('server / local-route-auth',()=>{
     }
   });
   test('Worker owner gate rejects other accounts before local or upstream routes',async()=>{
-    const app=await buildApp({worker:true,ownerAccountId:'owner-account'});
+    const app=await buildApp({worker:true,ownerUserId:'owner-account'});
     const seen=[];
     test.mock.method(globalThis,'fetch',async(input,init)=>{
       const pathname=new URL(String(input)).pathname;
       seen.push(pathname);
       assert.equal(pathname,'/backend-api/me');
       const token=new Headers(init.headers).get('authorization');
-      return Response.json({account:{account_user_id:token==='Bearer owner-token'?'owner-account':'other-account'}});
+      return Response.json({object:'user',id:token==='Bearer owner-token'?'owner-account':'other-account'});
     });
     try{
       for(const url of ['/api/conversations','/v1/models','/backend-api/models']){
@@ -45,7 +45,7 @@ test.describe('server / local-route-auth',()=>{
     }finally{await app.close();}
   });
   test('Worker owner gate fails closed when upstream identity is missing or unavailable',async()=>{
-    const app=await buildApp({worker:true,ownerAccountId:'owner-account'});
+    const app=await buildApp({worker:true,ownerUserId:'owner-account'});
     let calls=0;
     test.mock.method(globalThis,'fetch',async()=>{
       calls++;

@@ -27,14 +27,64 @@ test.describe('server / Worker owner boundary', () => {
     test.mock.method(globalThis, 'fetch', async (input, init) => {
       assert.equal(new URL(String(input)).pathname, '/backend-api/me', 'cached operations must not read upstream history');
       const owner = new Headers(init.headers).get('authorization') === 'Bearer owner-token';
-      return Response.json({ account: { account_user_id: owner ? 'owner-account' : 'other-account' } });
+      return Response.json({ object: 'user', id: owner ? 'owner-account' : 'other-account' });
     });
   }
+
+  test('current authenticated user profile controls access independently of workspace routing', async () => {
+    // Sanitized shape of the current authenticated /me response: no account
+    // or orgs fields. Never put a real profile or credential in this fixture.
+    const canonical = { object: 'user', id: 'user-synthetic-owner' };
+    let profile = canonical;
+    test.mock.method(globalThis, 'fetch', async (input) => {
+      assert.equal(new URL(String(input)).pathname, '/backend-api/me');
+      return Response.json(profile);
+    });
+    const app = await buildApp({ worker: true, ownerUserId: canonical.id });
+    const read = () => app.inject({ url: '/api/settings/hotkeys', headers: { authorization: 'Bearer synthetic-owner-access' } });
+    try {
+      assert.equal((await read()).statusCode, 200);
+      for (const accountId of ['workspace-one', 'workspace-two']) {
+        profile = { ...canonical, account: { account_user_id: accountId } };
+        assert.equal((await read()).statusCode, 200, 'same authenticated owner remains distinct from workspace selection');
+      }
+      for (const rejected of [
+        { object: 'user', id: 'user-synthetic-other', account: { account_user_id: canonical.id } },
+        { object: 'user', account: { account_user_id: canonical.id } },
+        { object: 'user', orgs: { data: [{ id: canonical.id }] } },
+        { object: 'user', id: '' },
+        { object: 'user', id: 123 },
+        { object: 'user', id: { value: canonical.id } },
+        { object: '', id: canonical.id },
+        { id: canonical.id },
+      ]) {
+        profile = rejected;
+        const response = await read();
+        assert.equal(response.statusCode, 403, 'neither routing identity nor a previously accepted profile authenticates this request');
+        assert.equal(response.json().error.type, 'authorization_error');
+        assert.doesNotMatch(response.body, /synthetic-owner|synthetic-other|workspace-/);
+      }
+      profile = canonical;
+      assert.equal((await read()).statusCode, 200);
+    } finally { await app.close(); }
+  });
+
+  for (const mode of ['invalid-auth', 'malformed-profile']) test(`owner validation rejects ${mode}`, async () => {
+    const app = await buildApp({ worker: true, ownerUserId: 'user-synthetic-owner' });
+    test.mock.method(globalThis, 'fetch', async () => mode === 'invalid-auth'
+      ? new Response('Synthetic authentication denied', { status: 401 })
+      : Response.json(null));
+    try {
+      const response = await app.inject({ url: '/api/settings/hotkeys', headers: { authorization: 'Bearer synthetic-invalid-access' } });
+      assert.equal(response.statusCode, 401);
+      assert.doesNotMatch(response.body, /synthetic-invalid-access|user-synthetic-owner/);
+    } finally { await app.close(); }
+  });
 
   test('another valid account cannot read, export, change or delete cached owner data', async () => {
     const id = seed();
     identityFetch();
-    const app = await buildApp({ worker: true, ownerAccountId: 'owner-account' });
+    const app = await buildApp({ worker: true, ownerUserId: 'owner-account' });
     try {
       for (const request of [
         { method: 'GET', url: '/api/conversations?sync=false' },
@@ -74,7 +124,7 @@ test.describe('server / Worker owner boundary', () => {
       downloads++;
       return new Response('fixture-image', { headers: { 'content-type': 'image/png' } });
     });
-    const app = await buildApp({ worker: true, ownerAccountId: 'owner-account' });
+    const app = await buildApp({ worker: true, ownerUserId: 'owner-account' });
     try {
       const url = `/api/asset-content?ticket=${encodeURIComponent(ticket)}`;
       for (const method of ['GET', 'HEAD']) {
@@ -103,9 +153,9 @@ test.describe('server / Worker owner boundary', () => {
       const owner = headers.get('authorization') === 'Bearer owner-token';
       if (owner) { started.resolve(); await release.promise; }
       assert.equal(headers.get('cookie'), `__Secure-next-auth.session-token=${owner ? 'owner-session' : 'other-session'}`);
-      return Response.json({ account: { account_user_id: owner ? 'owner-account' : 'other-account' } });
+      return Response.json({ object: 'user', id: owner ? 'owner-account' : 'other-account' });
     });
-    const app = await buildApp({ worker: true, ownerAccountId: 'owner-account' });
+    const app = await buildApp({ worker: true, ownerUserId: 'owner-account' });
     const request = (token, session) => runWithRequestSessionToken(token, () => app.inject({
       url: `/api/conversations/${id}`, headers: { authorization: `Bearer ${token}`, 'x-mirror-session-token': session },
     }), session, []);
@@ -166,11 +216,11 @@ test.describe('server / Worker owner boundary', () => {
       });
       assert.equal(pathname, '/backend-api/me');
       if (new Headers(init.headers).get('authorization') !== `Bearer ${freshAccess}`) return new Response('expired', { status: 401 });
-      return Response.json({ account: { account_user_id: 'owner-account' } });
+      return Response.json({ object: 'user', id: 'owner-account' });
     });
     test.mock.method(ChatGptBackendClient.prototype, 'resolveAssetDownloadMetadata', async () => ({ url: 'https://files.oaiusercontent.com/fixture', fileName: 'fixture.png' }));
     test.mock.method(ChatGptBackendClient.prototype, 'fetchAssetContent', async () => new Response('fixture-image', { headers: { 'content-type': 'image/png' } }));
-    const app = await buildApp({ worker: true, ownerAccountId: 'owner-account' });
+    const app = await buildApp({ worker: true, ownerUserId: 'owner-account' });
     try {
       const headers = mode === 'bearer-fallback' ? { authorization: `Bearer ${initial}` } : { cookie: `mirror_asset_session=${initial}` };
       if (mode === 'rotated-secure') headers['x-forwarded-proto'] = 'https';

@@ -54,7 +54,7 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
   }
 
   private async startServer(): Promise<HttpServerHandler> {
-    const app = await buildApp({ worker: true, assets: this.env.ASSETS, ownerAccountId: this.env.MIRROR_OWNER_ACCOUNT_ID!.trim() });
+    const app = await buildApp({ worker: true, assets: this.env.ASSETS, ownerUserId: this.env.MIRROR_OWNER_ACCOUNT_ID!.trim() });
     await app.ready();
     const handler = httpServerHandler(app.server);
     return (request) => handler.fetch(request);

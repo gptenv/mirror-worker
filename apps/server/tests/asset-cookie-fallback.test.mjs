@@ -28,9 +28,9 @@ test.describe('server / asset cookie optional-accessor fallback', () => {
       assert.equal(pathname, '/backend-api/me');
       return new Headers(init.headers).get('authorization') === 'Bearer fixture-expired'
         ? new Response('expired', { status: 401 })
-        : Response.json({ account: { account_user_id: 'fixture-owner' } });
+        : Response.json({ object: 'user', id: 'fixture-owner' });
     });
-    const app = await buildApp({ worker: true, ownerAccountId: 'fixture-owner' });
+    const app = await buildApp({ worker: true, ownerUserId: 'fixture-owner' });
     try {
       const response = await realAuth.runWithRequestSessionToken('fixture-expired', () => app.inject({
         url: '/api/asset-content',

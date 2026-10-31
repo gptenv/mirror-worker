@@ -165,7 +165,7 @@ test("GET /api/health reports storage, configuration, and egress status", async 
 test("Worker liveness does not claim upstream verification or require a probe", async () => {
   const originalPair = Object.getOwnPropertyDescriptor(globalThis, "WebSocketPair");
   Object.defineProperty(globalThis, "WebSocketPair", { value: class {}, configurable: true });
-  const workerApp = await buildApp({ worker: true, ownerAccountId: "owner-account" });
+  const workerApp = await buildApp({ worker: true, ownerUserId: "owner-account" });
   try {
     const response = await workerApp.inject({ url: "/api/health" });
     assert.equal(response.statusCode, 200);
@@ -992,7 +992,7 @@ test("new Custom GPT native chat hides file-search events but forwards Python ev
   }));
 test("Worker owner authentication handles cookie-only and non-Error failures safely", async t => {
   const { ChatGptBackendClient } = await import('@mirror/protocol');
-  const workerApp = await buildApp({ worker: true, ownerAccountId: 'expected-owner' });
+  const workerApp = await buildApp({ worker: true, ownerUserId: 'expected-owner' });
   let failure = 'fixture transport failure';
   const mocked = t.mock.method(ChatGptBackendClient.prototype, 'fetchMe', async () => { throw failure; });
   try {

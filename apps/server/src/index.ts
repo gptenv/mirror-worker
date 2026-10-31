@@ -122,7 +122,7 @@ export interface WorkerAssets {
   fetch(request: Request): Promise<Response>;
 }
 
-export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets; ownerAccountId?: string } = {}) {
+export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets; ownerUserId?: string } = {}) {
 const app = Fastify({
   trustProxy: options.worker ? true : false,
   logger: options.worker ? false : {
@@ -210,12 +210,14 @@ app.addHook("onRequest", async (req, reply) => {
   if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
   const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
     /^\/(?:assets|mirror\/assets)\//.test(pathname!) || ["/favicon.ico", "/index.html"].includes(pathname!));
-  if (options.ownerAccountId && !workerPublicAsset && pathname !== "/api/health") {
+  if (options.ownerUserId && !workerPublicAsset && pathname !== "/api/health") {
     if (!requestSessionToken) return reply.code(401).send({ error: { message: "A ChatGPT credential is required", type: "authentication_error" } });
     try {
       const client = new ChatGptBackendClient(await getValidCredentials());
-      await client.fetchMe();
-      if (!client.accountId || client.accountId !== options.ownerAccountId)
+      // Authenticate the current profile's user principal. accountId belongs
+      // to workspace routing and may be absent or cached from an older profile.
+      const profile = await client.fetchMe();
+      if (profile.object !== "user" || typeof profile.id !== "string" || profile.id !== options.ownerUserId)
         return reply.code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error" } });
       sessionBearerAuthenticated = true;
     } catch (error) {

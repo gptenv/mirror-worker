@@ -23,7 +23,7 @@ let initialized = 0;
 mock.module('./helpers/worker-entrypoint-app.mjs', { exports: { buildApp: async (options) => {
   starts++;
   if (shouldFail) { shouldFail = false; throw new Error('fixture startup failure'); }
-  return { ready: async () => {}, server: { fetch: async request => Response.json({ owner: options.ownerAccountId, authorization: request.headers.get('authorization') }) } };
+  return { ready: async () => {}, server: { fetch: async request => Response.json({ owner: options.ownerUserId, authorization: request.headers.get('authorization') }) } };
 } } });
 mock.module('./helpers/worker-entrypoint-store.mjs', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device' } });
 const { MirrorStorage, default: worker } = await import('../dist/cloudflare-worker.js');

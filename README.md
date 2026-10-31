@@ -79,7 +79,7 @@ This starts the server on `127.0.0.1:8787` and the web development server on por
 
 The draft Worker build serves Mirror's HTTP routes and browser assets for one configured ChatGPT owner. The `MIRROR` binding stores that installation's data in one SQLite-backed `MirrorStorage` Durable Object. WebSocket upgrades return HTTP 501. This is not a multi-user hosting model.
 
-Configure `MIRROR_STORE_KEY` and `MIRROR_OWNER_ACCOUNT_ID` as Worker secrets; startup requires both. The key must decode to 32 bytes from base64 or be 64 hex characters. Set the owner ID to `account.account_user_id` from the owner's authenticated ChatGPT `/backend-api/me` response. Keep the key and credentials out of logs and issues. Preserve the exact key for recovery: changing it does not re-encrypt existing metadata or sealed asset tickets.
+Configure `MIRROR_STORE_KEY` and `MIRROR_OWNER_ACCOUNT_ID` as Worker secrets; startup requires both. The key must decode to 32 bytes from base64 or be 64 hex characters. Despite the retained secret name, set the owner value to the top-level `id` (for example, `user-…`) from the owner's authenticated ChatGPT `/backend-api/me` response with `object: "user"`. This is the user principal, not a Sites account-user ID, email, organization, or workspace routing ID. Keep the key and credentials out of logs and issues. Preserve the exact key for recovery: changing it does not re-encrypt existing metadata or sealed asset tickets.
 
 ChatGPT upstream traffic uses the `WARP` Workers VPC Network binding (`cf1:network`), including session exchanges, backend requests, uploads, downloads, and their response streams. This routes Worker egress through the account's Cloudflare Mesh/Gateway network and its existing policies. It does not run a WARP client inside the Worker or change the public browser-to-Worker entry point. Gateway connection failures are reported rather than retried over ordinary Worker egress. Configure the account's Zero Trust network and Gateway policies to allow the required destinations; the binding does not guarantee ChatGPT authentication acceptance. Node deployments continue using their normal fetch transport.
 
@@ -115,7 +115,7 @@ For development with real configured bindings, add the required secrets to `.dev
 | `MIRROR_WEB_ORIGIN` | `http://localhost:5173` | Web origin used for development CORS. |
 | `MIRROR_DATA_DIR` | `.data` (Node only) | Node filesystem directory for the SQLite database and generated key; does not select Durable Object storage. |
 | `MIRROR_STORE_KEY` | generated on Node; required on Workers | 32-byte key (base64 or hex) for encrypted session metadata and sealed asset tickets; does not encrypt transcripts. |
-| `MIRROR_OWNER_ACCOUNT_ID` | required on Workers | Sole allowed ChatGPT `account.account_user_id`; protected Worker requests must authenticate as this owner. |
+| `MIRROR_OWNER_ACCOUNT_ID` | required on Workers | Sole allowed ChatGPT user principal (`id` in authenticated `/me` with `object: "user"`); distinct from workspace routing IDs. |
 | `MIRROR_API_KEY` | unset | First-preference ChatGPT token, forwarded as the upstream authentication cookie for matching configured clients. |
 | `MIRROR_API_KEYS` | unset | Comma-separated accepted tokens; first entry supplies the upstream cookie when `MIRROR_API_KEY` is unset. |
 | `OPENAI_API_KEY` | unset | Last-preference ChatGPT token for the upstream cookie; this is not an OpenAI platform API key. |

@@ -34,7 +34,10 @@ transport, without asserting WARP or ChatGPT connectivity. Protected diagnostics
 require a successful owner identity check, so an upstream authentication or
 network failure can make diagnostics unavailable even when storage is intact.
 The required `MIRROR_OWNER_ACCOUNT_ID` restricts protected requests to one
-ChatGPT account. Public bootstrap, static assets, and health do not establish
+ChatGPT user principal (the authenticated `/me` top-level `id` with
+`object: "user"`), independently of workspace routing IDs. The secret name is
+retained for deployment compatibility; do not set it to an email or organization
+ID. Public bootstrap, static assets, and health do not establish
 owner authentication. Changing the owner secret does not migrate stored data.
 
 ## Application migrations and restart behavior

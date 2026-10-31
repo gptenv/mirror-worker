@@ -42,7 +42,14 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       compatibilityDate: production.compatibility_date, compatibilityFlags: production.compatibility_flags,
       serviceBindings: { BACKEND: async request => {
           upstreamCalls.push(new URL(request.url).pathname);
-          if (request.headers.get('authorization') === 'Bearer other-account') return Response.json({ account: { account_user_id: 'other-account' } });
+          if (new URL(request.url).pathname === '/backend-api/me') {
+            const token = request.headers.get('authorization');
+            if (token === 'Bearer invalid-auth') return new Response('Synthetic invalid credential', { status: 401 });
+            if (token === 'Bearer missing-identity') return Response.json({ account: { account_user_id: 'fixture-owner' } });
+            if (token === 'Bearer malformed-profile') return Response.json({ object: 'user', id: { value: 'fixture-owner' } });
+            return Response.json({ object: 'user', id: token === 'Bearer other-account' ? 'other-user' : 'fixture-owner' });
+          }
+          if (new URL(request.url).pathname === '/api/auth/session') return new Response('Synthetic invalid credential', { status: 401 });
           return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
       } },
       outboundService: () => { throw new Error('Unexpected unbound network access'); },
@@ -70,6 +77,9 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   test('HTTP adapter enforces owner access and saves settings across runtime restart', async () => {
     assert.equal((await request('/api/diagnostics')).status, 401);
     assert.equal((await request('/api/diagnostics', { headers: { authorization: 'Bearer other-account' } })).status, 403);
+    for (const [token, status] of [['missing-identity', 403], ['malformed-profile', 403], ['invalid-auth', 401]]) {
+      assert.equal((await request('/api/diagnostics', { headers: { authorization: `Bearer ${token}` } })).status, status);
+    }
     const session = await request('/api/session', { method: 'POST', headers: owner });
     assert.equal(session.status, 200, await session.text());
     const saved = await request('/api/settings/default-system-instructions', { method: 'PUT', headers: { ...owner, 'content-type': 'application/json' }, body: JSON.stringify({ content: 'Synthetic persisted instruction' }) });
