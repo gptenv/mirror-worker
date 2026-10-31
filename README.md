@@ -4,9 +4,11 @@
 
 Mirror is a self-hosted ChatGPT client and OpenAI-compatible API. Its web interface serves the official ChatGPT application through a local proxy, so conversations and Custom GPTs use your ChatGPT account without an OpenAI API key or browser automation. Mirror also provides a Playground, conversion tools for four file formats, and a REST/SSE API.
 
-> **Unofficial project:** Mirror relies on ChatGPT's private web protocol, which may change without notice. It is designed for local use. See [PROTOCOL.md](PROTOCOL.md) for implementation details and known limitations.
+> **Unofficial project:** Mirror relies on ChatGPT's private web protocol, which may change without notice. This fork includes a draft Cloudflare Worker deployment restricted to one configured ChatGPT owner. See [PROTOCOL.md](PROTOCOL.md) for implementation details and known limitations.
 
-## Quick start
+For the Worker, start with [Cloudflare Worker setup](#deploy-as-a-cloudflare-worker) and [Worker recovery](WORKER-RECOVERY.md). The Docker and Node instructions below describe local installations.
+
+## Local quick start (Docker)
 
 You need Docker and an active ChatGPT account in your browser.
 
@@ -57,7 +59,7 @@ for chunk in response:
 
 Mirror provides `GET /v1/models` and `POST /v1/chat/completions` (streaming and non-streaming). The supported request fields and known differences from OpenAI are documented in [COMPATIBILITY.md](COMPATIBILITY.md). Mirror does not call `api.openai.com`; `OPENAI_API_KEY` is an optional alias for a configured ChatGPT credential.
 
-Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror sends the session token as ChatGPT's `__Secure-next-auth.session-token` cookie on upstream API calls and tries the accessToken as Bearer authentication first. Clients may send their session token separately in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Configured tokens are selected in this order: `MIRROR_API_KEY`, entries in `MIRROR_API_KEYS`, then `OPENAI_API_KEY`. When the inbound Bearer matches a configured token, the first configured token supplies the upstream authentication cookie and access-token fallback. These settings must contain ChatGPT credentials, not an unrelated generated key. Unmatched client-held credentials authenticate independently. Native browser navigation can establish a same-origin control cookie; Worker API requests require an explicit credential.
+Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror sends the session token as ChatGPT's `__Secure-next-auth.session-token` cookie on upstream API calls and tries the accessToken as Bearer authentication first. Clients may send their session token separately in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Configured tokens are selected in this order: `MIRROR_API_KEY`, entries in `MIRROR_API_KEYS`, then `OPENAI_API_KEY`. When the inbound Bearer matches a configured token, the first configured token supplies the upstream authentication cookie and access-token fallback. These settings must contain ChatGPT credentials, not an unrelated generated key. Unmatched client-held credentials authenticate independently and must still resolve to the configured owner on Workers. Native browser navigation can establish a same-origin control cookie in Node installations; Worker APIs require a request credential, with a scoped cookie for native asset downloads.
 
 To configure an upstream credential, set a ChatGPT session token in `.env` as `MIRROR_API_KEY`, or supply it as a Worker secret.
 
@@ -75,19 +77,33 @@ This starts the server on `127.0.0.1:8787` and the web development server on por
 
 ## Deploy as a Cloudflare Worker
 
-The Worker build keeps Mirror's HTTP routes and browser assets, stores its single account's SQLite data in a SQLite-backed Durable Object, and does not proxy WebSockets. Configure the encryption key as a Worker secret; it must be 32 bytes when decoded from base64 or 64 hex characters.
+The draft Worker build serves Mirror's HTTP routes and browser assets for one configured ChatGPT owner. The `MIRROR` binding stores that installation's data in one SQLite-backed `MirrorStorage` Durable Object. WebSocket upgrades return HTTP 501. This is not a multi-user hosting model.
+
+Configure `MIRROR_STORE_KEY` and `MIRROR_OWNER_ACCOUNT_ID` as Worker secrets; startup requires both. The key must decode to 32 bytes from base64 or be 64 hex characters. Set the owner ID to `account.account_user_id` from the owner's authenticated ChatGPT `/backend-api/me` response. Keep the key and credentials out of logs and issues. Preserve the exact key for recovery: changing it does not re-encrypt existing metadata or sealed asset tickets.
 
 ChatGPT upstream traffic uses the `WARP` Workers VPC Network binding (`cf1:network`), including session exchanges, backend requests, uploads, downloads, and their response streams. This routes Worker egress through the account's Cloudflare Mesh/Gateway network and its existing policies. It does not run a WARP client inside the Worker or change the public browser-to-Worker entry point. Gateway connection failures are reported rather than retried over ordinary Worker egress. Configure the account's Zero Trust network and Gateway policies to allow the required destinations; the binding does not guarantee ChatGPT authentication acceptance. Node deployments continue using their normal fetch transport.
 
 ```sh
 npm ci
+npm run typecheck
+npm run test:worker
+npm run coverage
+```
+
+These checks use synthetic upstream fixtures. Before production rollout, complete the [Worker recovery readiness and live acceptance requirements](WORKER-RECOVERY.md). The deployment commands are:
+
+```sh
 npm run build:worker
 npx wrangler secret put MIRROR_STORE_KEY
 npx wrangler secret put MIRROR_OWNER_ACCOUNT_ID
 npx wrangler deploy
 ```
 
-Paste a securely generated key when Wrangler prompts for it. Set `MIRROR_OWNER_ACCOUNT_ID` to the owner's `account.account_user_id` from an authenticated ChatGPT `/backend-api/me` response; never paste the response or its credentials into logs or issues. The Worker fails to start without both settings. To run locally, add them to `.dev.vars` and run `npm run dev:worker`. Set `MIRROR_API_KEY`, `MIRROR_API_KEYS`, or `OPENAI_API_KEY` as Worker secrets to configure upstream ChatGPT credentials. The Worker stores conversations and settings in its Durable Object; `MIRROR_STORE_KEY` encrypts stored app data and account metadata. Protected requests are checked against ChatGPT's `/me` endpoint and must resolve to the configured owner account; an unavailable identity check fails closed. Public browser bootstrap and static assets remain accessible. The check adds an upstream request to protected operations, and the owner ID must be updated if the account identity changes.
+Paste a securely generated key when Wrangler prompts. `MIRROR_API_KEY`, `MIRROR_API_KEYS`, and `OPENAI_API_KEY` are optional Worker secrets for configured upstream ChatGPT credentials. Protected requests are checked against ChatGPT's `/me` endpoint and must resolve to the configured owner; an unavailable identity check fails closed, including for stored-history routes. Browser bootstrap, static assets, and `/api/health` are public. Changing the owner secret is not a data migration; review existing data ownership before any owner change.
+
+For development with real configured bindings, add the required secrets to `.dev.vars` and run `npm run dev:worker`. The checked-in Wrangler configuration marks `WARP` as a remote binding, so this command is distinct from the isolated synthetic `test:worker` acceptance harness.
+
+`GET /api/health` reports local database liveness. A successful response does not prove upstream connectivity. Owner-authenticated `GET /api/diagnostics` reports the persisted `storage.schemaVersion`; Worker version 1 is stored in `mirror_schema`, separately from Wrangler's namespace migration tag. Egress reports `mode: "warp-vpc"`, `verified: false`, and `checkedAt: null` until a real check is implemented. Model discovery and generation require separate live acceptance evidence. See [WORKER-RECOVERY.md](WORKER-RECOVERY.md) for migration failure handling, restart behavior, and the current production restore gap.
 
 ## Configuration
 
@@ -97,8 +113,9 @@ Paste a securely generated key when Wrangler prompts for it. Set `MIRROR_OWNER_A
 | `HOST` | `127.0.0.1` | Bind address for a direct, non-Compose run. |
 | `PORT` | `8787` | Port for a direct, non-Compose run. |
 | `MIRROR_WEB_ORIGIN` | `http://localhost:5173` | Web origin used for development CORS. |
-| `MIRROR_DATA_DIR` | `.data` | Directory for the SQLite database and generated encryption key. |
-| `MIRROR_STORE_KEY` | generated | Optional 32-byte key (base64 or hex) for encrypting stored app data and account metadata. |
+| `MIRROR_DATA_DIR` | `.data` (Node only) | Node filesystem directory for the SQLite database and generated key; does not select Durable Object storage. |
+| `MIRROR_STORE_KEY` | generated on Node; required on Workers | 32-byte key (base64 or hex) for encrypted session metadata and sealed asset tickets; does not encrypt transcripts. |
+| `MIRROR_OWNER_ACCOUNT_ID` | required on Workers | Sole allowed ChatGPT `account.account_user_id`; protected Worker requests must authenticate as this owner. |
 | `MIRROR_API_KEY` | unset | First-preference ChatGPT token, forwarded as the upstream authentication cookie for matching configured clients. |
 | `MIRROR_API_KEYS` | unset | Comma-separated accepted tokens; first entry supplies the upstream cookie when `MIRROR_API_KEY` is unset. |
 | `OPENAI_API_KEY` | unset | Last-preference ChatGPT token for the upstream cookie; this is not an OpenAI platform API key. |
@@ -107,11 +124,15 @@ Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. Worker bindings a
 
 ## Security and data
 
-Mirror binds to loopback by default and rejects non-loopback hosts. It is not designed for remote or multi-user deployment. A remote deployment would require additional authentication, TLS, CSRF defenses, and a security review.
+Node installations bind to loopback by default and normally reject non-loopback hosts. The draft Worker instead serves its configured public HTTPS endpoint and checks protected requests against its single configured ChatGPT owner. Public bootstrap, assets, and local health do not grant access to protected history or generation. Neither deployment mode provides multi-user tenant isolation.
 
-The browser stores the accessToken and, when available, the sessionToken in local storage. It builds Authorization from the stored accessToken, overriding any Authorization value supplied by application code. It sends the stored sessionToken separately so the Worker can exchange it only after an upstream auth denial. A cookie scoped to `/api/asset-content` supports native browser downloads. The Worker holds request-supplied tokens only while handling requests and does not persist them in its database. Optional configured credentials persist as Worker secrets. Older encrypted server-side session copies are removed when the store initializes. Conversation text, instructions, and events are stored locally without encryption. Request logs redact both credential headers, but should still be treated as sensitive.
+The browser stores the accessToken and, when available, the sessionToken in local storage for the Mirror origin. Same-origin API calls use the current stored credentials; a different API origin uses the separately supplied key rather than the Mirror browser credentials. A cookie scoped to `/api/asset-content` supports native browser downloads. The Worker handles request-supplied tokens in memory and does not persist them in its database. Optional configured credentials persist as Worker secrets. Startup removes older stored session/access credentials while retaining valid account metadata. Device metadata may be stored before an explicit session save.
 
-Backups may contain plaintext conversations and instructions, plus the generated master key. Protect the complete backup and retain a supplied `MIRROR_STORE_KEY` separately. Example maintenance commands:
+`MIRROR_STORE_KEY` encrypts the session metadata setting and seals asset tickets. Conversation text, instructions, events, and most other settings are not encrypted by the application, whether stored in the Node database or the Durable Object. Node request logs redact credential and cookie headers; the Worker's Fastify request logger is disabled. Treat diagnostics, exports, and any platform logs as sensitive.
+
+Worker persistence survives object restarts, but Mirror has no Durable Object backup/restore CLI or operator endpoint. Local workerd tests and Node restore drills do not prove production point-in-time recovery. Follow [WORKER-RECOVERY.md](WORKER-RECOVERY.md) for the remaining platform recovery rehearsal and key-retention requirements.
+
+For **Node filesystem installations only**, backups may contain plaintext conversations and instructions, plus the generated master key. Protect the complete backup and retain a supplied `MIRROR_STORE_KEY` separately. Example maintenance commands:
 
 ```sh
 npm run storage -- backup /absolute/path/to/backup
@@ -120,7 +141,7 @@ MIRROR_DATA_DIR=/absolute/path/to/new-data npm run storage -- restore /absolute/
 npm run storage -- prune 90 --offline
 ```
 
-Restore does not overwrite an existing database. Pruning deletes local conversations older than the selected age; it does not affect ChatGPT history or revoke credentials. See [RELEASE-RECOVERY.md](RELEASE-RECOVERY.md) for schema compatibility and restore procedures.
+The Node restore command does not overwrite an existing database. Pruning deletes local conversations older than the selected age; it does not affect ChatGPT history or revoke credentials. See [RELEASE-RECOVERY.md](RELEASE-RECOVERY.md) for Node schema compatibility and filesystem restore procedures.
 
 ## Development and tests
 
@@ -147,7 +168,8 @@ Mirror provides local control routes, conversion routes, decoder-challenge route
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/health` | Health, configuration, and egress status |
+| `GET /api/health` | Public local database liveness and configured, unverified egress |
+| `GET /api/diagnostics` | Owner-authenticated Worker diagnostics, including persisted storage schema version |
 | `POST /api/session` | Verify the browser-supplied ChatGPT session token and save non-secret account metadata |
 | `GET` / `DELETE /api/session` | Inspect or clear saved account metadata |
 | `/api/conversations/*` | Create, list, load, branch, stop, and delete conversations |
@@ -161,5 +183,6 @@ Mirror provides local control routes, conversion routes, decoder-challenge route
 
 - [PROTOCOL.md](PROTOCOL.md): ChatGPT protocol implementation, known gaps, and open questions.
 - [COMPATIBILITY.md](COMPATIBILITY.md): OpenAI API compatibility details.
+- [WORKER-RECOVERY.md](WORKER-RECOVERY.md): Worker migrations, recovery readiness, and local-versus-live acceptance limits.
 - [TODO.md](TODO.md): issue-level project backlog.
 - [NEXT-STEPS.md](NEXT-STEPS.md): repository audit roadmap.

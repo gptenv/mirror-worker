@@ -18,8 +18,10 @@ SQLite namespace; it is separate from the application schema version.
 
 Retain the exact `MIRROR_STORE_KEY` in secure secret storage outside the
 database. Retain the owner account configuration and required bindings too.
-The key decrypts persisted account metadata; the database cannot recreate a
-lost key. Transcript text is not encrypted by this application. Do not put
+The key decrypts persisted account metadata and seals asset tickets; the
+database cannot recreate a lost key. Replacing the secret does not re-encrypt
+existing metadata or tickets. Transcript text, instructions, events, and most
+settings are not encrypted by this application. Do not put
 keys, tokens, or database contents into logs or issue reports. Request-held
 ChatGPT credentials are not a database recovery mechanism: clients must
 authenticate again after recovery.
@@ -31,6 +33,9 @@ response format. `/api/health` checks local database liveness. Egress fields
 transport, without asserting WARP or ChatGPT connectivity. Protected diagnostics
 require a successful owner identity check, so an upstream authentication or
 network failure can make diagnostics unavailable even when storage is intact.
+The required `MIRROR_OWNER_ACCOUNT_ID` restricts protected requests to one
+ChatGPT account. Public bootstrap, static assets, and health do not establish
+owner authentication. Changing the owner secret does not migrate stored data.
 
 ## Application migrations and restart behavior
 
