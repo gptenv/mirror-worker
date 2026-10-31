@@ -98,6 +98,9 @@ export async function fetchWithAccessTokenFallback(
   init = { ...init, headers: requestHeaders };
   const first = await upstreamFetch(input, init);
   if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
+  // Once refresh is selected this response is discarded, even if minting
+  // fails. Release it before the exchange and retain the exchange diagnostic.
+  await first.body?.cancel().catch(() => {});
   const minted = await mintAccessTokenShared(credentials.sessionToken).catch((error) => {
     if (error && typeof error === "object") {
       Object.assign(error, {
@@ -119,6 +122,5 @@ export async function fetchWithAccessTokenFallback(
   const otherCookies = (headers.get("cookie") ?? "").split(";").map(value => value.trim())
     .filter(value => value && !value.startsWith("__Secure-next-auth.session-token="));
   headers.set("cookie", [...otherCookies, credentials.cookie].join("; "));
-  await first.body?.cancel().catch(() => {});
   return upstreamFetch(input, { ...init, headers });
 }

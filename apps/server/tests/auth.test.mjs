@@ -99,6 +99,43 @@ test.describe("server / auth", () => {
       assert.equal(await auth.getRotatedRequestSessionToken(), 'rotated');
     }, 'old-session');
   });
+  for (const mode of ["unavailable", "invalid", "transport"]) test(`failed ${mode} session exchange releases the denied response without replacing its error`, async t => {
+    let cancelled = 0;
+    let cancelledBeforeExchange = false;
+    const upstreamBody = JSON.stringify({ error: mode === "invalid" ? "invalid token" : "fixture exchange unavailable" });
+    const transportError = new Error("fixture exchange transport failed");
+    t.mock.method(globalThis, "fetch", async input => {
+      if (new URL(String(input)).pathname === "/api/auth/session") {
+        cancelledBeforeExchange = cancelled === 1;
+        if (mode === "transport") throw transportError;
+        return new Response(upstreamBody, { status: mode === "invalid" ? 401 : 503, headers: { "content-type": "application/json" } });
+      }
+      return new Response(new ReadableStream({
+        cancel() {
+          cancelled++;
+          // A failed cleanup must not replace the useful upstream diagnostic.
+          if (mode === "unavailable") throw new Error("fixture cancellation failed");
+        },
+      }), { status: 401 });
+    });
+    await auth.runWithRequestSessionToken("fixture-expired", async () => {
+      const credentials = await auth.getValidCredentials();
+      await assert.rejects(auth.fetchWithAccessTokenFallback("https://chatgpt.com/backend-api/me", {}, credentials), error => {
+        if (mode === "transport") assert.equal(error, transportError);
+        else {
+          assert.equal(error.statusCode, mode === "invalid" ? 401 : 503);
+          assert.equal(error.upstreamResponseText, upstreamBody);
+        }
+        assert.equal(error.tokenLengths.accessToken.received, "fixture-expired".length);
+        assert.equal(error.tokenLengths.sessionToken.received, `fixture-session-${mode}`.length);
+        return true;
+      });
+      assert.equal(cancelled, 1);
+      assert.equal(cancelledBeforeExchange, true);
+      assert.equal(await auth.getRotatedRequestAccessToken(), undefined);
+      assert.equal(await auth.getRotatedRequestSessionToken(), undefined);
+    }, `fixture-session-${mode}`, []);
+  });
   test("session exchange works when a caller supplied no initial cookie", async t => {
     let calls = 0;
     t.mock.method(globalThis, "fetch", async input => {
