@@ -604,4 +604,43 @@ test("first-turn asset-pointer image parts remain visible", () => {
   const message = reducer.drainEvents().find(event => event.kind === "message");
   assert.equal(message.displayHidden, undefined);
 });
+
+test("frame budgets apply per frame across chunks, including unterminated frames", () => {
+  const decoder = new SseFrameDecoder(8);
+  assert.deepEqual(decoder.push("data: x\r"), []);
+  assert.deepEqual(decoder.push("\n\r\ndata: y\n\n"), ["data: x", "data: y"]);
+  assert.deepEqual(decoder.push("12345678"), []);
+  assert.deepEqual(decoder.finish(), ["12345678"]);
+  assert.throws(() => new SseFrameDecoder(8).push("123456789"), /frame exceeds resource limit/);
+  assert.throws(() => new SseFrameDecoder(8).push("123456789\n\n"), /frame exceeds resource limit/);
+  // UTF-16 accounting is explicit: emoji occupies two code units.
+  assert.deepEqual(new SseFrameDecoder(2).push("🙂\n\n"), ["🙂"]);
+  assert.throws(() => new SseFrameDecoder(1).push("🙂"), /resource limit/);
+});
+
+test("normalized event budgets include drained snapshots and fail without truncation", () => {
+  const payload = JSON.stringify({ example: "🙂" });
+  const expected = { kind: "raw", raw: { example: "🙂" } };
+  const size = JSON.stringify(expected).length;
+  const reducer = new ConversationStreamReducer({ maxEventChars: size });
+  reducer.feed(payload);
+  assert.deepEqual(reducer.drainEvents(), [expected]);
+  assert.throws(() => reducer.feed(payload), /events exceed resource limit/);
+  assert.deepEqual(reducer.drainEvents(), []);
+  assert.equal(reducer.isDone, false);
+});
+
+
+for (const [payload, expected] of [
+  [{ error_code: "synthetic_code" }, "synthetic_code"],
+  [{ error: "synthetic_string" }, "synthetic_string"],
+  [{ error: { message: "synthetic_object" } }, '{"message":"synthetic_object"}'],
+  [{ type: "error" }, "upstream_error"],
+]) test(`upstream error event preserves ${expected}`, () => {
+  const reducer = new ConversationStreamReducer();
+  reducer.feed(JSON.stringify(payload));
+  assert.equal(reducer.error, expected);
+  assert.equal(reducer.isDone, false);
+});
+
 });

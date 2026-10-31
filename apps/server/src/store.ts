@@ -1,4 +1,4 @@
-import { migrateDatabase } from "./schema.js";
+import { migrateDatabase, migrateWorkerDatabase, workerDatabaseSchemaVersion } from "./schema.js";
 import { wrapDurableSql, wrapNodeDatabase, type DurableSqlStorage, type SqliteDatabase } from "./worker-sql.js";
 import { resolveDataDirectory } from "./storage-config.js";
 import {
@@ -62,38 +62,7 @@ let encryptionKey: Buffer;
 
 function initializeDurableSchema(storage: DurableSqlStorage): void {
   db = wrapDurableSql(storage);
-  storage.sql.exec(`
-    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS conversations (
-      id TEXT PRIMARY KEY, account_id TEXT NOT NULL DEFAULT 'default', upstream_id TEXT,
-      current_node_id TEXT NOT NULL, model TEXT NOT NULL, gizmo_id TEXT, title TEXT NOT NULL,
-      initialized INTEGER NOT NULL DEFAULT 0, init_json TEXT, is_private INTEGER NOT NULL DEFAULT 0,
-      is_branch INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS conversations_updated_idx ON conversations(account_id, updated_at DESC);
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-      upstream_node_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL,
-      events_json TEXT NOT NULL DEFAULT '[]', attachments_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
-    CREATE TABLE IF NOT EXISTS openai_contexts (
-      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-      instructions_hash TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS openai_transcripts (
-      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
-      account_id TEXT NOT NULL, transcript_hash TEXT NOT NULL, updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS openai_transcripts_hash_idx ON openai_transcripts(account_id, transcript_hash);
-    CREATE TABLE IF NOT EXISTS conversation_instructions (
-      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, messages_json TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY, account_id TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL
-    );
-  `);
+  migrateWorkerDatabase(db);
   storage.sql.exec("UPDATE messages SET status = 'interrupted' WHERE status = 'streaming'");
 }
 
@@ -141,9 +110,10 @@ if (!cloudflareRuntime) {
 
 export function initializeWorkerStore(storage: DurableSqlStorage, configuredKey?: string): void {
   if (!cloudflareRuntime) throw new Error("Worker storage can only be initialized in the Workers runtime");
-  initializeDurableSchema(storage);
   if (!configuredKey) throw new Error("MIRROR_STORE_KEY secret is required for Worker deployments");
-  encryptionKey = decodeConfiguredKey(configuredKey);
+  const key = decodeConfiguredKey(configuredKey);
+  initializeDurableSchema(storage);
+  encryptionKey = key;
   removeStoredSessionCredentials();
 }
 
@@ -215,6 +185,12 @@ if (!cloudflareRuntime) {
   removeStoredSessionCredentials();
   const storedAccountId = getSession()?.accountId;
   if (storedAccountId) claimDefaultAccountData(storedAccountId);
+}
+
+/** Read the persisted version, rather than reporting the binary's target version. */
+export function storedDatabaseSchemaVersion(): number {
+  if (cloudflareRuntime) return workerDatabaseSchemaVersion(db);
+  return (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 }
 
 export function databaseHealthy(): boolean {

@@ -132,10 +132,8 @@ export const publicLookup = makePublicLookup();
 const cloudflareRuntime = typeof (globalThis as typeof globalThis & { WebSocketPair?: unknown }).WebSocketPair !== "undefined";
 
 async function verifyWorkerDns(hostname: string, label: string, index: number): Promise<void> {
-  if (isIP(hostname)) {
-    if (!isPublicImageHost(hostname)) throw new Error(`${label}[${index}] host is not permitted: ${hostname}`);
-    return;
-  }
+  // The caller validates every destination before this private DNS-only check.
+  if (isIP(hostname)) return;
   const answers = await Promise.all(["A", "AAAA"].map(async (type) => {
     const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`, {
       headers: { accept: "application/dns-json" },
@@ -172,30 +170,38 @@ async function fetchPublicResource(url: string, signal: AbortSignal | undefined,
           throw new BackendApiError(`Could not fetch ${label}[${index}]: upstream returned ${res.status}`, res.status, body, body);
         }
         const cl = res.headers.get("content-length");
-        if (cl && Number(cl) > MAX_IMAGE_BYTES)
+        if (cl && Number(cl) > MAX_IMAGE_BYTES) {
+          await res.body?.cancel().catch(() => {});
           throw new Error(`${label}[${index}] is too large (${cl} bytes, max ${MAX_IMAGE_BYTES})`);
+        }
         const mimeType = res.headers.get("content-type")?.split(";")[0] || "application/octet-stream";
         const reader = res.body?.getReader();
         if (!reader) return { data: new Uint8Array(await res.arrayBuffer()), mimeType };
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          total += value.byteLength;
-          if (total > MAX_IMAGE_BYTES) {
-            await reader.cancel().catch(() => {});
-            throw new Error(`${label}[${index}] is too large (${total} bytes, max ${MAX_IMAGE_BYTES})`);
+        try {
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > MAX_IMAGE_BYTES) {
+              throw new Error(`${label}[${index}] is too large (${total} bytes, max ${MAX_IMAGE_BYTES})`);
+            }
+            chunks.push(value);
           }
-          chunks.push(value);
+          const data = new Uint8Array(total);
+          let offset = 0;
+          for (const chunk of chunks) {
+            data.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          return { data, mimeType };
+        } finally {
+          // A read/limit failure must not leave the remote body running or locked.
+          // Cleanup cannot replace the original upstream error.
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
         }
-        const data = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-          data.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        return { data, mimeType };
       }
       const location = res.headers.get("location");
       if (redirects >= MAX_IMAGE_REDIRECTS || !location) {

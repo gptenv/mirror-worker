@@ -43,6 +43,11 @@ function browserFixture({ request, response, dom = null, executeDom = false, got
 }
 
 test.describe("protocol / turnstile", () => {
+test("Worker runtime does not launch a browser challenge", async () => {
+  globalThis.WebSocketPair = class {};
+  try { assert.equal(await solveTurnstileWithBrowser(), null); }
+  finally { delete globalThis.WebSocketPair; }
+});
 test("turnstile resolution ignores absent and already-aborted challenges", async () => {
   assert.equal(await resolveTurnstileToken({ required: false, overrideToken: "unused" }), null);
   const controller = new AbortController();

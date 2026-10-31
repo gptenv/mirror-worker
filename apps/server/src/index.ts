@@ -94,12 +94,12 @@ function sessionAuthenticationError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+function sessionTokenLengthDiagnostics(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   const sent = (error as { tokenLengths?: { accessToken?: { sentUpstream?: number }; sessionToken?: { sentUpstream?: number } } })?.tokenLengths;
   return {
     received: {
-      sessionToken: fallbackSessionToken?.length ?? bearer?.length ?? null,
-      accessToken: bearer?.length ?? null,
+      sessionToken: fallbackSessionToken?.length ?? bearer.length,
+      accessToken: bearer.length,
     },
     sent_upstream: {
       sessionToken: sent?.sessionToken?.sentUpstream ?? null,
@@ -108,7 +108,7 @@ function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefine
   };
 }
 
-function sessionAuthenticationErrorBody(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+function sessionAuthenticationErrorBody(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   return {
     error: {
       message: sessionAuthenticationError(error),
@@ -122,7 +122,7 @@ export interface WorkerAssets {
   fetch(request: Request): Promise<Response>;
 }
 
-export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets } = {}) {
+export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets; ownerAccountId?: string } = {}) {
 const app = Fastify({
   trustProxy: options.worker ? true : false,
   logger: options.worker ? false : {
@@ -208,7 +208,21 @@ app.addHook("onRequest", async (req, reply) => {
   const requestSessionToken = bearer || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
   if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
-  if (requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
+  const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
+    /^\/(?:assets|mirror\/assets)\//.test(pathname!) || ["/favicon.ico", "/index.html"].includes(pathname!));
+  if (options.ownerAccountId && !workerPublicAsset && pathname !== "/api/health") {
+    if (!requestSessionToken) return reply.code(401).send({ error: { message: "A ChatGPT credential is required", type: "authentication_error" } });
+    try {
+      const client = new ChatGptBackendClient(await getValidCredentials());
+      await client.fetchMe();
+      if (!client.accountId || client.accountId !== options.ownerAccountId)
+        return reply.code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error" } });
+      sessionBearerAuthenticated = true;
+    } catch (error) {
+      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+    }
+  }
+  if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
     // Validate the browser bearer against ChatGPT. The backend client tries it
     // directly as an accessToken and exchanges the client-held sessionToken
     // only after an upstream authentication denial.
@@ -264,17 +278,7 @@ app.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.url === "/api/health" || req.url.startsWith("/mirror/assets/")) return;
-  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey && !upstreamAuthenticates) {
-    try {
-      const credentials = await getValidCredentials();
-      await new ChatGptBackendClient(credentials).fetchMe();
-      sessionBearerAuthenticated = true;
-    } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
-        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
-      );
-    }
-  }
+  // Credential validation above either authenticated this request or returned its error.
   if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && !(upstreamAuthenticates && requestSessionToken)) {
     return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT accessToken or sessionToken as the Bearer credential", type: "authentication_error" } });
   }
@@ -342,18 +346,19 @@ app.setErrorHandler((error, req, reply) => {
 });
 
 app.get("/api/health", async () => ({
-  ok:
-    databaseHealthy() &&
-    (!getEgressStatus().required || getEgressStatus().verified),
+  // Local liveness is separate from upstream connectivity, which is unverified.
+  ok: databaseHealthy(),
   storage: "sqlite",
   configured: Boolean(getSession()),
   egress: getEgressStatus(),
 }));
 
 app.post("/api/session", async (req, reply) => {
+  const revision = getSessionRevision();
   const credentials = await getValidCredentials();
   const client = new ChatGptBackendClient(credentials);
   const me = await client.fetchMe();
+  assertSessionRevision(revision);
   saveVerifiedSession(
     client.accountId ?? undefined,
     credentials.deviceId,
@@ -604,7 +609,8 @@ app.post("/api/chat", async (req, reply) => {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  reply.raw.socket?.setNoDelay(true);
+  // HTTP adapters may expose a socket-like stream without TCP-specific methods.
+  reply.raw.socket?.setNoDelay?.(true);
   const send = (event: string, data: unknown) =>
     reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
@@ -739,7 +745,7 @@ app.setNotFoundHandler(async (req, reply) => {
   // Every Mirror-owned /api route is registered above. Any remaining route may
   // belong to the official ChatGPT frontend and must be proxied upstream.
   if (req.url.startsWith("/v1/"))
-    return reply.code(404).send({ error: "Not found" });
+    return reply.code(404).send(apiError(404, "The requested resource was not found.", req.id));
   return proxyChatGpt(req, reply);
 });
 

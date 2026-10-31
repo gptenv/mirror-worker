@@ -1,7 +1,7 @@
 import './dom-setup.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mirrorFetch } from '../src/client-auth.js';
+import { mirrorFetch, readStoredBearer, readStoredSessionToken, storeAccessToken, endpointOrigin, endpointHeaders, downloadAuthenticated } from '../src/client-auth.js';
 
 test.describe('web / client-auth', () => {
   test.afterEach(() => { test.mock.restoreAll(); localStorage.clear(); });
@@ -54,6 +54,23 @@ test.describe('web / client-auth', () => {
     assert.equal(localStorage.getItem('mirror_session_token'),'rotated-session');
     assert.equal(localStorage.getItem('mirror_access_token'),'access');
   });
+  test('delayed rotations cannot restore cleared credentials or overwrite a newer bearer or session', async () => {
+    for (const change of ['clear', 'bearer', 'session', 'other-response']) {
+      localStorage.setItem('mirror_access_token', 'old-access');
+      localStorage.setItem('mirror_session_token', 'old-session');
+      let release!: (response: Response) => void;
+      test.mock.method(globalThis, 'fetch', () => new Promise<Response>(resolve => { release = resolve; }));
+      const request = mirrorFetch('/api/diagnostics');
+      if (change === 'clear') localStorage.clear();
+      if (change === 'bearer') localStorage.setItem('mirror_access_token', 'new-access');
+      if (change === 'session') localStorage.setItem('mirror_session_token', 'new-session');
+      if (change === 'other-response') storeAccessToken('new-access', 'old-access', 'new-session');
+      const current = [readStoredBearer(), readStoredSessionToken()];
+      release(Response.json({}, { headers: { 'x-mirror-access-token': 'stale-access', 'x-mirror-session-token': 'stale-session' } }));
+      assert.equal((await request).status, 200);
+      assert.deepEqual([readStoredBearer(), readStoredSessionToken()], current, change);
+    }
+  });
   test('Request inputs keep their method/body and non-auth headers', async () => {
     localStorage.setItem('mirror_access_token','access');
     const input=new Request(location.origin+'/api/settings/hotkeys',{method:'PUT',body:'{}',headers:{'content-type':'application/json'}});
@@ -75,4 +92,81 @@ test.describe('web / client-auth', () => {
     });
     await mirrorFetch('https://unrelated.example/file');
   });
+  test('rotated access credentials preserve a prior session for fallback', async () => {
+    storeAccessToken('new-access', 'old-session');
+    assert.equal(readStoredBearer(), 'new-access');
+    assert.equal(readStoredSessionToken(), 'old-session');
+  });
+  test('empty storage strips the session header and saves a rotated session', async () => {
+    test.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(new Headers(init?.headers).get('x-mirror-session-token'), null);
+      return Response.json({}, { headers: { 'x-mirror-session-token': 'new-session' } });
+    });
+    await mirrorFetch('/api/health', { headers: { 'x-mirror-session-token': 'stale' } });
+    assert.equal(readStoredSessionToken(), 'new-session');
+  });
+  test('a storage failure does not prevent a response from being returned', async () => {
+    test.mock.method(Storage.prototype, 'getItem', () => { throw new Error('unavailable'); });
+    test.mock.method(Storage.prototype, 'setItem', () => { throw new Error('unavailable'); });
+    test.mock.method(globalThis, 'fetch', async () => Response.json({ ok: true }, { headers: { 'x-mirror-access-token': 'rotated' } }));
+    assert.equal(readStoredBearer(), '');
+    assert.equal(readStoredSessionToken(), '');
+    assert.equal((await mirrorFetch('/api/health')).status, 200);
+  });
+  test('endpoint parsing and headers isolate external credentials', () => {
+    localStorage.setItem('mirror_access_token', 'owner');
+    localStorage.setItem('mirror_session_token', 'session');
+    for (const value of ['not a url', 'javascript:alert(1)', 'https://user:pass@external.example']) assert.equal(endpointOrigin(value), null);
+    assert.throws(() => endpointHeaders('invalid'), /valid HTTP/);
+    assert.equal(endpointHeaders(location.origin).get('authorization'), 'Bearer owner');
+    assert.equal(endpointHeaders(location.origin).get('x-mirror-session-token'), 'session');
+    assert.equal(endpointHeaders('https://external.example', 'external').get('authorization'), 'Bearer external');
+    assert.equal(endpointHeaders('https://external.example', 'external').get('x-mirror-session-token'), null);
+    assert.equal(endpointHeaders('https://external.example').get('authorization'), null);
+  });
+  test('external Request credentials and hostile rotations cannot leak or replace owner tokens', async () => {
+    localStorage.setItem('mirror_access_token', 'owner');
+    localStorage.setItem('mirror_session_token', 'session');
+    test.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(new Headers(init?.headers).get('authorization'), null);
+      assert.equal(new Headers(init?.headers).get('x-mirror-session-token'), null);
+      assert.equal(init?.credentials, 'omit');
+      assert.equal(init?.redirect, 'error');
+      return Response.json({}, { headers: { 'x-mirror-access-token': 'hostile', 'x-mirror-session-token': 'hostile-session' } });
+    });
+    await mirrorFetch(new Request('https://external.example', { headers: { authorization: 'bearer  owner ', 'x-mirror-session-token': 'session' } }));
+    assert.equal(readStoredBearer(), 'owner');
+    assert.equal(readStoredSessionToken(), 'session');
+  });
+  test('authenticated downloads fetch blobs and release temporary URLs', async () => {
+    localStorage.setItem('mirror_access_token', 'owner');
+    test.mock.method(globalThis, 'fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer owner');
+      assert.equal(init?.redirect, 'error');
+      return new Response('archive');
+    });
+    let clicked = false;
+    let revoked = '';
+    test.mock.method(URL, 'createObjectURL', () => 'blob:archive');
+    test.mock.method(URL, 'revokeObjectURL', value => { revoked = value; });
+    test.mock.method(window.HTMLAnchorElement.prototype, 'click', function(this: HTMLAnchorElement) {
+      clicked = true; assert.equal(this.download, 'archive.json'); assert.equal(this.href, 'blob:archive');
+    });
+    test.mock.method(globalThis, 'setTimeout', ((callback: () => void) => { callback(); return 0; }) as typeof setTimeout);
+    await downloadAuthenticated('/api/conversations/test/export', 'archive.json');
+    assert.equal(clicked, true);
+    assert.equal(revoked, 'blob:archive');
+    assert.equal(document.querySelector('a[download]'), null);
+    await assert.rejects(downloadAuthenticated('https://external.example', 'nope'), /this Mirror origin/);
+    test.mock.method(globalThis, 'fetch', async () => new Response('denied', { status: 401 }));
+    await assert.rejects(downloadAuthenticated('/api/diagnostics', 'nope'), /denied/);
+  });
+
+  test('HTTPS rotation without a session uses the access token for secure asset cookies', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'location')!;
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: new URL('https://worker.example') });
+    try { storeAccessToken('access-only'); assert.equal(readStoredBearer(), 'access-only'); }
+    finally { Object.defineProperty(globalThis, 'location', descriptor); }
+  });
+
 });

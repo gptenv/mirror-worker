@@ -57,7 +57,7 @@ import {
 const TextPart = z
   .object({ type: z.literal("text"), text: z.string() })
   .strict()
-  .openapi({ description: "Plain text content part." });
+  .meta({ description: "Plain text content part." });
 /**
  * Official OpenAI vision content part. `url` accepts a data: URI (uploaded
  * inline, the common case for API callers) or an https URL (fetched
@@ -73,7 +73,7 @@ const ImageUrlPart = z
     type: z.literal("image_url"),
     image_url: z
       .object({
-        url: z.string().openapi({
+        url: z.string().meta({
           description:
             "A data: URI (uploaded inline) or an https:// URL (fetched server-side). " +
             "Mirror uploads the resolved image to ChatGPT's file service before sending " +
@@ -82,7 +82,7 @@ const ImageUrlPart = z
         detail: z
           .enum(["auto", "low", "high"])
           .optional()
-          .openapi({
+          .meta({
             description:
               "Accepted for OpenAI shape-compatibility but has no backend-api equivalent " +
               "(no client-selectable vision resolution tier exists upstream); parsed and ignored.",
@@ -91,7 +91,7 @@ const ImageUrlPart = z
       .strict(),
   })
   .strict()
-  .openapi({
+  .meta({
     description:
       "Vision input content part. See COMPATIBILITY.md for how this maps onto ChatGPT's " +
       "own file-upload flow.",
@@ -110,28 +110,28 @@ const FilePart = z
     type: z.literal("file"),
     file: z
       .object({
-        file_data: z.string().openapi({
+        file_data: z.string().meta({
           description:
             "A data: URI (uploaded inline) or an https:// URL, containing the file's bytes. " +
             "Mirror uploads the resolved file to ChatGPT's file service before sending the turn.",
         }),
-        filename: z.string().optional().openapi({
+        filename: z.string().optional().meta({
           description: "Original filename; its extension determines the server-side MIME type. Unknown or absent extensions use application/octet-stream. Defaults to attachment-<index>.",
         }),
       })
       .strict(),
   })
   .strict()
-  .openapi({
+  .meta({
     description:
       "Filename-bearing file attachment content part for images, PDFs, Markdown, text files, spreadsheets, etc. " +
       "MIME type is selected from the filename extension, without content sniffing. " +
       "See COMPATIBILITY.md.",
   });
-const ContentPart = z.union([TextPart, ImageUrlPart, FilePart]).openapi({ ref: "ContentPart" });
+const ContentPart = z.union([TextPart, ImageUrlPart, FilePart]).meta({ id: "ContentPart" });
 const OpenAiMessage = z
   .object({
-    role: z.enum(["system", "developer", "user", "assistant", "tool"]).openapi({
+    role: z.enum(["system", "developer", "user", "assistant", "tool"]).meta({
       description:
         "'tool' messages are client-executed function results. See COMPATIBILITY.md for the prompt-based tool schema behavior.",
     }),
@@ -144,15 +144,15 @@ const OpenAiMessage = z
     }).strict()).optional(),
   })
   .passthrough()
-  .openapi({ ref: "ChatMessage" });
+  .meta({ id: "ChatMessage" });
 const CompletionBody = z
   .object({
-    model: z.string().default("auto").openapi({
+    model: z.string().default("auto").meta({
       description: "A ChatGPT model slug, or a Custom GPT/Project id from GET /v1/models.",
       example: "gpt-4o",
     }),
     messages: z.array(OpenAiMessage).min(1),
-    tools: z.array(z.unknown()).optional().openapi({
+    tools: z.array(z.unknown()).optional().meta({
       description: "Optional client-provided tool schemas. Mirror includes non-empty entries in the current prompt and returns compatible tool_calls for the client to execute.",
     }),
     tool_choice: z.union([z.enum(["none", "auto", "required"]), z.object({
@@ -162,7 +162,7 @@ const CompletionBody = z
     stream: z.boolean().default(true),
     stream_options: z.object({ include_usage: z.boolean().optional() }).strict().optional(),
     reasoning_effort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]).optional(),
-    temperature: z.number().min(0).max(2).nullable().optional().openapi({
+    temperature: z.number().min(0).max(2).nullable().optional().meta({
       description: "Accepted for client compatibility; ignored. ChatGPT's web backend controls sampling and does not expose a temperature setting.",
     }),
     /**
@@ -175,13 +175,13 @@ const CompletionBody = z
     store: z.boolean().default(true),
     // Compatibility-only fields: some clients always send these. Mirror never
     // truncates the answer or stops generation based on them.
-    max_tokens: z.number().int().positive().optional().openapi({
+    max_tokens: z.number().int().positive().optional().meta({
       description: "Accepted for client compatibility; ignored. Mirror returns the complete answer without a token or character cap.",
     }),
-    max_completion_tokens: z.number().int().positive().optional().openapi({
+    max_completion_tokens: z.number().int().positive().optional().meta({
       description: "Accepted for client compatibility; ignored. Mirror does not limit response length.",
     }),
-    stop: z.union([z.string(), z.array(z.string().min(1)).min(1).max(4)]).optional().openapi({
+    stop: z.union([z.string(), z.array(z.string().min(1)).min(1).max(4)]).optional().meta({
       description: "Accepted for client compatibility; ignored. Mirror does not truncate answers at stop strings.",
     }),
     /**
@@ -265,21 +265,21 @@ const CompletionBody = z
      */
     metadata: z
       .object({
-        private: z.enum(["true", "false"]).optional().openapi({
+        private: z.enum(["true", "false"]).optional().meta({
           description: "Request ChatGPT's temporary/incognito chat mode for this turn.",
         }),
-        mirror_model: z.string().min(1).optional().openapi({
+        mirror_model: z.string().min(1).optional().meta({
           description:
             "Override the effective ChatGPT model slug independent of the model field " +
             "(e.g. picking a Project's underlying model).",
         }),
-        conversation_id: z.string().min(1).max(200).optional().openapi({
+        conversation_id: z.string().min(1).max(200).optional().meta({
           description: "Continue an existing Mirror conversation by id.",
         }),
-        mirror_turnstile_token: z.string().min(1).optional().openapi({
+        mirror_turnstile_token: z.string().min(1).optional().meta({
           description: "Alias of turnstile_token below.",
         }),
-        turnstile_token: z.string().min(1).optional().openapi({
+        turnstile_token: z.string().min(1).optional().meta({
           description:
             "Caller-supplied Cloudflare Turnstile response token, used when Sentinel " +
             "requires one. Tokens are used only for this request and never persisted. " +
@@ -288,7 +288,7 @@ const CompletionBody = z
       })
       .catchall(z.string())
       .optional()
-      .openapi({
+      .meta({
         description:
           "Officially a flat request-only string map in the real OpenAI API; Mirror " +
           "repurposes it (bidirectionally - the response carries its own mirror_tool_events/" +
@@ -298,8 +298,8 @@ const CompletionBody = z
       }),
   })
   .strict()
-  .openapi({
-    ref: "CompletionRequest",
+  .meta({
+    id: "CompletionRequest",
     description:
       "OpenAI Chat Completions-shaped request, backed by chatgpt.com/backend-api. " +
       "Unsupported fields are rejected (400) rather than silently ignored.",
@@ -491,8 +491,8 @@ export async function registerOpenAiRoutes(
   app.get("/v1/models", async () => {
     const creds = await getValidCredentials();
     const client = new ChatGptBackendClient(creds);
-    const [models, projectsRaw, gptsRaw] = await Promise.all([
-      normalizeModels(await client.fetchModels()),
+    const [modelsRaw, projectsRaw, gptsRaw] = await Promise.all([
+      client.fetchModels(),
       client
         .fetchGizmoSidebar({
           ownedOnly: false,
@@ -501,6 +501,7 @@ export async function registerOpenAiRoutes(
         }),
       client.fetchGizmoBootstrap({ limit: 20 }),
     ]);
+    const models = normalizeModels(modelsRaw);
     const seen = new Set<string>();
     const gizmos = [
       ...normalizeGizmos(gptsRaw),

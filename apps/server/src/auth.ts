@@ -26,7 +26,9 @@ export function setRequestSessionToken(token: string, sessionToken?: string): vo
 }
 
 export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T, sessionToken?: string, configuredTokens?: string[]): T {
-  return token || configuredTokens?.length ? requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback) : callback();
+  // Anonymous requests need a boundary too: never inherit an enclosing
+  // request's bearer, configured credentials, or rotated token state.
+  return requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback);
 }
 
 /** Compatibility name retained for existing call sites; this is now the client-held bearer. */
@@ -48,16 +50,16 @@ export async function getValidCredentials(): Promise<SessionCredentials> {
   const configuredToken = !request?.bearerToken || tokenMatches(request.bearerToken, configuredTokens)
     ? configuredTokens[0] : undefined;
   const accessToken = configuredToken || request?.bearerToken;
-  const sessionToken = configuredToken || request?.sessionToken || request?.bearerToken;
   if (!accessToken) {
     const err = new Error("Supply a ChatGPT accessToken or sessionToken as a Bearer credential.");
     (err as any).statusCode = 401;
     throw err;
   }
+  const sessionToken = configuredToken || request?.sessionToken || accessToken;
   const credentials = () => Promise.resolve({
     accessToken,
     sessionToken,
-    ...(sessionToken ? { cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}` } : {}),
+    cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`,
     deviceId: getOrCreateDeviceId(),
   });
   if (!request) return credentials();
@@ -71,7 +73,7 @@ export async function getRotatedRequestAccessToken(): Promise<string | undefined
   const request = requestAuthentication.getStore();
   if (!request?.credentials) return undefined;
   const credentials = await request.credentials;
-  return credentials.accessToken !== (request.initialAccessToken ?? request.bearerToken) ? credentials.accessToken : undefined;
+  return credentials.accessToken !== request.initialAccessToken ? credentials.accessToken : undefined;
 }
 
 export async function getRotatedRequestSessionToken(): Promise<string | undefined> {
@@ -96,6 +98,9 @@ export async function fetchWithAccessTokenFallback(
   init = { ...init, headers: requestHeaders };
   const first = await upstreamFetch(input, init);
   if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
+  // Once refresh is selected this response is discarded, even if minting
+  // fails. Release it before the exchange and retain the exchange diagnostic.
+  await first.body?.cancel().catch(() => {});
   const minted = await mintAccessTokenShared(credentials.sessionToken).catch((error) => {
     if (error && typeof error === "object") {
       Object.assign(error, {
@@ -114,7 +119,8 @@ export async function fetchWithAccessTokenFallback(
   credentials.cookie = `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || credentials.sessionToken)}`;
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${minted.accessToken}`);
-  headers.set("cookie", credentials.cookie);
-  await first.body?.cancel().catch(() => {});
+  const otherCookies = (headers.get("cookie") ?? "").split(";").map(value => value.trim())
+    .filter(value => value && !value.startsWith("__Secure-next-auth.session-token="));
+  headers.set("cookie", [...otherCookies, credentials.cookie].join("; "));
   return upstreamFetch(input, { ...init, headers });
 }

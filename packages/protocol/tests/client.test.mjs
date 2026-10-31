@@ -5,6 +5,7 @@ import {
   ChatGptConversationSession,
   BackendApiError,
   newDeviceId,
+  MAX_CONVERSATION_STREAM_BYTES,
 } from "../dist/index.js";
 
 function fakeCreds() {
@@ -48,6 +49,50 @@ test("tries the stored accessToken first and exchanges the saved sessionToken on
     assert.equal(creds.accessToken, "minted-access");
     assert.equal(creds.rotatedSessionToken, "rotated-session");
   }));
+
+for (const outcome of ["success", "mint rejection", "retry rejection"]) {
+  test(`discards the denied response before credential refresh: ${outcome}`, async () => {
+    let cancelled = 0;
+    let attempts = 0;
+    const retryFailure = new Error("synthetic retry transport failure");
+    const denied = new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("denied")); },
+      // Even failed cleanup must preserve the refresh/retry result.
+      cancel() { cancelled++; throw new Error("synthetic cancellation failure"); },
+    });
+    await withFetch(async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === "/api/auth/session") {
+        assert.equal(cancelled, 1, "release the abandoned response before minting");
+        return outcome === "mint rejection"
+          ? new Response("exact synthetic mint failure", { status: 503 })
+          : Response.json({ accessToken: "refreshed-access" });
+      }
+      assert.equal(pathname, "/backend-api/me");
+      if (++attempts === 1) return new Response(denied, { status: 401 });
+      if (outcome === "retry rejection") throw retryFailure;
+      return Response.json({ account: { account_user_id: "synthetic-owner" } });
+    }, async () => {
+      const client = new ChatGptBackendClient({ ...fakeCreds(), sessionToken: "synthetic-session" });
+      if (outcome === "mint rejection") {
+        await assert.rejects(client.fetchMe(), error => {
+          assert.equal(error.upstreamResponseText, "exact synthetic mint failure");
+          assert.equal(error.statusCode, 503);
+          assert.equal(error.tokenLengths.sessionToken.sentUpstream, "synthetic-session".length);
+          return true;
+        });
+      } else if (outcome === "retry rejection") {
+        await assert.rejects(client.fetchMe(), error => error === retryFailure);
+      } else {
+        await client.fetchMe();
+        assert.equal(client.accountId, "synthetic-owner");
+      }
+    });
+    assert.equal(cancelled, 1);
+    assert.equal(denied.locked, false);
+    assert.equal(attempts, outcome === "mint rejection" ? 1 : 2);
+  });
+}
 
 test("preserves the exact session endpoint error body and reports only token lengths", () =>
   withFetch(async (input, init = {}) => {
@@ -896,4 +941,108 @@ test("sentinelHandshake uses client.turnstileSolver callback", () =>
       assert.equal(result.text, "hi");
     },
   ));
+
+for (const mode of ["pending read", "before reading", "event callback", "delta callback", "cancel rejection"]) {
+test(`abort cancels the reader even when the transport ignores the signal: ${mode}`, async () => {
+  const abort = new AbortController();
+  const reason = new DOMException("Synthetic downstream disconnected", "AbortError");
+  const partial = Promise.withResolvers();
+  let source;
+  let cancelled = 0;
+  let cancelReason;
+  let stream;
+  let deltas = 0;
+  await withFetch(async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith("/prepare")) return Response.json({});
+    if (pathname.endsWith("/finalize")) return Response.json({ token: "fixture" });
+    stream = new ReadableStream({
+      start(controller) {
+        source = controller;
+        controller.enqueue(new TextEncoder().encode('data: {"p":"","o":"add","v":{"message":{"id":"partial","author":{"role":"assistant"},"content":{"parts":["partial answer"]}}}}\n\n'));
+      },
+      cancel(value) {
+        cancelled++;
+        cancelReason = value;
+        if (mode === "cancel rejection") throw new Error("Synthetic cancellation failure");
+      },
+    });
+    if (mode === "before reading") abort.abort(reason);
+    return new Response(stream);
+  }, async () => {
+    const settled = new ChatGptBackendClient(fakeCreds()).sendMessage({
+      model: "auto", prompt: "hello", signal: abort.signal,
+      onEvent: () => {
+        if (mode === "event callback") { partial.resolve(); abort.abort(reason); }
+      },
+      onDelta: () => {
+        deltas++;
+        partial.resolve();
+        if (mode === "delta callback") abort.abort(reason);
+      },
+    }).then(result => ({ result }), error => ({ error }));
+    try {
+      if (mode !== "before reading") await partial.promise;
+      await new Promise(resolve => setImmediate(resolve));
+      abort.abort(reason);
+      assert.equal(cancelled, 1, "an idle upstream must be cancelled without waiting for another chunk");
+      assert.equal(cancelReason, reason);
+      assert.equal((await settled).error, reason);
+      assert.equal(stream.locked, false);
+      assert.equal(deltas, ["before reading", "event callback"].includes(mode) ? 0 : 1);
+    } finally {
+      if (!cancelled) source.close();
+      await settled;
+    }
+  });
+});
+}
+
+for (const mode of ["event callback", "delta callback", "success", "frame limit", "wire limit", "read failure"]) {
+  test(`sendMessage cleans up the response reader after ${mode}`, async () => {
+    let cancelled = 0;
+    let stream;
+    const failure = new Error("synthetic callback failure");
+    const payload = 'data: {"p":"","o":"add","v":{"message":{"id":"answer","author":{"role":"assistant"},"content":{"parts":["hi"]}}}}\n\n';
+    await withFetch(async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/prepare")) return Response.json({});
+      if (pathname.endsWith("/finalize")) return Response.json({ token: "fixture" });
+      stream = new ReadableStream({
+        start(controller) {
+          if (mode === "read failure") { controller.error(failure); return; }
+          const text = mode === "frame limit" ? "x".repeat(1024 * 1024 + 1)
+            : mode === "wire limit" ? "x".repeat(MAX_CONVERSATION_STREAM_BYTES + 1)
+            : payload + (mode === "success" ? "data: [DONE]\n\n" : "");
+          controller.enqueue(new TextEncoder().encode(text));
+          // Deliberately leave open: releasing the lock alone is not cleanup.
+        },
+        cancel() { cancelled++; throw new Error("synthetic cancel failure"); },
+      });
+      return new Response(stream);
+    }, async () => {
+      const options = { model: "auto", prompt: "hello",
+        onEvent: () => { if (mode === "event callback") throw failure; },
+        onDelta: () => { if (mode === "delta callback") throw failure; },
+      };
+      const result = new ChatGptBackendClient(fakeCreds()).sendMessage(options);
+      if (mode === "success") assert.equal((await result).text, "hi");
+      else if (mode.endsWith("limit")) await assert.rejects(result, /exceeds resource limit/);
+      else await assert.rejects(result, error => error === failure);
+    });
+    assert.equal(stream.locked, false);
+    // An already errored stream has nothing left for its source to cancel.
+    assert.equal(cancelled, mode === "read failure" ? 0 : 1);
+  });
+}
+
+
+for (const method of ["get", "post"]) test(`successful HTTP ${method} with an error envelope is an upstream failure`, async () => {
+  await withFetch(async () => Response.json({ error: "synthetic upstream failure" }), async () => {
+    const client = new ChatGptBackendClient(fakeCreds());
+    await assert.rejects(method === "get" ? client.fetchModels() : client.initConversation({ timezone: "UTC", timezoneOffsetMin: 0 }),
+      error => error instanceof BackendApiError && error.status === 502);
+  });
+});
+
 });

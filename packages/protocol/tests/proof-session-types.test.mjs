@@ -6,6 +6,7 @@ import {
   generateProofTokenAsync,
   generateProofTokenInWorker,
   mintAccessToken,
+  mintAccessTokenShared,
   SessionExchangeError,
   SessionTokenInvalidError,
   BackendApiError,
@@ -13,6 +14,42 @@ import {
 } from "../dist/index.js";
 
 test.describe("protocol / proof-session-types", () => {
+test("Worker proof generation uses the asynchronous path and honors cancellation", async () => {
+  globalThis.WebSocketPair = class {};
+  try {
+    assert.match(await generateProofTokenInWorker({ required: true, seed: "fixture", difficulty: "f" }), /^gAAAAAB/);
+    await assert.rejects(generateProofTokenInWorker({ required: true, seed: "fixture", difficulty: "f" }, AbortSignal.abort()), { name: "AbortError" });
+  } finally { delete globalThis.WebSocketPair; }
+});
+test("session exchange preserves challenge responses and identifies JSON token rejection", async t => {
+  t.mock.method(globalThis, "fetch", async () => new Response("just a moment", { status: 403, headers: { "content-type": "text/html", "cf-ray": "fixture-ray" } }));
+  await assert.rejects(mintAccessToken("fixture"), error => error instanceof SessionExchangeError && error.statusCode === 403 && error.upstreamResponseText === "just a moment");
+  t.mock.restoreAll();
+  t.mock.method(globalThis, "fetch", async () => new Response('{"error":"invalid token"}', { status: 403, headers: { "content-type": "application/json" } }));
+  await assert.rejects(mintAccessToken("fixture"), SessionTokenInvalidError);
+  t.mock.restoreAll();
+  t.mock.method(globalThis, "fetch", async () => new Response("not JSON", { status: 200 }));
+  await assert.rejects(mintAccessToken("fixture"), SessionTokenInvalidError);
+});
+test("concurrent exchanges share only an in-flight request", async t => {
+  const gate = Promise.withResolvers();
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; await gate.promise; return Response.json({ accessToken: "fixture-access" }); });
+  const first = mintAccessTokenShared("fixture-session");
+  const second = mintAccessTokenShared("fixture-session");
+  assert.equal(first, second);
+  gate.resolve();
+  assert.equal((await first).accessToken, "fixture-access");
+  await mintAccessTokenShared("fixture-session");
+  assert.equal(calls, 2);
+});
+test("unreadable exchange bodies are classified without hiding the status", async t => {
+  for (const status of [200, 503]) {
+    t.mock.method(globalThis, "fetch", async () => ({ ok: status === 200, status, headers: new Headers(), text: async () => { throw new Error("unreadable"); } }));
+    await assert.rejects(mintAccessToken("fixture"), status === 200 ? SessionTokenInvalidError : SessionExchangeError);
+    t.mock.restoreAll();
+  }
+});
 test("explicit proof configurations are copied, including their attempt counter", async () => {
   const config = [1, "date", null, 99, null, "url", "deploy", "en", "en-US", null, "plugins", "react", "event"];
   for (const generate of [generateProofToken, generateProofTokenAsync]) {

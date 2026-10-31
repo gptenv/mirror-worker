@@ -21,8 +21,8 @@
     "mdast-util-from-markdown": "^2.0.2",
     "undici": "^7.29.1",
     "yaml": "^2.9.0",
-    "zod": "^3.25.76",
-    "zod-openapi": "^4.2.4"
+    "zod": "^4.6.7",
+    "zod-openapi": "^6.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",

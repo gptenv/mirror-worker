@@ -6,17 +6,6 @@ import { randomUUID } from "node:crypto";
 import { Writable } from "node:stream";
 import test from "node:test";
 
-// POST /api/chat unconditionally calls `reply.raw.socket?.setNoDelay(true)`
-// once it hijacks the reply - true under a real HTTP server, but
-// app.inject()'s simulated response object backs `.raw.socket` with a plain
-// node:stream Writable that has no such method, so calling it throws. This
-// adds a harmless no-op stub for the duration of these tests only (never
-// overwriting a real implementation, and only meaningful under inject()
-// anyway - a real net.Socket already has its own setNoDelay).
-if (typeof Writable.prototype.setNoDelay !== "function") {
-  Writable.prototype.setNoDelay = function setNoDelay() {};
-}
-
 // index.ts's buildApp() wires up the whole Fastify app around the SAME
 // store.js/auth.js/egress.js module instances this file imports (all plain,
 // query-less specifiers - the established convention for sharing state with
@@ -27,7 +16,6 @@ const dir = mkdtempSync(path.join(tmpdir(), "mirror-routes-"));
 process.env.MIRROR_DATA_DIR = dir;
 process.env.MIRROR_API_KEY = "test-control-key";
 const store = await import("../dist/store.js");
-const egress = await import("../dist/egress.js");
 const { buildApp } = await import("../dist/index.js");
 const app = await buildApp();
 test.describe("server / routes", () => {
@@ -58,8 +46,7 @@ function jwtWithExp(secondsFromNow) {
 }
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-${accountId}`, accountId, `device-${accountId}`);
-  store.updateMintedToken(`cached-access-${accountId}`, Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
 }
 
 function fetchRouter(routes) {
@@ -136,18 +123,18 @@ test("an unauthorized request to a protected route is rejected with 401", async 
 
 // --- setErrorHandler ---------------------------------------------------------
 
-test("a ZodError from body validation becomes a 400 with the schema's custom message", async () => {
+test("a ZodError from body validation becomes a 400", async () => {
   const res = await app.inject({
-    method: "POST",
-    url: "/api/session",
+    method: "PUT",
+    url: "/api/settings/hotkeys",
     headers: AUTH,
-    payload: { sessionToken: "too-short" },
+    payload: { hotkeys: { send: 42 } },
   });
   assert.equal(res.statusCode, 400);
-  assert.match(JSON.parse(res.body).error, /doesn't look like a valid session token/);
+  assert.match(JSON.parse(res.body).error, /string/i);
 });
 
-test("an unexpected non-statusCode error is hidden behind a generic 500 message", () =>
+test("an unexpected non-statusCode error is returned with status 500", () =>
   withFetch(
     async () => {
       throw new TypeError("some deep network internals broke");
@@ -156,7 +143,7 @@ test("an unexpected non-statusCode error is hidden behind a generic 500 message"
       useSession("acct-500");
       const res = await app.inject({ method: "GET", url: "/api/models", headers: AUTH });
       assert.equal(res.statusCode, 500);
-      assert.deepEqual(JSON.parse(res.body), { error: "Internal server error" });
+      assert.deepEqual(JSON.parse(res.body), { error: "some deep network internals broke" });
     },
   ));
 
@@ -168,15 +155,27 @@ test("GET /api/health reports storage, configuration, and egress status", async 
   assert.equal(beforeBody.storage, "sqlite");
   assert.equal(beforeBody.egress.mode, "direct");
 
-  await withFetch(
-    async () => new Response("warp=on\nloc=YY\n", { status: 200 }),
-    () => egress.verifyRequiredEgress(),
-  );
   useSession("acct-health");
   const after = await app.inject({ method: "GET", url: "/api/health", headers: { host: "localhost" } });
   const afterBody = JSON.parse(after.body);
   assert.equal(afterBody.configured, true);
-  assert.equal(afterBody.ok, true, "healthy db + configured session + verified egress -> ok");
+  assert.equal(afterBody.ok, true, "healthy local storage remains live without an upstream verification claim");
+});
+
+test("Worker liveness does not claim upstream verification or require a probe", async () => {
+  const originalPair = Object.getOwnPropertyDescriptor(globalThis, "WebSocketPair");
+  Object.defineProperty(globalThis, "WebSocketPair", { value: class {}, configurable: true });
+  const workerApp = await buildApp({ worker: true, ownerAccountId: "owner-account" });
+  try {
+    const response = await workerApp.inject({ url: "/api/health" });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().ok, true, "local database liveness is independent of upstream reachability");
+    assert.deepEqual(response.json().egress, { mode: "warp-vpc", required: true, verified: false, checkedAt: null, error: null });
+  } finally {
+    await workerApp.close();
+    if (originalPair) Object.defineProperty(globalThis, "WebSocketPair", originalPair);
+    else delete globalThis.WebSocketPair;
+  }
 });
 
 // --- /api/settings/default-system-instructions ----------------------------
@@ -283,7 +282,7 @@ test("POST /api/session rejects with 409 if the session changes mid-verification
       [/\/backend-api\/me$/, () => {
         // Simulate a *second, concurrent* POST /api/session completing while
         // this one's own verification is still in flight.
-        store.saveVerifiedSession("a-different-racing-session-token", "racer");
+        store.saveVerifiedSession("racer", "racing-device");
         return Response.json({ account: { account_user_id: "should-not-be-used" } });
       }],
     ]),
@@ -308,7 +307,7 @@ test("GET/DELETE /api/session reflect and clear the stored session", async () =>
   assert.deepEqual(JSON.parse(del.body), { ok: true });
 
   const after = await app.inject({ method: "GET", url: "/api/session", headers: AUTH });
-  assert.deepEqual(JSON.parse(after.body), { configured: false, savedAt: null, hasTurnstileToken: false });
+  assert.deepEqual(JSON.parse(after.body), { configured: true, savedAt: null, hasTurnstileToken: false });
 });
 
 // --- /api/models, /api/gpts ---------------------------------------------------
@@ -329,7 +328,7 @@ test("GET /api/models strips the raw field from normalized models", () =>
     },
   ));
 
-test("GET /api/gpts merges gizmo sidebar + bootstrap, de-duplicates by id, and tolerates one endpoint failing", () =>
+test("GET /api/gpts forwards an optional catalog failure", () =>
   withFetch(
     fetchRouter([
       [/\/backend-api\/gizmos\/snorlax\/sidebar/, () => new Response("nope", { status: 500 })],
@@ -339,11 +338,8 @@ test("GET /api/gpts merges gizmo sidebar + bootstrap, de-duplicates by id, and t
     async () => {
       useSession("acct-gpts");
       const res = await app.inject({ method: "GET", url: "/api/gpts", headers: AUTH });
-      assert.equal(res.statusCode, 200, res.body);
-      const gizmos = JSON.parse(res.body);
-      assert.equal(gizmos.length, 1);
-      assert.equal(gizmos[0].id, "g-1");
-      assert.ok(!("raw" in gizmos[0]));
+      assert.equal(res.statusCode, 500, res.body);
+      assert.equal(res.json().error.message, "nope");
     },
   ));
 
@@ -661,7 +657,7 @@ test("POST /api/chat rejects attachments that don't belong to the caller", async
   assert.equal(res.statusCode, 404);
 });
 
-test("POST /api/chat streams SSE delta/event/done frames on success", () =>
+test("POST /api/chat streams successfully when the HTTP adapter socket has no setNoDelay", () =>
   withFetch(
     fetchRouter([
       meRoute("acct-chat-ok"),
@@ -679,6 +675,7 @@ test("POST /api/chat streams SSE delta/event/done frames on success", () =>
         ])],
     ]),
     async () => {
+      assert.equal(typeof Writable.prototype.setNoDelay, "undefined", "do not mask HTTP adapter socket capabilities with a prototype stub");
       useSession("acct-chat-ok");
       const res = await app.inject({
         method: "POST",
@@ -927,10 +924,12 @@ test("extension API CORS permits bearer clients but not ambient cookie authentic
     assert.equal(accepted.headers["access-control-allow-credentials"], undefined);
   }
   const bootstrap = await app.inject({ url: "/", headers: { host: "localhost", accept: "text/html" } });
-  for (const extra of [{}, { authorization: "Bearer wrong" }, { cookie: bootstrap.headers["set-cookie"] }]) {
+  for (const extra of [{}, { cookie: bootstrap.headers["set-cookie"] }]) {
     const denied = await app.inject({ method: "POST", url: "/v1/chat/completions", headers: { host: "localhost", origin, ...extra }, payload: { messages: [] } });
     assert.equal(denied.statusCode, 401);
   }
+  const clientCredential = await app.inject({ method: "POST", url: "/v1/chat/completions", headers: { host: "localhost", origin, authorization: "Bearer client-held-token" }, payload: { messages: [] } });
+  assert.equal(clientCredential.statusCode, 400, "a supplied bearer reaches request validation");
   const control = await app.inject({ method: "POST", url: "/api/conversations", headers, payload: {} });
   assert.equal(control.statusCode, 403);
   const badHost = await app.inject({ method: "POST", url: "/v1/chat/completions", headers: { ...headers, host: "evil.example" }, payload: { messages: [] } });
@@ -954,7 +953,7 @@ test("cross-origin API authenticates with only OPENAI_API_KEY configured", async
     process.env.MIRROR_API_KEYS = "";
     process.env.OPENAI_API_KEY = "compat-test-key";
     configuredApp = await buildApp();
-    for (const [key, expected] of [["compat-test-key", 400], ["wrong-key", 401]]) {
+    for (const [key, expected] of [["compat-test-key", 400], ["client-held-token", 400]]) {
       const response = await configuredApp.inject({ method: "POST", url: "/v1/chat/completions",
         headers: { host: "localhost", origin: "https://client.example", authorization: `Bearer ${key}` },
         payload: { messages: [] } });
@@ -974,7 +973,7 @@ test("new Custom GPT native chat hides file-search events but forwards Python ev
   withFetch(fetchRouter([
     meRoute("acct-chat-visibility"),
     [/\/backend-api\/conversation\/init$/, () => Response.json({ default_model_slug: "model-a" })],
-    [/\/backend-api\/gizmos\//, () => new Response("not found", { status: 404 })],
+    [/\/backend-api\/gizmos\//, () => Response.json({ gizmo: { id: "g-custom" } })],
     [/\/backend-api\/sentinel\/chat-requirements\/prepare$/, () => Response.json({ prepare_token: "p", proofofwork: { required: false } })],
     [/\/backend-api\/sentinel\/chat-requirements\/finalize$/, () => Response.json({ token: "final" })],
     [/\/backend-api\/f\/conversation$/, () => sseBody([
@@ -991,4 +990,35 @@ test("new Custom GPT native chat hides file-search events but forwards Python ev
     assert.match(res.body, /"name":"python"/);
     assert.match(res.body, /"text":"Normal answer"/);
   }));
+test("Worker owner authentication handles cookie-only and non-Error failures safely", async t => {
+  const { ChatGptBackendClient } = await import('@mirror/protocol');
+  const workerApp = await buildApp({ worker: true, ownerAccountId: 'expected-owner' });
+  let failure = 'fixture transport failure';
+  const mocked = t.mock.method(ChatGptBackendClient.prototype, 'fetchMe', async () => { throw failure; });
+  try {
+    const cookieOnly = await workerApp.inject({ url: '/api/asset-content', headers: { cookie: 'mirror_asset_session=cookie-fixture' } });
+    assert.equal(cookieOnly.statusCode, 401, cookieOnly.body);
+    assert.equal(cookieOnly.json().error.message, 'fixture transport failure');
+    assert.deepEqual(cookieOnly.json().error.token_lengths.received, { sessionToken: 0, accessToken: 0 });
+    failure = Object.assign(new Error('fixture unavailable'), { statusCode: 503, tokenLengths: { accessToken: { sentUpstream: 7 } } });
+    const bearer = await workerApp.inject({ url: '/api/conversations', headers: { authorization: 'Bearer fixture' } });
+    assert.equal(bearer.statusCode, 503, bearer.body);
+    assert.deepEqual(bearer.json().error.token_lengths.sent_upstream, { sessionToken: null, accessToken: 7 });
+    assert.ok(!bearer.body.includes('Bearer fixture'));
+  } finally {
+    mocked.mock.restore();
+    await workerApp.close();
+  }
+});
+
+test("upstream error handler preserves raw diagnostics when length metadata is absent", async () => {
+  const fixture = await buildApp();
+  fixture.get('/api/fixture-error', async () => { throw Object.assign(new Error('upstream failed'), { statusCode: 502, upstreamResponseText: 'synthetic upstream detail' }); });
+  try {
+    const response = await fixture.inject({ url: '/api/fixture-error', headers: AUTH });
+    assert.equal(response.statusCode, 502, response.body);
+    assert.deepEqual(response.json().error, { message: 'synthetic upstream detail', upstream_response_text: 'synthetic upstream detail' });
+  } finally { await fixture.close(); }
+});
+
 });

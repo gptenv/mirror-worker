@@ -28,6 +28,8 @@ import { isAccessDeniedResponse, mintAccessTokenShared } from "./session.js";
 
 const ORIGIN = "https://chatgpt.com";
 const BASE_URL = `${ORIGIN}/backend-api`;
+/** Bounds both raw diagnostics and input to the reducer; never truncate a turn. */
+export const MAX_CONVERSATION_STREAM_BYTES = 8 * 1024 * 1024;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
@@ -45,12 +47,13 @@ function safeJson(text: string): unknown {
 
 function attachTokenLengths(error: unknown, accessToken: string, sessionToken: string | null | undefined, sessionExchangeAttempted: boolean): void {
   if (error === null || typeof error !== "object") return;
+  const sessionTokenLength = sessionToken?.length ?? null;
   Object.assign(error, {
     tokenLengths: {
       accessToken: { received: accessToken.length, sentUpstream: accessToken.length },
       sessionToken: {
-        received: sessionToken?.length ?? null,
-        sentUpstream: sessionExchangeAttempted ? sessionToken?.length ?? null : null,
+        received: sessionTokenLength,
+        sentUpstream: sessionExchangeAttempted ? sessionTokenLength : null,
       },
     },
   });
@@ -198,6 +201,9 @@ export class ChatGptBackendClient {
       throw error;
     }
     if (this.creds.sessionToken && await isAccessDeniedResponse(res)) {
+      // This response is abandoned even if minting or the retry fails. Release
+      // its body before refresh; cleanup must not replace upstream diagnostics.
+      await res.body?.cancel().catch(() => undefined);
       this.lastTokenLengths.sessionToken.sentUpstream = this.creds.sessionToken.length;
       let minted;
       try {
@@ -681,7 +687,8 @@ export class ChatGptBackendClient {
    * Never forward that authentication to a CDN or an arbitrary redirect target. */
   async fetchAssetContent(downloadUrl: string, signal?: AbortSignal): Promise<Response> {
     let url = new URL(downloadUrl);
-    for (let redirects = 0; redirects <= 3; redirects++) {
+    let redirects = 0;
+    while (true) {
       const estuary = url.origin === ORIGIN && url.pathname === "/backend-api/estuary/content";
       const cdn = url.hostname.endsWith(".oaiusercontent.com") || url.hostname === "oaiusercontent.com" || url.hostname.endsWith(".blob.core.windows.net");
       if (url.protocol !== "https:" || url.username || url.password || url.port || (!estuary && !cdn))
@@ -692,14 +699,13 @@ export class ChatGptBackendClient {
       });
       if (![301, 302, 303, 307, 308].includes(res.status)) return res;
       const location = res.headers.get("location");
-      if (!location || redirects === 3) {
+      if (!location || redirects++ === 3) {
         const body = await res.text();
         throw new BackendApiError(!location ? "Asset redirect has no destination" : "Too many asset redirects", 502, body, body);
       }
       await res.body?.cancel();
       url = new URL(location, url);
     }
-    throw new BackendApiError("Too many asset redirects");
   }
 
   private buildUserMessage(
@@ -835,22 +841,36 @@ export class ChatGptBackendClient {
     const decoder = new TextDecoder();
     const frames = new SseFrameDecoder();
     const upstreamBody: string[] = [];
+    let upstreamBytes = 0;
+    const cancelOnAbort = () => {
+      // Service-bound fetch adapters may leave a pending read alive after their
+      // request signal aborts. Cancel the reader directly to release that read.
+      void reader.cancel(opts.signal?.reason).catch(() => undefined);
+    };
 
     const deliver = () => {
       const events = reducer.drainEvents();
       for (const event of events) {
+        opts.signal?.throwIfAborted();
         allEvents.push(event);
         opts.onEvent?.(event);
+        opts.signal?.throwIfAborted();
         if (event.kind === "assistant_text" && event.delta) {
           opts.onDelta?.(event.delta, event.text);
         }
       }
     };
 
+    opts.signal?.addEventListener("abort", cancelOnAbort, { once: true });
     try {
+      opts.signal?.throwIfAborted();
       while (true) {
         const { done, value } = await reader.read();
+        opts.signal?.throwIfAborted();
         if (done) break;
+        upstreamBytes += value.byteLength;
+        if (upstreamBytes > MAX_CONVERSATION_STREAM_BYTES)
+          throw new Error("Conversation stream exceeds resource limit");
         const text = decoder.decode(value, { stream: true });
         upstreamBody.push(text);
         for (const chunk of frames.push(text)) {
@@ -860,10 +880,14 @@ export class ChatGptBackendClient {
             if (reducer.isDone && !reducer.error) break;
           }
         }
+        opts.signal?.throwIfAborted();
         if (reducer.isDone && !reducer.error) break;
       }
     } finally {
-      if (reducer.isDone && !reducer.error) await reader.cancel().catch(() => undefined);
+      opts.signal?.removeEventListener("abort", cancelOnAbort);
+      // Callback failures (including downstream writes) must stop upstream
+      // production too. Cancellation failure must not replace the real error.
+      await reader.cancel(opts.signal?.reason).catch(() => undefined);
       reader.releaseLock();
     }
 
@@ -879,6 +903,7 @@ export class ChatGptBackendClient {
       }
     }
     deliver();
+    opts.signal?.throwIfAborted();
 
     if (reducer.error) {
       const body = upstreamBody.join("");
