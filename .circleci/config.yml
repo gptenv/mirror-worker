@@ -25,6 +25,7 @@ jobs:
     steps:
       - checkout
       - run: npm ci
+      - run: npm run test:worker
       - run: npm run typecheck
       - run: npm run coverage
       - run: npm run build

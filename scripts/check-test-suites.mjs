@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 import ts from "typescript";
 
-const roots = ["apps/server/tests", "apps/web/tests", "packages/protocol/tests", "tests/browser"];
+const roots = ["apps/server/tests", "apps/web/tests", "packages/protocol/tests", "tests/browser", "tests/worker"];
 const testFilePattern = /\.(?:test|spec)\.(?:[cm]?js|tsx?)$/;
 
 function testFiles(directory) {
