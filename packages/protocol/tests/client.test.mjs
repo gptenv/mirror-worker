@@ -5,6 +5,7 @@ import {
   ChatGptConversationSession,
   BackendApiError,
   newDeviceId,
+  MAX_CONVERSATION_STREAM_BYTES,
 } from "../dist/index.js";
 
 function fakeCreds() {
@@ -896,4 +897,52 @@ test("sentinelHandshake uses client.turnstileSolver callback", () =>
       assert.equal(result.text, "hi");
     },
   ));
+
+for (const mode of ["event callback", "delta callback", "success", "frame limit", "wire limit", "read failure"]) {
+  test(`sendMessage cleans up the response reader after ${mode}`, async () => {
+    let cancelled = 0;
+    let stream;
+    const failure = new Error("synthetic callback failure");
+    const payload = 'data: {"p":"","o":"add","v":{"message":{"id":"answer","author":{"role":"assistant"},"content":{"parts":["hi"]}}}}\n\n';
+    await withFetch(async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith("/prepare")) return Response.json({});
+      if (pathname.endsWith("/finalize")) return Response.json({ token: "fixture" });
+      stream = new ReadableStream({
+        start(controller) {
+          if (mode === "read failure") { controller.error(failure); return; }
+          const text = mode === "frame limit" ? "x".repeat(1024 * 1024 + 1)
+            : mode === "wire limit" ? "x".repeat(MAX_CONVERSATION_STREAM_BYTES + 1)
+            : payload + (mode === "success" ? "data: [DONE]\n\n" : "");
+          controller.enqueue(new TextEncoder().encode(text));
+          // Deliberately leave open: releasing the lock alone is not cleanup.
+        },
+        cancel() { cancelled++; throw new Error("synthetic cancel failure"); },
+      });
+      return new Response(stream);
+    }, async () => {
+      const options = { model: "auto", prompt: "hello",
+        onEvent: () => { if (mode === "event callback") throw failure; },
+        onDelta: () => { if (mode === "delta callback") throw failure; },
+      };
+      const result = new ChatGptBackendClient(fakeCreds()).sendMessage(options);
+      if (mode === "success") assert.equal((await result).text, "hi");
+      else if (mode.endsWith("limit")) await assert.rejects(result, /exceeds resource limit/);
+      else await assert.rejects(result, error => error === failure);
+    });
+    assert.equal(stream.locked, false);
+    // An already errored stream has nothing left for its source to cancel.
+    assert.equal(cancelled, mode === "read failure" ? 0 : 1);
+  });
+}
+
+
+for (const method of ["get", "post"]) test(`successful HTTP ${method} with an error envelope is an upstream failure`, async () => {
+  await withFetch(async () => Response.json({ error: "synthetic upstream failure" }), async () => {
+    const client = new ChatGptBackendClient(fakeCreds());
+    await assert.rejects(method === "get" ? client.fetchModels() : client.initConversation({ timezone: "UTC", timezoneOffsetMin: 0 }),
+      error => error instanceof BackendApiError && error.status === 502);
+  });
+});
+
 });

@@ -360,4 +360,34 @@ test("an assistant reply with no text and no status is stored as empty content w
     globalThis.fetch = originalFetch;
   }
 });
+
+test("resource rejection cancels upstream, preserves partial output, and allows retry", async () => {
+  const account = "account-stream-budget";
+  useSession(account);
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
+  const backend = stubHappyBackend(account);
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).endsWith("/f/conversation")) return backend(url, init);
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"p":"","o":"add","v":{"conversation_id":"upstream-partial","message":{"id":"partial","author":{"role":"assistant"},"content":{"parts":["partial answer"]}}}}\n\n'));
+          controller.enqueue(new TextEncoder().encode("x".repeat(1024 * 1024 + 1)));
+        },
+        cancel() { cancelled++; },
+      }));
+    };
+    await assert.rejects(service.runChat({ newConversationId: "budget-turn", prompt: "hello" }), /frame exceeds resource limit/);
+    assert.equal(cancelled, 1);
+    const failed = store.listMessages("budget-turn").at(-1);
+    assert.equal(failed.content, "partial answer");
+    assert.equal(failed.status, "error");
+    assert.equal(store.getConversation("budget-turn").currentNodeId, "client-created-root");
+    assert.equal(service.stopConversation("budget-turn"), false);
+    globalThis.fetch = backend;
+    assert.equal((await service.runChat({ conversationId: "budget-turn", prompt: "retry" })).result.text, "done");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 });

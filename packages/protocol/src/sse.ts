@@ -26,9 +26,16 @@ export function* iterSseDataLines(raw: string): Generator<string> {
   }
 }
 
+// Fail rather than truncate: partial protocol state must never become a successful
+// answer or continuation parent. Limits count UTF-16 code units, not wire bytes.
+export const MAX_SSE_FRAME_CHARS = 1024 * 1024;
+export const MAX_NORMALIZED_EVENT_CHARS = 16 * 1024 * 1024;
+
 /** Incrementally frames SSE across arbitrary network chunk and CRLF boundaries. */
 export class SseFrameDecoder {
   private buffer = "";
+
+  constructor(private readonly maxFrameChars = MAX_SSE_FRAME_CHARS) {}
 
   push(text: string): string[] {
     this.buffer += text;
@@ -36,10 +43,15 @@ export class SseFrameDecoder {
     let match: RegExpExecArray | null;
     const boundary = /\r?\n\r?\n/g;
     while ((match = boundary.exec(this.buffer))) {
+      if (match.index > this.maxFrameChars) throw new Error("Conversation SSE frame exceeds resource limit");
       frames.push(this.buffer.slice(0, match.index));
       this.buffer = this.buffer.slice(match.index + match[0].length);
       boundary.lastIndex = 0;
     }
+    // Allow a delimiter split after its first CR/LF without rejecting a frame
+    // exactly at the limit. These trailing delimiter bytes are not payload.
+    if (this.buffer.replace(/[\r\n]{1,3}$/, "").length > this.maxFrameChars)
+      throw new Error("Conversation SSE frame exceeds resource limit");
     return frames;
   }
 
@@ -215,6 +227,9 @@ function isAlwaysVisibleFirstTurnTool(name: string): boolean {
 }
 
 export interface ConversationStreamReducerOptions {
+  /** Cumulative serialized event budget, including events already drained by
+   * callers for persistence. Lower values are useful for constrained clients. */
+  maxEventChars?: number;
   /** First upstream turn of a Custom GPT/Project: hide the quiet
    * initialization-only tool activity (file_search / myfiles_browser
    * retrieval over the gizmo/Project's knowledge files, raw
@@ -243,6 +258,7 @@ export class ConversationStreamReducer {
   private errorCode: string | null = null;
   private finalAssistantId: string | null = null;
   private normalized: NormalizedConversationEvent[] = [];
+  private normalizedChars = 0;
 
   constructor(private readonly opts: ConversationStreamReducerOptions = {}) {}
 
@@ -277,7 +293,11 @@ export class ConversationStreamReducer {
     // suppressed turn silently disappears.
     const isCitationPatch = event.kind === "citation_patch";
     const shouldHide = this.displayHidden && !isImage && !isCitationPatch;
-    this.normalized.push(structuredClone(shouldHide ? { ...event, displayHidden: true } : event));
+    const normalized = shouldHide ? { ...event, displayHidden: true } : event;
+    this.normalizedChars += JSON.stringify(normalized).length;
+    if (this.normalizedChars > (this.opts.maxEventChars ?? MAX_NORMALIZED_EVENT_CHARS))
+      throw new Error("Conversation events exceed resource limit");
+    this.normalized.push(structuredClone(normalized));
   }
 
   private apply(event: StreamEvent): void {
