@@ -87,17 +87,34 @@ function wireWidget(root){
       window.open(link.href,'_blank','noopener,noreferrer');
     });
   })(apiLinks[li]);
+  var saveAttempt=0;
+  function credentialsMatch(token,session){
+    return (localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')||'')===token&&(localStorage.getItem('mirror_session_token')||'')===session;
+  }
   root.querySelector('.mirror-save').onclick=async function(){
     var token=area.value.trim();if(!token)return;
+    var attempt=++saveAttempt,expectedToken=token,expectedSession='';
     status.textContent='Verifying…';
     try{
       localStorage.setItem('mirror_access_token',token);localStorage.removeItem('mirror_session_token');
       document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
       var r=await fetch('/api/session',{method:'POST'});
+      var rotatedAccess=r.headers.get('x-mirror-access-token'),rotatedSession=r.headers.get('x-mirror-session-token');
+      expectedToken=rotatedAccess||token;
+      expectedSession=rotatedSession||(rotatedAccess&&rotatedAccess!==token?token:'');
       var b=await r.json();
+      if(attempt!==saveAttempt)return;
+      if(!credentialsMatch(expectedToken,expectedSession)){status.textContent='Credentials changed. Verify the current credential again.';return;}
       if(!r.ok)throw Error(typeof b.error==='string'?b.error:(b.error&&b.error.message)||JSON.stringify(b));
       area.value='';status.textContent='Connected. Reloading…';location.reload();
-    }catch(e){try{localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');}catch(_){}status.textContent=e.message||String(e);}
+    }catch(e){
+      if(attempt!==saveAttempt)return;
+      try{
+        if(!credentialsMatch(expectedToken,expectedSession)){status.textContent='Credentials changed. Verify the current credential again.';return;}
+        localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+      }catch(_){}
+      status.textContent=e.message||String(e);
+    }
   };
   fetch('/api/session').then(function(r){return r.json();}).then(function(s){
     root.querySelector('.mirror-dot').style.background=s.configured?'#19c59a':'#e7a83d';
