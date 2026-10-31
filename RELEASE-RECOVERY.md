@@ -1,5 +1,9 @@
 # Release verification and recovery
 
+For the Cloudflare Worker, use [WORKER-RECOVERY.md](WORKER-RECOVERY.md).
+The image, volume, and filesystem backup procedures below apply to Node/Compose
+installations and cannot restore Durable Object storage.
+
 Before upgrading a persistent Mirror installation, keep the previous image and
 a database backup with its matching encryption key. The running database must
 never be the target of a restore test.
@@ -7,7 +11,8 @@ never be the target of a restore test.
 ## Database compatibility
 
 The current schema version is **1**, stored in SQLite's `PRAGMA user_version`
-and exposed as `storage.schemaVersion` by `/api/diagnostics`. Version 0 means
+for Node or the `mirror_schema` table for Workers, and exposed as
+`storage.schemaVersion` by `/api/diagnostics`. Version 0 means
 the historical unversioned SQLite schema. The baseline supports that schema,
 including databases lacking `attachments_json`, `is_private`, or `is_branch`.
 Existing encrypted sessions, messages, instructions, and upstream node IDs are
@@ -154,8 +159,9 @@ The ordinary browser suite separately runs Vite with mocked API responses.
 The local runtime gate is separate from the Node instrumented per-file coverage
 gate: workerd execution is not Node V8 coverage. Neither gate is optional in CI.
 The existing `storage:drill` is a Node filesystem/SQLite drill, **not** a Durable
-Object backup/restore procedure. Worker production recovery and live acceptance
-must be documented and explicitly approved before rollout.
+Object backup/restore procedure. [Worker recovery guidance](WORKER-RECOVERY.md)
+describes migration failures, code rollback limits, and the remaining production
+PITR rehearsal and live acceptance requirements before rollout.
 
 Miniflare is pinned to the version already shipped with the locked Wrangler;
 upgrade those together and rerun the runtime acceptance. Installation requires
