@@ -89,4 +89,53 @@ test.describe('server / client tool calls', () => {
     assert.match(response.body, /"finish_reason":"tool_calls"/);
     assert.match(response.body, /\[DONE\]/);
   });
+  test('ignores empty catalog placeholders while accepting legacy named entries', async () => {
+    const response = await request('{"tool_calls":[{"name":"weather"}]}', {
+      tools: [null, false, '', '  ', [], {}, { name: 'weather' }],
+    });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().choices[0].message.tool_calls[0].function.arguments, '{}');
+    const plain = await request('ordinary answer', { tools: [null, '', [], {}] });
+    assert.equal(plain.statusCode, 200, plain.body);
+    assert.equal(plain.json().choices[0].message.content, 'ordinary answer');
+  });
+  test('named choices fail closed for malformed, mismatched and missing calls', async () => {
+    const tool_choice = { type: 'function', function: { name: 'weather' } };
+    for (const text of ['not JSON', 'null', '{"tool_calls":[]}', '{"tool_calls":[null]}', '{"tool_calls":[{"name":"other","arguments":{}}]}']) {
+      const response = await request(text, { tool_choice });
+      assert.equal(response.statusCode, 502, response.body);
+      assert.ok(response.json().error);
+    }
+    const malformed = await request('{"tool_calls":[{"name":"weather","arguments":"null"}]}');
+    assert.equal(malformed.statusCode, 502, malformed.body);
+  });
+  test('an isolated tool result can continue without fabricating an assistant call', async () => {
+    store.saveVerifiedSession('standalone-tool-account', 'fixture-device');
+    const sent = [];
+    globalThis.fetch = stubBackend('standalone-tool-account', { sent });
+    const response = await app.inject({ method: 'POST', url: '/v1/chat/completions', payload: {
+      stream: false, tools, messages: [{ role: 'tool', tool_call_id: 'prior-call', content: 'result from caller' }],
+    } });
+    assert.equal(response.statusCode, 200, response.body);
+    const turn = sent.find(item => item.pathname.endsWith('/f/conversation'));
+    assert.match(JSON.stringify(turn.body), /prior-call/);
+    assert.match(JSON.stringify(turn.body), /result from caller/);
+  });
+  test('compatible minimal turns resume the saved account conversation and retain instructions', async () => {
+    store.saveVerifiedSession('implicit-account', 'fixture-device');
+    globalThis.fetch = stubBackend('implicit-account');
+    const post = messages => app.inject({ method: 'POST', url: '/v1/chat/completions', payload: { messages, model: 'auto', stream: false } });
+    const first = await post([{ role: 'system', content: 'Keep answers short' }, { role: 'user', content: 'first' }]);
+    assert.equal(first.statusCode, 200, first.body);
+    const id = first.headers['x-mirror-conversation-id'];
+    const second = await post([{ role: 'user', content: 'second' }]);
+    assert.equal(second.statusCode, 200, second.body);
+    assert.equal(second.headers['x-mirror-conversation-id'], id);
+    assert.equal(store.getInstructions(id)[0].content, 'Keep answers short');
+    const third = await post([{ role: 'system', content: 'Use complete sentences' }, { role: 'user', content: 'third' }]);
+    assert.equal(third.statusCode, 200, third.body);
+    assert.equal(third.headers['x-mirror-conversation-id'], id);
+    assert.equal(store.getInstructions(id)[0].content, 'Use complete sentences');
+  });
+
 });

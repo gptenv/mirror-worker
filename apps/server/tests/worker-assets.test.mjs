@@ -49,4 +49,31 @@ test.describe('server / Worker assets', () => {
       assert.equal(response.body, 'upstream asset');
     } finally { await app.close(); }
   });
+  test('rejects malformed asset cookies without an upstream request', async t => {
+    t.mock.method(globalThis, 'fetch', async () => assert.fail('invalid cookie must not reach upstream'));
+    const app = await buildApp({ worker: true });
+    try {
+      for (const cookie of ['mirror_asset_session=%ZZ', 'mirror_asset_session=']) {
+        const response = await app.inject({ url: '/api/asset-content', headers: { cookie } });
+        assert.equal(response.statusCode, 401, response.body);
+      }
+    } finally { await app.close(); }
+  });
+  test('serves Worker OpenAPI formats and supplies missing asset content type', async () => {
+    const app = await buildApp({ worker: true, assets: { fetch: async () => new Response(new TextEncoder().encode('<main>fixture</main>')) } });
+    try {
+      const headers = { accept: 'text/html', 'x-mirror-document': '1' };
+      const json = await app.inject({ url: '/mirror/openapi', headers });
+      assert.equal(json.statusCode, 200, json.body);
+      assert.ok(json.json().paths['/v1/chat/completions']);
+      const yaml = await app.inject({ url: '/mirror/openapi?format=yaml', headers });
+      assert.equal(yaml.statusCode, 200, yaml.body);
+      assert.match(yaml.headers['content-type'], /yaml/);
+      const html = await app.inject({ url: '/mirror/playground', headers });
+      assert.equal(html.statusCode, 200, html.body);
+      assert.match(html.headers['content-type'], /text\/html/);
+      assert.equal(html.body, '<main>fixture</main>');
+    } finally { await app.close(); }
+  });
+
 });

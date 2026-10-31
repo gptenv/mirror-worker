@@ -37,4 +37,12 @@ test.describe('server / Worker attachment DNS checks', () => {
     globalThis.fetch = async () => new Response('fixture', { headers: { 'content-type': 'image/png' } });
     assert.equal((await resolveImageAttachment(client, part('https://8.8.8.8/image'), 0)).fileId, 'fixture');
   });
+  test('rejects DNS replies without address records before fetching content', async () => {
+    globalThis.fetch = async input => {
+      assert.equal(new URL(String(input)).hostname, 'cloudflare-dns.com');
+      return Response.json({});
+    };
+    await assert.rejects(resolveImageAttachment(client, part('https://public.example/image'), 0), /does not resolve exclusively to public/);
+  });
+
 });

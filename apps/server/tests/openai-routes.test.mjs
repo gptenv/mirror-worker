@@ -1899,4 +1899,39 @@ test("canonical history reconstructs an assistant row removed during upstream st
     ]);
   } finally { globalThis.fetch = originalFetch; db.close(); }
 });
+test("attachment failures cancel the upstream body and release its reader", async () => {
+  const client = { uploadFile: async value => value };
+  let cancelled = 0;
+  let response;
+  await withFetch(async () => {
+    response = new Response(new ReadableStream({ cancel() { cancelled++; } }), { headers: { "content-length": "999999999" } });
+    return response;
+  }, () => assert.rejects(context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/large" } }, 0), /too large/));
+  assert.equal(cancelled, 1);
+  assert.equal(response.body.locked, false);
+
+  cancelled = 0;
+  await withFetch(async () => {
+    response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(21 * 1024 * 1024)); },
+      cancel() { cancelled++; throw new Error("cleanup failure"); },
+    }));
+    return response;
+  }, () => assert.rejects(context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/stream" } }, 0), /too large/));
+  assert.equal(cancelled, 1);
+  assert.equal(response.body.locked, false);
+});
+
+test("empty prompt helpers and bodyless redirects retain their defined behavior", async () => {
+  assert.equal(context.promptFor([]), "");
+  const client = { uploadFile: async value => value };
+  let requests = 0;
+  await withFetch(async () => ++requests === 1
+    ? new Response(null, { status: 302, headers: { location: "/next" } })
+    : new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }), async () => {
+      const uploaded = await context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/start" } }, 0);
+      assert.equal(uploaded.data.byteLength, 1);
+    });
+});
+
 });
