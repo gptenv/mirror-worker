@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { assistantAddFrame, stubBackend } from '../../apps/server/tests/helpers/backend.mjs';
+import { stubBackend } from '../../apps/server/tests/helpers/backend.mjs';
 
 // The production bundle runs unchanged in workerd: real cloudflare:node HTTP
 // adaptation, Durable Object SQL and AsyncLocalStorage. Only external services
@@ -15,7 +15,6 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   let directory;
   let runtime;
   let options;
-  let streamFixture;
   const upstreamCalls = [];
   test.before(async () => {
     directory = mkdtempSync(path.join(tmpdir(), 'mirror-workerd-'));
@@ -26,37 +25,28 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     writeFileSync(configPath, JSON.stringify({ name: 'mirror-local-acceptance', main: path.resolve(production.main), compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags, durable_objects: production.durable_objects, migrations: production.migrations }));
     execFileSync(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'deploy', '--config', configPath, '--dry-run', '--outdir', path.join(directory, 'bundle')], { env, stdio: 'pipe', timeout: 60_000 });
     const backend = stubBackend('fixture-owner');
-    options = convertV4MiniflareOptions({
-      name: 'mirror-local-acceptance', host: '127.0.0.1', modules: true,
+    options = convertV4MiniflareOptions({ host: '127.0.0.1', workers: [{
+      name: 'mirror-local-acceptance', modules: true,
       scriptPath: path.join(directory, 'bundle/cloudflare-worker.js'), modulesRoot: path.join(directory, 'bundle'),
       compatibilityDate: production.compatibility_date, compatibilityFlags: production.compatibility_flags,
       durableObjects: { MIRROR: { className: 'MirrorStorage', useSQLite: true } },
       bindings: { MIRROR_STORE_KEY: 'a'.repeat(64), MIRROR_OWNER_ACCOUNT_ID: 'fixture-owner' },
       serviceBindings: {
-        WARP: async request => {
-          upstreamCalls.push(new URL(request.url).pathname);
-          if (request.headers.get('authorization') === 'Bearer other-account') return Response.json({ account: { account_user_id: 'other-account' } });
-          if (streamFixture && new URL(request.url).pathname.endsWith('/f/conversation')) {
-            const fixture = streamFixture;
-            streamFixture = undefined;
-            const body = await request.json();
-            request.signal.addEventListener('abort', () => { fixture.signalAborted = true; }, { once: true });
-            return new Response(new ReadableStream({
-              start(controller) {
-                fixture.controller = controller;
-                const frame = assistantAddFrame(body.conversation_id, 'fixture-unfinished-node', 'fixture-partial-answer\n');
-                frame.v.message.status = 'in_progress';
-                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
-              },
-              cancel() { fixture.cancelled.resolve(); },
-            }), { headers: { 'content-type': 'text/event-stream' } });
-          }
-          return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
-        },
+        WARP: 'mirror-fixture-upstream',
         ASSETS: async () => new Response('fixture-static-asset', { headers: { 'content-type': 'text/html' } }),
       },
       outboundService: () => { throw new Error('Unexpected unbound network access'); },
-    });
+    }, {
+      name: 'mirror-fixture-upstream', modules: true,
+      scriptPath: path.resolve('tests/worker/fixtures/upstream.mjs'),
+      compatibilityDate: production.compatibility_date, compatibilityFlags: production.compatibility_flags,
+      serviceBindings: { BACKEND: async request => {
+          upstreamCalls.push(new URL(request.url).pathname);
+          if (request.headers.get('authorization') === 'Bearer other-account') return Response.json({ account: { account_user_id: 'other-account' } });
+          return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
+      } },
+      outboundService: () => { throw new Error('Unexpected unbound network access'); },
+    }] });
     options.resourcePersistencePath = path.join(directory, 'storage');
     options.telemetry = { enabled: false };
     options.cf = false;
@@ -114,23 +104,23 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     }
   });
 
-  test('a real HTTP client disconnect cancels upstream and preserves the last completed parent for retry', { timeout: 15_000 }, async () => {
+  test('a real HTTP client disconnect cancels upstream by the next heartbeat and preserves the completed parent for retry', { timeout: 25_000 }, async () => {
     const base = await runtime.ready;
     const id = 'fixture-http-disconnect';
     const post = (content, stream, signal) => fetch(new URL('/v1/chat/completions', base), {
-      method: 'POST', headers: { ...owner, 'content-type': 'application/json' }, signal,
+      method: 'POST', headers: { ...owner, 'content-type': 'application/json', 'accept-encoding': 'identity' }, signal,
       body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content }], metadata: { conversation_id: id }, stream }),
     });
     const initial = await post('Seed completed parent', false, AbortSignal.timeout(3000));
     assert.equal(initial.status, 200, await initial.text());
     const before = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
-    const fixture = { cancelled: Promise.withResolvers(), signalAborted: false };
-    streamFixture = fixture;
+    const fixture = await runtime.getWorker('mirror-fixture-upstream');
+    await fixture.fetch('https://fixture.example/__fixture/arm');
     const controller = new AbortController();
     let reader;
-    const bounded = async (promise, label) => {
+    const bounded = async (promise, label, timeout = 3000) => {
       let timer;
-      try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label)), 3000); })]); }
+      try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label)), timeout); })]); }
       finally { clearTimeout(timer); }
     };
     try {
@@ -143,13 +133,25 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
         assert.equal(chunk.done, false);
         received += new TextDecoder().decode(chunk.value);
       }
+      assert.equal((await (await fixture.fetch('https://fixture.example/__fixture/status')).json()).cancelled, false,
+        'upstream stream must still be active before client disconnection');
+      const activeTurn = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
+      assert.equal(activeTurn.messages.at(-1).status, 'streaming', 'fixture must not fail before client disconnection');
       controller.abort();
       await reader.cancel().catch(() => {});
-      try {
-        await bounded(fixture.cancelled.promise, 'Disconnected HTTP client did not cancel the upstream body');
-      } catch (error) {
+      // Local workerd observes a disconnected silent client on its next
+      // write. Allow the production 10s heartbeat plus bounded scheduling
+      // slack; a 3s silent interval does not establish a lifecycle failure.
+      const cancelDeadline = Date.now() + 13_000;
+      let nativeState;
+      do {
+        nativeState = await (await fixture.fetch('https://fixture.example/__fixture/status')).json();
+        if (nativeState.cancelled) break;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      } while (Date.now() < cancelDeadline);
+      if (!nativeState.cancelled) {
         const state = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
-        throw new Error(`${error.message}; serviceSignalAborted=${fixture.signalAborted}; assistantStatus=${state.messages.at(-1).status}`, { cause: error });
+        throw new Error(`Native upstream did not cancel after heartbeat; serviceSignalAborted=${nativeState.signalAborted}; assistantStatus=${state.messages.at(-1).status}`);
       }
       let after;
       const until = Date.now() + 3000;
@@ -164,13 +166,12 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       const retry = await post('Retry after disconnect', false, AbortSignal.timeout(3000));
       assert.equal(retry.status, 200, await retry.text());
       const recovered = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
-      assert.equal(recovered.messages.at(-1).status, 'done');
+      assert.equal(recovered.messages.at(-1).status, 'finished_successfully');
       assert.notEqual(recovered.conversation.currentNodeId, before.conversation.currentNodeId);
     } finally {
-      streamFixture = undefined;
       controller.abort();
       await reader?.cancel().catch(() => {});
-      try { fixture.controller?.close(); } catch {}
+      await fixture.fetch('https://fixture.example/__fixture/cleanup');
     }
   });
 
