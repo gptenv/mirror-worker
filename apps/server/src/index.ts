@@ -620,7 +620,8 @@ app.post("/api/chat", async (req, reply) => {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  reply.raw.socket?.setNoDelay(true);
+  // HTTP adapters may expose a socket-like stream without TCP-specific methods.
+  reply.raw.socket?.setNoDelay?.(true);
   const send = (event: string, data: unknown) =>
     reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 

@@ -6,17 +6,6 @@ import { randomUUID } from "node:crypto";
 import { Writable } from "node:stream";
 import test from "node:test";
 
-// POST /api/chat unconditionally calls `reply.raw.socket?.setNoDelay(true)`
-// once it hijacks the reply - true under a real HTTP server, but
-// app.inject()'s simulated response object backs `.raw.socket` with a plain
-// node:stream Writable that has no such method, so calling it throws. This
-// adds a harmless no-op stub for the duration of these tests only (never
-// overwriting a real implementation, and only meaningful under inject()
-// anyway - a real net.Socket already has its own setNoDelay).
-if (typeof Writable.prototype.setNoDelay !== "function") {
-  Writable.prototype.setNoDelay = function setNoDelay() {};
-}
-
 // index.ts's buildApp() wires up the whole Fastify app around the SAME
 // store.js/auth.js/egress.js module instances this file imports (all plain,
 // query-less specifiers - the established convention for sharing state with
@@ -652,7 +641,7 @@ test("POST /api/chat rejects attachments that don't belong to the caller", async
   assert.equal(res.statusCode, 404);
 });
 
-test("POST /api/chat streams SSE delta/event/done frames on success", () =>
+test("POST /api/chat streams successfully when the HTTP adapter socket has no setNoDelay", () =>
   withFetch(
     fetchRouter([
       meRoute("acct-chat-ok"),
@@ -670,6 +659,7 @@ test("POST /api/chat streams SSE delta/event/done frames on success", () =>
         ])],
     ]),
     async () => {
+      assert.equal(typeof Writable.prototype.setNoDelay, "undefined", "do not mask HTTP adapter socket capabilities with a prototype stub");
       useSession("acct-chat-ok");
       const res = await app.inject({
         method: "POST",
