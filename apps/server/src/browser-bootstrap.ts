@@ -1,31 +1,57 @@
-/** Navigation cannot attach a credential from localStorage. Fetch the document
- * in the browser first, then let its scripts execute with the authenticated HTML. */
-export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-8"><title>Mirror</title></head><body><p id="status">Loading ChatGPT…</p><script>
+/** The public shell collects a browser-local credential before requesting the
+ * protected document. Only an owner-verified response may replace this shell. */
+export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect to Mirror</title>
+<style>html{color-scheme:light dark;font:16px system-ui,sans-serif}body{margin:0;padding:24px}main{max-width:440px;margin:10vh auto}h1{font-size:28px}p{line-height:1.5}label{display:block;font-weight:600;margin-bottom:8px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:12px;border:1px solid #888;border-radius:8px}button{margin-top:12px;cursor:pointer}button:disabled{cursor:wait}small{display:block;line-height:1.5;margin:16px 0}#status{min-height:3em}</style>
+</head><body><main><h1>Connect to Mirror</h1><p>Use a ChatGPT accessToken or sessionToken for the owner's account.</p>
+<form id="connect"><label for="credential">ChatGPT credential</label><input id="credential" type="password" autocomplete="off" spellcheck="false" required><button id="submit" type="submit">Connect</button></form>
+<small>Your credential stays in this browser for this Mirror address and is sent to Mirror to authenticate with ChatGPT.</small><p id="status" role="status" aria-live="polite">Enter your credential to continue.</p><noscript>JavaScript is required to connect.</noscript></main><script>
 (async function(){
-  function credentialsMatch(token,session){
-    return (localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')||'')===token&&(localStorage.getItem('mirror_session_token')||'')===session;
+  var form=document.getElementById('connect'),input=document.getElementById('credential'),button=document.getElementById('submit'),status=document.getElementById('status');
+  var attempt=0;
+  function stored(){return [localStorage.getItem('mirror_access_token')||'',localStorage.getItem('mirror_session_token')||''];}
+  function credentialsMatch(pair){var current=stored();return current[0]===pair[0]&&current[1]===pair[1];}
+  async function load(candidate){
+    var currentAttempt=++attempt;
+    button.disabled=true;
+    status.textContent='Connecting…';
+    try{
+      var previous=stored(),token=candidate||previous[0]||previous[1],sessionToken=candidate?'':previous[1];
+      if(!token){status.textContent='Enter your credential to continue.';return;}
+      var headers=new Headers({'accept':'text/html','x-mirror-document':'1','authorization':'Bearer '+token});
+      if(sessionToken)headers.set('x-mirror-session-token',sessionToken);
+      var response=await fetch(location.href,{headers:headers,cache:'no-store',redirect:'error'});
+      if(currentAttempt!==attempt||!credentialsMatch(previous)){
+        await response.body?.cancel();
+        if(currentAttempt===attempt)status.textContent='Credentials changed while connecting. Reload to continue.';
+        return;
+      }
+      if(!response.ok){
+        if(!candidate&&(response.status===401||response.status===403)){
+          localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');
+        }
+        status.textContent=response.status===403?"This account is not the allowed owner. Use the owner's ChatGPT credential.":response.status===401?'Credential not accepted. Enter a current ChatGPT credential and try again.':'Mirror could not connect. Try again.';
+        await response.body?.cancel();
+        return;
+      }
+      var accessToken=response.headers.get('x-mirror-access-token');
+      var rotatedSession=response.headers.get('x-mirror-session-token');
+      if(candidate){localStorage.setItem('mirror_access_token',candidate);localStorage.removeItem('mirror_session_token');}
+      if(rotatedSession)localStorage.setItem('mirror_session_token',rotatedSession);
+      else if(accessToken&&accessToken!==token&&!sessionToken)localStorage.setItem('mirror_session_token',token);
+      if(accessToken)localStorage.setItem('mirror_access_token',accessToken);
+      // Retain an accepted refresh on an interrupted body, but never render
+      // a previous identity's document after another attempt or tab replaces it.
+      var accepted=stored();
+      var html=await response.text();
+      if(currentAttempt!==attempt||!credentialsMatch(accepted)){
+        if(currentAttempt===attempt)status.textContent='Credentials changed while connecting. Reload to continue.';
+        return;
+      }
+      document.open();document.write(html);document.close();
+    }catch(error){if(currentAttempt===attempt)status.textContent='Connection interrupted. Try again, or reload to use your saved credential.';}
+    finally{if(currentAttempt===attempt)button.disabled=false;}
   }
-  try{
-    var headers=new Headers({'accept':'text/html','x-mirror-document':'1'});
-    var token=localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')||'';
-    var sessionToken=localStorage.getItem('mirror_session_token')||'';
-    if(token)headers.set('authorization','Bearer '+token);
-    if(sessionToken)headers.set('x-mirror-session-token',sessionToken);
-    var response=await fetch(location.href,{headers:headers,cache:'no-store'});
-    if(!credentialsMatch(token,sessionToken))throw Error('Credentials changed while loading. Reload to continue.');
-    var accessToken=response.headers.get('x-mirror-access-token');
-    var rotatedSession=response.headers.get('x-mirror-session-token');
-    if(rotatedSession)localStorage.setItem('mirror_session_token',rotatedSession);
-    else if(accessToken&&token&&accessToken!==token&&!sessionToken)localStorage.setItem('mirror_session_token',token);
-    if(accessToken)localStorage.setItem('mirror_access_token',accessToken);
-    // Keep a valid refresh even if reading the document fails, but do not
-    // render it if another tab changes credentials while its body is loading.
-    var acceptedToken=localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')||'';
-    var acceptedSession=localStorage.getItem('mirror_session_token')||'';
-    var html=await response.text();
-    if(!credentialsMatch(acceptedToken,acceptedSession))throw Error('Credentials changed while loading. Reload to continue.');
-    if(!response.ok)throw Error(html||('HTTP '+response.status));
-    document.open();document.write(html);document.close();
-  }catch(error){document.getElementById('status').textContent=error.message||String(error);}
+  form.onsubmit=async function(event){event.preventDefault();var token=input.value.trim();input.value='';if(!token){status.textContent='Enter your credential to continue.';return;}await load(token);};
+  await load();
 })();
 </script></body></html>`;

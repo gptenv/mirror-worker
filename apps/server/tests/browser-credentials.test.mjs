@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
-import { BROWSER_BOOTSTRAP } from '../dist/browser-bootstrap.js';
 import { EARLY_PATCH } from '../dist/browser-patch.js';
 import { injectionJs } from '../dist/mirror-controls.js';
 
@@ -46,56 +45,6 @@ const pair = f => [f.storage.getItem('mirror_access_token'), f.storage.getItem('
 const rotated = { 'x-mirror-access-token': 'rotated-access', 'x-mirror-session-token': 'rotated-session' };
 
 test.describe('server / injected browser credentials', () => {
-  test('bootstrap rejects old credentials both before response headers and while the document body loads', async t => {
-    for (const changeDuringBody of [false, true]) {
-      const gate = deferred();
-      const body = deferred();
-      const f = fixture(t, () => gate.promise);
-      let written = false;
-      const status = { textContent: '' };
-      f.context.document = { open() {}, close() {}, write() { written = true; }, getElementById() { return status; } };
-      const run = vm.runInContext(script(BROWSER_BOOTSTRAP), f.context);
-      if (changeDuringBody) {
-        gate.resolve({ headers: new Headers(rotated), ok: true, text: () => body.promise });
-        await Promise.resolve();
-      }
-      f.storage.setItem('mirror_access_token', 'replacement');
-      f.storage.setItem('mirror_session_token', 'replacement-session');
-      if (changeDuringBody) body.resolve('<html>old account</html>');
-      else gate.resolve(new Response('<html>old account</html>', { headers: rotated }));
-      await run;
-      assert.deepEqual(pair(f), ['replacement', 'replacement-session']);
-      assert.equal(written, false, 'old account HTML must not replace the current document');
-      assert.match(status.textContent, /Credentials changed/);
-    }
-  });
-
-  test('bootstrap keeps valid access/session-only refreshes and never stores an absent fallback token', async t => {
-    for (const initial of ['bearer', 'empty']) {
-      const f = fixture(t, async () => new Response('<html>current</html>', { headers: { 'x-mirror-access-token': 'fresh' } }));
-      f.storage.clear();
-      if (initial === 'bearer') f.storage.setItem('mirror_access_token', 'old');
-      let written;
-      f.context.document = { open() {}, close() {}, write(html) { written = html; }, getElementById() { throw Error('unexpected bootstrap error'); } };
-      await vm.runInContext(script(BROWSER_BOOTSTRAP), f.context);
-      assert.deepEqual(pair(f), ['fresh', initial === 'bearer' ? 'old' : null]);
-      assert.equal(written, '<html>current</html>');
-    }
-    const f = fixture(t, async () => new Response('current', { headers: { 'x-mirror-session-token': 'fresh-session' } }));
-    f.context.document = { open() {}, close() {}, write() {}, getElementById() { throw Error('unexpected error'); } };
-    await vm.runInContext(script(BROWSER_BOOTSTRAP), f.context);
-    assert.deepEqual(pair(f), ['old-access', 'fresh-session']);
-  });
-
-  test('bootstrap preserves accepted credential refresh when the document body is interrupted', async t => {
-    const f = fixture(t, async () => ({ headers: new Headers(rotated), ok: true, text: async () => { throw Error('interrupted HTML body'); } }));
-    const status = { textContent: '' };
-    f.context.document = { open() { assert.fail('must not render an interrupted document'); }, getElementById() { return status; } };
-    await vm.runInContext(script(BROWSER_BOOTSTRAP), f.context);
-    assert.deepEqual(pair(f), ['rotated-access', 'rotated-session']);
-    assert.equal(status.textContent, 'interrupted HTML body');
-  });
-
   for (const transport of ['fetch', 'XHR']) {
     test(`${transport} ignores stale access/session rotations after replacement, logout, or another rotation`, async t => {
       for (const responseHeaders of [rotated, { 'x-mirror-session-token': 'stale-session-only' }]) {

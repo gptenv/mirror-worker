@@ -74,6 +74,26 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     assert.match(await response.text(), /WebSocket proxying is disabled/);
     assert.equal(upstreamCalls.length, before);
   });
+  test('reconnect shell is public while its document stays owner-protected', async () => {
+    const before = upstreamCalls.length;
+    const shell = await request('/mirror/playground', { headers: { accept: 'text/html' } });
+    assert.equal(shell.status, 200);
+    const html = await shell.text();
+    assert.match(html, /<form id="connect">/);
+    assert.match(html, /type="password"/);
+    assert.doesNotMatch(html, /fixture-static-asset/);
+    assert.equal(upstreamCalls.length, before);
+    const documentHeaders = { accept: 'text/html', 'x-mirror-document': '1' };
+    assert.equal((await request('/mirror/playground', { headers: documentHeaders })).status, 401);
+    for (const [token, status] of [['invalid-auth', 401], ['other-account', 403]]) {
+      const denied = await request('/mirror/playground', { headers: { ...documentHeaders, authorization: `Bearer ${token}` } });
+      assert.equal(denied.status, status);
+      assert.doesNotMatch(await denied.text(), /fixture-static-asset/);
+    }
+    const accepted = await request('/mirror/playground', { headers: { ...documentHeaders, ...owner } });
+    assert.equal(accepted.status, 200);
+    assert.equal(await accepted.text(), 'fixture-static-asset');
+  });
   test('HTTP adapter enforces owner access and saves settings across runtime restart', async () => {
     assert.equal((await request('/api/diagnostics')).status, 401);
     assert.equal((await request('/api/diagnostics', { headers: { authorization: 'Bearer other-account' } })).status, 403);
