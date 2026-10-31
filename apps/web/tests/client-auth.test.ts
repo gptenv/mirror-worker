@@ -54,6 +54,23 @@ test.describe('web / client-auth', () => {
     assert.equal(localStorage.getItem('mirror_session_token'),'rotated-session');
     assert.equal(localStorage.getItem('mirror_access_token'),'access');
   });
+  test('delayed rotations cannot restore cleared credentials or overwrite a newer bearer or session', async () => {
+    for (const change of ['clear', 'bearer', 'session', 'other-response']) {
+      localStorage.setItem('mirror_access_token', 'old-access');
+      localStorage.setItem('mirror_session_token', 'old-session');
+      let release!: (response: Response) => void;
+      test.mock.method(globalThis, 'fetch', () => new Promise<Response>(resolve => { release = resolve; }));
+      const request = mirrorFetch('/api/diagnostics');
+      if (change === 'clear') localStorage.clear();
+      if (change === 'bearer') localStorage.setItem('mirror_access_token', 'new-access');
+      if (change === 'session') localStorage.setItem('mirror_session_token', 'new-session');
+      if (change === 'other-response') storeAccessToken('new-access', 'old-access', 'new-session');
+      const current = [readStoredBearer(), readStoredSessionToken()];
+      release(Response.json({}, { headers: { 'x-mirror-access-token': 'stale-access', 'x-mirror-session-token': 'stale-session' } }));
+      assert.equal((await request).status, 200);
+      assert.deepEqual([readStoredBearer(), readStoredSessionToken()], current, change);
+    }
+  });
   test('Request inputs keep their method/body and non-auth headers', async () => {
     localStorage.setItem('mirror_access_token','access');
     const input=new Request(location.origin+'/api/settings/hotkeys',{method:'PUT',body:'{}',headers:{'content-type':'application/json'}});

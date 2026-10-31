@@ -1253,6 +1253,41 @@ function connectionToolsPanel() {
   return screen.getByText("Connection diagnostics and client setup").closest("details") as HTMLElement;
 }
 
+for (const source of ["discovery", "generation", "diagnostics"]) {
+  test(`a delayed ${source} rotation cannot replace an edited credential`, async () => {
+    localStorage.setItem("mirror_access_token", "initial");
+    const pending = deferred<Response>();
+    let holdModels = false;
+    let requested = false;
+    await renderApp([
+      [/^\/v1\/models$/, () => {
+        if (!holdModels) return jsonResponse({ data: [] });
+        holdModels = false;
+        requested = true;
+        return pending.promise;
+      }],
+      [/^\/v1\/chat\/completions$/, () => { requested = true; return pending.promise; }],
+    ]);
+    if (source === "generation") {
+      fireEvent.click(screen.getByLabelText("Stream response"));
+      fireEvent.click(runButton());
+    } else {
+      holdModels = true;
+      if (source === "discovery") fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "request-bearer" } });
+      else fireEvent.click(within(connectionToolsPanel()).getByRole("button", { name: "Test connection" }));
+    }
+    await waitFor(() => assert.equal(requested, true));
+    fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "replacement" } });
+    await act(async () => pending.resolve(jsonResponse(
+      source === "generation" ? { choices: [{ message: { content: "done" } }] } : { data: [] },
+      { headers: { "x-mirror-access-token": "stale-access", "x-mirror-session-token": "stale-session" } },
+    )));
+    assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "replacement");
+    assert.equal(localStorage.getItem("mirror_access_token"), "replacement");
+    assert.equal(localStorage.getItem("mirror_session_token"), null);
+  });
+}
+
 test("credential rotation from discovery, generation and diagnostics updates the Playground", async () => {
   localStorage.setItem("mirror_access_token", "old-access");
   let modelCalls = 0;

@@ -272,7 +272,7 @@ export default function App() {
     fetch(`${domain.replace(/\/$/, "")}/v1/models`, { headers })
       .then(async (res) => {
         const accessToken = res.headers.get("x-mirror-access-token");
-        if (accessToken && localEndpoint) {
+        if (accessToken && localEndpoint && accessToken === readStoredBearer()) {
           setApiKey(accessToken);
           if (accessToken !== apiKey) credentialRotationRef.current = true;
         }
@@ -562,7 +562,7 @@ export default function App() {
         }),
       });
       const accessToken = response.headers.get("x-mirror-access-token");
-      if (accessToken && localEndpoint) {
+      if (accessToken && localEndpoint && accessToken === readStoredBearer()) {
         setApiKey(accessToken);
         if (accessToken !== apiKey) credentialRotationRef.current = true;
       }

@@ -74,6 +74,9 @@ export async function mirrorFetch(input: RequestInfo | URL, init?: RequestInit):
   const accessToken = response.headers.get("x-mirror-access-token");
   const rotatedSessionToken = response.headers.get("x-mirror-session-token");
   try {
+    // An in-flight response belongs to the credentials it was sent with. A
+    // manual change, logout, or newer rotation must not be undone by it.
+    if (readStoredBearer() !== bearer || readStoredSessionToken() !== sessionToken) return response;
     if (accessToken) storeAccessToken(accessToken, bearer, rotatedSessionToken);
     else if (rotatedSessionToken) {
       localStorage.setItem(SESSION_TOKEN_KEY, rotatedSessionToken);

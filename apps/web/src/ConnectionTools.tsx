@@ -1,4 +1,4 @@
-import { mirrorFetch as fetch, endpointHeaders, endpointOrigin, downloadAuthenticated } from "./client-auth.js";
+import { mirrorFetch as fetch, endpointHeaders, endpointOrigin, downloadAuthenticated, readStoredBearer } from "./client-auth.js";
 import { useState } from "react";
 
 export function ConnectionTools({ domain, apiKey, generationSucceeded, connectionAllowed = true, onSessionToken }: { domain: string; apiKey: string; generationSucceeded: boolean; connectionAllowed?: boolean; onSessionToken?: (token: string) => void }) {
@@ -18,7 +18,7 @@ export function ConnectionTools({ domain, apiKey, generationSucceeded, connectio
         signal: AbortSignal.timeout(30_000),
       });
       const accessToken = models.headers.get("x-mirror-access-token");
-      if (accessToken && endpointOrigin(domain) === location.origin) onSessionToken?.(accessToken);
+      if (accessToken && endpointOrigin(domain) === location.origin && accessToken === readStoredBearer()) onSessionToken?.(accessToken);
       if (!models.ok) throw new Error(await models.text());
       const body = await models.json();
       if (!Array.isArray(body.data)) throw new Error("Model discovery returned an unsupported response.");
