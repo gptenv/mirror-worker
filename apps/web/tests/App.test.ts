@@ -88,7 +88,7 @@ test("renders the platform header, sidebar, and default two-message transcript",
   const header = screen.getByRole("banner");
   assert.ok(within(header).getByRole("link", { name: "ChatGPT" }));
   assert.ok(within(header).getByRole("link", { name: /Playground/ }));
-  assert.ok(within(header).getByRole("link", { name: /Models/ }));
+  assert.ok(within(header).getByRole("button", { name: /Models/ }));
   assert.ok(within(header).getByRole("link", { name: /API docs/ }));
   assert.ok(within(header).getByRole("link", { name: /OpenAPI schema/ }));
   assert.equal(screen.getAllByRole("textbox").filter((el) => el.tagName === "TEXTAREA").length, 2);
@@ -1292,7 +1292,7 @@ test("Test connection reports diagnostics and model discovery results, and offer
   fireEvent.click(within(panel).getByRole("button", { name: "Test connection" }));
   await within(panel).findByText(/Model discovery passed \(2 models\)\. Browser authentication used/);
   assert.match(within(panel).getByText(/"revision": "abc1234"/).textContent ?? "", /abc1234/);
-  assert.ok(within(panel).getByRole("link", { name: /Export local diagnostics/ }));
+  assert.ok(within(panel).getByRole("button", { name: /Export diagnostics/ }));
 });
 
 test("Test connection reports a supplied bearer credential separately from browser auth", async () => {
@@ -1375,7 +1375,7 @@ test("the generation-status note reflects whether a Playground run has completed
 test("Copy setup snippet reports success or falls back to a manual-copy hint", async () => {
   await renderApp();
   const panel = connectionToolsPanel();
-  assert.match(within(panel).getByText(/OpenAI\(base_url=/).textContent ?? "", /YOUR_MIRROR_KEY/);
+  assert.match(within(panel).getByText(/OpenAI\(base_url=/).textContent ?? "", /YOUR_CREDENTIAL/);
   const nav = globalThis.navigator as unknown as { clipboard?: { writeText: (text: string) => Promise<void> } };
   const originalClipboard = nav.clipboard;
   try {
@@ -1534,19 +1534,25 @@ test("a failed branch listing reports the error instead of throwing", async () =
   await within(panel).findByText(/nope/);
 });
 
-test("export links include the selected attachment/metadata flags and format", async () => {
+test("exports fetch selected flags with credentials and report failures", async () => {
+  localStorage.setItem("mirror_access_token", "export-owner");
   localStorage.setItem("mirror-playground-remember-history", "true");
   localStorage.setItem("mirror-playground-snapshot", JSON.stringify({ conversationId: "conv-remembered", messages: [] }));
-  await renderApp();
+  const seen: string[] = [];
+  await renderApp([[/\/export$/, (url, init) => {
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer export-owner");
+    seen.push(url.search);
+    return new Response("export failed", { status: 401 });
+  }]]);
   const panel = conversationToolsPanel();
-  const jsonLink = () => within(panel).getByRole("link", { name: "Export JSON" });
-  const markdownLink = () => within(panel).getByRole("link", { name: "Export Markdown" });
-  assert.equal(jsonLink().getAttribute("href"), "/api/conversations/conv-remembered/export?attachments=false&metadata=false&format=json");
-  assert.equal(markdownLink().getAttribute("href"), "/api/conversations/conv-remembered/export?attachments=false&metadata=false&format=markdown");
+  fireEvent.click(within(panel).getByRole("button", { name: "Export JSON" }));
+  await within(panel).findByText(/export failed/);
+  assert.equal(seen[0], "?attachments=false&metadata=false&format=json");
   fireEvent.click(within(panel).getByLabelText("Include attachment references (no file bytes)"));
   fireEvent.click(within(panel).getByLabelText("Include IDs, model, and message metadata"));
-  assert.equal(jsonLink().getAttribute("href"), "/api/conversations/conv-remembered/export?attachments=true&metadata=true&format=json");
-  assert.equal(markdownLink().getAttribute("href"), "/api/conversations/conv-remembered/export?attachments=true&metadata=true&format=markdown");
+  fireEvent.click(within(panel).getByRole("button", { name: "Export Markdown" }));
+  await waitFor(() => assert.equal(seen.length, 2));
+  assert.equal(seen[1], "?attachments=true&metadata=true&format=markdown");
 });
 
 for (const transport of ["stream", "metadata", "header"]) test(`Responses mode ${transport} retains the transcript and switches back to Chat`, async () => {
@@ -1751,6 +1757,85 @@ test("initial Playground settings and history requests send browser-stored crede
   await waitFor(() => {
     for (const path of ["/api/settings/default-system-instructions", "/api/settings/hotkeys", "/api/conversations"]) assert.ok(seen.has(path), path);
   });
+});
+
+
+test("external endpoints require explicit connect and never inherit or rotate Mirror credentials", async () => {
+  localStorage.setItem("mirror_access_token", "owner-access");
+  localStorage.setItem("mirror_session_token", "owner-session");
+  const external: { origin: string; headers: Headers }[] = [];
+  let externalRuns = 0;
+  await renderApp([[/^\/v1\/chat\/completions$/, (url, init) => {
+    assert.equal(url.origin, "https://provider.example");
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer provider-key");
+    assert.equal(new Headers(init?.headers).get("x-mirror-session-token"), null);
+    externalRuns++;
+    return jsonResponse({ choices: [{ message: { content: "External answer" } }] }, { headers: { "x-mirror-access-token": "hostile-run-access", "x-mirror-session-token": "hostile-run-session" } });
+  }], [/^\/v1\/models$/, (url, init) => {
+    if (url.origin !== location.origin) {
+      external.push({ origin: url.origin, headers: new Headers(init?.headers) });
+      return jsonResponse({ data: [] }, { headers: { "x-mirror-access-token": "hostile-access", "x-mirror-session-token": "hostile-session" } });
+    }
+    return jsonResponse({ data: [] });
+  }]]);
+  fireEvent.change(screen.getByLabelText("Server domain"), { target: { value: "https://provider.example" } });
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "");
+  fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "provider-key" } });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.equal(external.length, 0);
+  fireEvent.click(screen.getByRole("button", { name: "Connect endpoint" }));
+  await waitFor(() => assert.equal(external.length, 1));
+  assert.equal(external[0]!.headers.get("authorization"), "Bearer provider-key");
+  assert.equal(external[0]!.headers.get("x-mirror-session-token"), null);
+  fireEvent.click(within(connectionToolsPanel()).getByRole("button", { name: "Test connection" }));
+  await waitFor(() => assert.equal(external.length, 2));
+  fireEvent.click(screen.getByLabelText("Stream response"));
+  fireEvent.click(runButton());
+  await screen.findByText("Completed");
+  assert.equal(externalRuns, 1);
+  assert.equal(localStorage.getItem("mirror_access_token"), "owner-access");
+  assert.equal(localStorage.getItem("mirror_session_token"), "owner-session");
+  fireEvent.change(screen.getByLabelText("Server domain"), { target: { value: "https://other.example" } });
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "");
+  fireEvent.change(screen.getByLabelText("Server domain"), { target: { value: location.origin } });
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "owner-access");
+  assert.match(within(connectionToolsPanel()).getByText(/OpenAI\(base_url=/).textContent ?? "", new RegExp(location.origin));
+});
+
+
+test("invalid endpoints never connect, and model download errors are visible", async () => {
+  await renderApp([[/^\/v1\/models$/, () => new Response("model download denied", { status: 401 })]]);
+  const originalAlert = window.alert;
+  let error = "";
+  window.alert = message => { error = String(message); };
+  try {
+    fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "Models" }));
+    await waitFor(() => assert.match(error, /model download denied/));
+    fireEvent.change(screen.getByLabelText("Server domain"), { target: { value: "invalid" } });
+    fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "not-stored" } });
+    assert.equal((screen.getByRole("button", { name: "Connect endpoint" }) as HTMLButtonElement).disabled, true);
+    fireEvent.click(runButton());
+    await screen.findByText("Blocked");
+    assert.equal(localStorage.getItem("mirror_access_token"), null);
+  } finally { window.alert = originalAlert; }
+});
+
+test("HTTPS credential entry uses secure cookies and tolerates unavailable storage", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "location")!;
+  Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://worker.example/mirror/playground") });
+  const originalSetItem = Storage.prototype.setItem;
+  try {
+    await renderApp();
+    fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "https-credential" } });
+    fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "" } });
+    Storage.prototype.setItem = () => { throw new Error("unavailable"); };
+    fireEvent.change(screen.getByLabelText("Bearer credential"), { target: { value: "still-editable" } });
+    assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "still-editable");
+    cleanup();
+  } finally {
+    Storage.prototype.setItem = originalSetItem;
+    Object.defineProperty(globalThis, "location", descriptor);
+  }
 });
 
 });

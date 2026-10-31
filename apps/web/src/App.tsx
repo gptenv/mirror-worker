@@ -1,4 +1,4 @@
-import { mirrorFetch as fetch, readStoredBearer, readStoredSessionToken, storeAccessToken } from "./client-auth.js";
+import { mirrorFetch as fetch, readStoredBearer, endpointOrigin, endpointHeaders, downloadAuthenticated } from "./client-auth.js";
 import { readResponsesStream, responseText } from "./responses-stream.js";
 import { ConnectionTools } from "./ConnectionTools.js";
 import { ConversationTools } from "./ConversationTools.js";
@@ -116,9 +116,7 @@ function Header() {
         <a className="active" href="/mirror/playground">
           Playground
         </a>
-        <a href="/v1/models" target="_blank" rel="noreferrer">
-          Models
-        </a>
+        <button onClick={() => void downloadAuthenticated("/v1/models", "mirror-models.json").catch(error => window.alert(String(error)))}>Models</button>
         <a href="/mirror/api-docs" target="_blank" rel="noreferrer">
           API docs
         </a>
@@ -126,7 +124,7 @@ function Header() {
           OpenAPI schema
         </a>
       </nav>
-      <div className="environment">Local server</div>
+      <div className="environment">{location.host}</div>
     </header>
   );
 }
@@ -138,6 +136,11 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     return readStoredBearer();
   });
+  const [externalKeys, setExternalKeys] = useState<Record<string, string>>({});
+  const [connectedOrigin, setConnectedOrigin] = useState<string | null>(null);
+  const selectedOrigin = endpointOrigin(domain);
+  const localEndpoint = selectedOrigin === location.origin;
+  const selectedKey = localEndpoint ? apiKey : externalKeys[selectedOrigin ?? ""] ?? "";
   const credentialRotationRef = useRef(false);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [model, setModel] = useState(() => loadSnapshot()?.model ?? "auto");
@@ -246,7 +249,9 @@ export default function App() {
   // typed into the freshly-appended row and still saw it stay disabled) -
   // only to show *why* a click was a no-op, via runBlockedReason below.
   const runBlockedReason =
-    readingFiles
+    !selectedOrigin || (!localEndpoint && connectedOrigin !== selectedOrigin)
+      ? "Connect the selected endpoint before running."
+      : readingFiles
       ? "Wait for the selected files to finish reading."
       : mode === "responses" && messages.some(message => message.attachments?.length)
       ? "File attachments require Chat mode. Switch to Chat to send these files."
@@ -262,20 +267,14 @@ export default function App() {
       credentialRotationRef.current = false;
       return;
     }
-    const bearer = readStoredBearer();
-    const headers = new Headers();
-    if (bearer) headers.set("authorization", `Bearer ${bearer}`);
-    const sessionToken = readStoredSessionToken();
-    if (sessionToken) headers.set("x-mirror-session-token", sessionToken);
+    if (!selectedOrigin || (!localEndpoint && connectedOrigin !== selectedOrigin)) return;
+    const headers = endpointHeaders(domain, selectedKey);
     fetch(`${domain.replace(/\/$/, "")}/v1/models`, { headers })
       .then(async (res) => {
         const accessToken = res.headers.get("x-mirror-access-token");
-        if (accessToken) {
+        if (accessToken && localEndpoint) {
           setApiKey(accessToken);
           if (accessToken !== apiKey) credentialRotationRef.current = true;
-          try {
-            storeAccessToken(accessToken, bearer, res.headers.get("x-mirror-session-token"));
-          } catch { /* Browser storage may be unavailable. */ }
         }
         if (!res.ok) throw new Error(await res.text());
         return res.json();
@@ -284,7 +283,7 @@ export default function App() {
         if (Array.isArray(body.data)) setModels(body.data);
       })
       .catch(() => undefined);
-  }, [domain, apiKey]);
+  }, [domain, apiKey, selectedKey, connectedOrigin]);
 
   // sync is always sent - the server only pulls however many more upstream
   // pages are needed to cover this request's window, resuming from a
@@ -546,11 +545,8 @@ export default function App() {
         metadata.mirror_model = pickedModel.trim();
       if (conversationId.trim())
         metadata.conversation_id = conversationId.trim();
-      const requestHeaders = new Headers({ "content-type": "application/json" });
-      const bearer = readStoredBearer();
-      if (bearer) requestHeaders.set("authorization", `Bearer ${bearer}`);
-      const sessionToken = readStoredSessionToken();
-      if (sessionToken) requestHeaders.set("x-mirror-session-token", sessionToken);
+      const requestHeaders = endpointHeaders(endpoint, selectedKey);
+      requestHeaders.set("content-type", "application/json");
       const response = await fetch(endpoint, {
         method: "POST",
         signal: abort.signal,
@@ -565,13 +561,10 @@ export default function App() {
           ...(Object.keys(metadata).length ? { metadata } : {}),
         }),
       });
-        const accessToken = response.headers.get("x-mirror-access-token");
-      if (accessToken) {
+      const accessToken = response.headers.get("x-mirror-access-token");
+      if (accessToken && localEndpoint) {
         setApiKey(accessToken);
         if (accessToken !== apiKey) credentialRotationRef.current = true;
-        try {
-          storeAccessToken(accessToken, bearer, response.headers.get("x-mirror-session-token"));
-        } catch { /* Browser storage may be unavailable. */ }
       }
       if (!response.ok)
         throw new Error(await response.text());
@@ -716,9 +709,13 @@ export default function App() {
             <span>Bearer credential</span>
             <input
               type="password"
-              value={apiKey}
+              value={selectedKey}
               onChange={(event) => {
                 const value = event.target.value;
+                if (!localEndpoint) {
+                  if (selectedOrigin) setExternalKeys(current => ({ ...current, [selectedOrigin]: value }));
+                  return;
+                }
                 setApiKey(value);
                 try {
                   if (value) {
@@ -732,10 +729,11 @@ export default function App() {
                   }
                 } catch { /* Browser storage may be unavailable. */ }
               }}
-              placeholder="Paste ChatGPT accessToken or sessionToken"
+              placeholder={localEndpoint ? "Paste ChatGPT accessToken or sessionToken" : "External provider credential (not your ChatGPT token)"}
             />
           </label>
-          <small>Use a ChatGPT accessToken or sessionToken as the Mirror bearer. If a sessionToken needs exchange, Mirror saves the returned accessToken in this browser.</small>
+          {!localEndpoint && <button disabled={!selectedOrigin} onClick={() => setConnectedOrigin(selectedOrigin)}>Connect endpoint</button>}
+          <small>{!localEndpoint ? "External credentials are separate, held only in this tab, and sent only to the selected origin. Connect endpoint to allow requests." : "Use a ChatGPT accessToken or sessionToken as the Mirror bearer. If a sessionToken needs exchange, Mirror saves the returned accessToken in this browser."}</small>
         </div>
         <div className="columns">
           <section className="prompt-panel">
@@ -1095,15 +1093,12 @@ export default function App() {
             <HotkeySettings hotkeys={hotkeys} disabled={running || readingFiles} onSave={saveHotkeys} />
             <ConnectionTools
               domain={domain}
-              apiKey={apiKey}
+              apiKey={selectedKey}
+              connectionAllowed={localEndpoint || connectedOrigin === selectedOrigin}
               generationSucceeded={status === "Completed"}
               onSessionToken={(token) => {
                 if (token !== apiKey) credentialRotationRef.current = true;
                 setApiKey(token);
-                try {
-                  storeAccessToken(token);
-                  document.cookie = `mirror_asset_session=${encodeURIComponent(token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
-                } catch { /* Browser storage may be unavailable. */ }
               }}
             />
             <div className="request-preview">
