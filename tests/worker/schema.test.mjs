@@ -68,6 +68,9 @@ test.describe('worker / native Durable Object migration recovery', { timeout: 12
     const failure = await request('rollback', '/migrate?failAfterVersion=1', 409);
     assert.match(failure.error, /Synthetic failure after writing migration version/);
     assert.deepEqual(await request('rollback', '/state'), original, 'native transaction rolled back DDL, rows and version table');
+    await runtime.dispose();
+    runtime = new Miniflare(options);
+    assert.deepEqual(await request('rollback', '/state'), original, 'failed migration remains rolled back after restart');
     const retried = await request('rollback', '/migrate');
     assert.equal(retried.version, 1);
     assert.equal(retried.messages[0].content, 'Preserve answer');
