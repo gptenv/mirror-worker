@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
-import { stubBackend } from '../../apps/server/tests/helpers/backend.mjs';
+import { assistantAddFrame, stubBackend } from '../../apps/server/tests/helpers/backend.mjs';
 
 // The production bundle runs unchanged in workerd: real cloudflare:node HTTP
 // adaptation, Durable Object SQL and AsyncLocalStorage. Only external services
@@ -15,6 +15,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   let directory;
   let runtime;
   let options;
+  let streamFixture;
   const upstreamCalls = [];
   test.before(async () => {
     directory = mkdtempSync(path.join(tmpdir(), 'mirror-workerd-'));
@@ -35,6 +36,21 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
         WARP: async request => {
           upstreamCalls.push(new URL(request.url).pathname);
           if (request.headers.get('authorization') === 'Bearer other-account') return Response.json({ account: { account_user_id: 'other-account' } });
+          if (streamFixture && new URL(request.url).pathname.endsWith('/f/conversation')) {
+            const fixture = streamFixture;
+            streamFixture = undefined;
+            const body = await request.json();
+            request.signal.addEventListener('abort', () => { fixture.signalAborted = true; }, { once: true });
+            return new Response(new ReadableStream({
+              start(controller) {
+                fixture.controller = controller;
+                const frame = assistantAddFrame(body.conversation_id, 'fixture-unfinished-node', 'fixture-partial-answer\n');
+                frame.v.message.status = 'in_progress';
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`));
+              },
+              cancel() { fixture.cancelled.resolve(); },
+            }), { headers: { 'content-type': 'text/event-stream' } });
+          }
           return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
         },
         ASSETS: async () => new Response('fixture-static-asset', { headers: { 'content-type': 'text/html' } }),
@@ -95,6 +111,67 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       const exported = await request(`/api/conversations/${id}/export?format=json`, { headers: owner });
       assert.equal(exported.status, 200);
       assert.match(await exported.text(), /Synthetic local prompt/);
+    }
+  });
+
+  test('a real HTTP client disconnect cancels upstream and preserves the last completed parent for retry', { timeout: 15_000 }, async () => {
+    const base = await runtime.ready;
+    const id = 'fixture-http-disconnect';
+    const post = (content, stream, signal) => fetch(new URL('/v1/chat/completions', base), {
+      method: 'POST', headers: { ...owner, 'content-type': 'application/json' }, signal,
+      body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content }], metadata: { conversation_id: id }, stream }),
+    });
+    const initial = await post('Seed completed parent', false, AbortSignal.timeout(3000));
+    assert.equal(initial.status, 200, await initial.text());
+    const before = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
+    const fixture = { cancelled: Promise.withResolvers(), signalAborted: false };
+    streamFixture = fixture;
+    const controller = new AbortController();
+    let reader;
+    const bounded = async (promise, label) => {
+      let timer;
+      try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label)), 3000); })]); }
+      finally { clearTimeout(timer); }
+    };
+    try {
+      const streaming = await post('Disconnect after a partial answer', true, controller.signal);
+      assert.equal(streaming.status, 200);
+      reader = streaming.body.getReader();
+      let received = '';
+      while (!received.includes('fixture-partial-answer')) {
+        const chunk = await bounded(reader.read(), 'No partial text reached the actual HTTP client');
+        assert.equal(chunk.done, false);
+        received += new TextDecoder().decode(chunk.value);
+      }
+      controller.abort();
+      await reader.cancel().catch(() => {});
+      try {
+        await bounded(fixture.cancelled.promise, 'Disconnected HTTP client did not cancel the upstream body');
+      } catch (error) {
+        const state = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
+        throw new Error(`${error.message}; serviceSignalAborted=${fixture.signalAborted}; assistantStatus=${state.messages.at(-1).status}`, { cause: error });
+      }
+      let after;
+      await bounded((async () => {
+        do {
+          after = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
+          if (after.messages.at(-1).status !== 'streaming') return;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        } while (true);
+      })(), 'Disconnected turn did not leave streaming state');
+      assert.equal(after.messages.at(-1).status, 'stopped');
+      assert.equal(after.messages.at(-1).content, 'fixture-partial-answer\n');
+      assert.equal(after.conversation.currentNodeId, before.conversation.currentNodeId);
+      const retry = await post('Retry after disconnect', false, AbortSignal.timeout(3000));
+      assert.equal(retry.status, 200, await retry.text());
+      const recovered = await (await request(`/api/conversations/${id}`, { headers: owner })).json();
+      assert.equal(recovered.messages.at(-1).status, 'done');
+      assert.notEqual(recovered.conversation.currentNodeId, before.conversation.currentNodeId);
+    } finally {
+      streamFixture = undefined;
+      controller.abort();
+      await reader?.cancel().catch(() => {});
+      try { fixture.controller?.close(); } catch {}
     }
   });
 
