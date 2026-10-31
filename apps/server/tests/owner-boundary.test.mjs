@@ -123,4 +123,63 @@ test.describe('server / Worker owner boundary', () => {
       assert.match(allowed.body, /Private owner transcript/);
     } finally { release.resolve(); await owner; await app.close(); }
   });
+
+  test('local credential verification preserves exchange errors without revealing supplied credentials', async () => {
+    seed();
+    const body = '{"error":{"message":"upstream exchange temporarily unavailable","detail":"preserve this"}}';
+    const app = await buildApp({ worker: true });
+    test.mock.method(globalThis, 'fetch', async input => new URL(String(input)).pathname === '/api/auth/session'
+      ? new Response(body, { status: 503, headers: { 'content-type': 'application/json' } })
+      : new Response('expired', { status: 401 }));
+    try {
+      const response = await app.inject({ url: '/api/settings/hotkeys', headers: {
+        authorization: 'Bearer fixture-expired-access', 'x-mirror-session-token': 'fixture-long-session',
+      } });
+      assert.equal(response.statusCode, 503, response.body);
+      assert.equal(response.json().error.message, body);
+      assert.deepEqual(response.json().error.token_lengths.received, { sessionToken: 20, accessToken: 22 });
+      assert.ok(!response.body.includes('fixture-expired-access'));
+      assert.ok(!response.body.includes('fixture-long-session'));
+      assert.equal(response.headers['x-mirror-access-token'], undefined);
+    } finally { await app.close(); }
+  });
+
+  test('local credential verification fails closed on a transport error', async () => {
+    const app = await buildApp({ worker: true });
+    test.mock.method(globalThis, 'fetch', async () => { throw new Error('synthetic transport unavailable'); });
+    try {
+      const response = await app.inject({ url: '/api/settings/hotkeys', headers: { authorization: 'Bearer fixture-access' } });
+      assert.equal(response.statusCode, 401);
+      assert.equal(response.json().error.message, 'synthetic transport unavailable');
+    } finally { await app.close(); }
+  });
+
+  for (const mode of ['rotated-secure', 'cookie-fallback', 'bearer-fallback']) test(`asset token refresh updates only the download cookie (${mode})`, async () => {
+    seed();
+    const ticket = store.sealAssetTicket({ pointer: 'file-service://fixture', conversationId: null, messageId: null, fileName: 'fixture.png' });
+    const freshAccess = `fresh-${mode}`;
+    const initial = `expired-${mode}`;
+    test.mock.method(globalThis, 'fetch', async (input, init) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === '/api/auth/session') return Response.json({ accessToken: freshAccess }, {
+        headers: mode === 'rotated-secure' ? { 'set-cookie': '__Secure-next-auth.session-token=rotated-session; Path=/' } : {},
+      });
+      assert.equal(pathname, '/backend-api/me');
+      if (new Headers(init.headers).get('authorization') !== `Bearer ${freshAccess}`) return new Response('expired', { status: 401 });
+      return Response.json({ account: { account_user_id: 'owner-account' } });
+    });
+    test.mock.method(ChatGptBackendClient.prototype, 'resolveAssetDownloadMetadata', async () => ({ url: 'https://files.oaiusercontent.com/fixture', fileName: 'fixture.png' }));
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchAssetContent', async () => new Response('fixture-image', { headers: { 'content-type': 'image/png' } }));
+    const app = await buildApp({ worker: true, ownerAccountId: 'owner-account' });
+    try {
+      const headers = mode === 'bearer-fallback' ? { authorization: `Bearer ${initial}` } : { cookie: `mirror_asset_session=${initial}` };
+      if (mode === 'rotated-secure') headers['x-forwarded-proto'] = 'https';
+      const response = await app.inject({ url: `/api/asset-content?ticket=${encodeURIComponent(ticket)}`, headers });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.headers['x-mirror-access-token'], freshAccess);
+      assert.equal(response.headers['x-mirror-session-token'], mode === 'rotated-secure' ? 'rotated-session' : undefined);
+      assert.equal(response.headers['cache-control'], 'no-store');
+      assert.equal(response.headers['set-cookie'], `mirror_asset_session=${mode === 'rotated-secure' ? 'rotated-session' : initial}; Path=/api/asset-content; SameSite=Strict${mode === 'rotated-secure' ? '; Secure' : ''}`);
+    } finally { await app.close(); }
+  });
 });
