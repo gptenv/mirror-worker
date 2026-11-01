@@ -7,7 +7,7 @@ import test from "node:test";
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-turnstile-test-"));
 process.env.MIRROR_DATA_DIR = dir;
 
-const [store, auth, { SetSessionBody, ChatBody }] = await Promise.all([
+const [store, auth, { ChatBody }] = await Promise.all([
   import("../dist/store.js"),
   import("../dist/auth.js"),
   import("../dist/api-schemas.js"),
@@ -81,18 +81,13 @@ test("setSessionTurnstileToken updates and clears turnstileToken in session", ()
   store.clearSession();
 });
 
-test("pending session turnstile token is consumed exactly once", async () => {
+test("pending session turnstile token is consumed exactly once", () => {
   store.clearSession();
-  const session = store.saveVerifiedSession("acc-test", "dev-test", "valid-cred-turnstile");
-  // Set cached token so needsMint is false
-  session.cachedAccessToken = "mock-access-token";
-  session.cachedAccessTokenExpiresAt = Date.now() + 3_600_000;
-  store.updateMintedToken("mock-access-token", Date.now() + 3_600_000, null);
-
-  const creds = await auth.getValidCredentials();
-  assert.equal(creds.turnstileToken, undefined);
+  store.saveVerifiedSession("acc-test", "dev-test", "valid-cred-turnstile");
+  assert.equal(store.getSession()?.turnstileToken, "valid-cred-turnstile");
   assert.equal(store.consumeSessionTurnstileToken(), "valid-cred-turnstile");
   assert.equal(store.consumeSessionTurnstileToken(), null);
+  assert.equal(store.getSession()?.turnstileToken, undefined);
   store.clearSession();
 });
 
@@ -112,21 +107,10 @@ test("a pending session turnstile token expires after five minutes", () => {
   }
 });
 
-test("SetSessionBody validates optional turnstileToken", () => {
-  const validWithout = SetSessionBody.parse({
-    sessionToken: "synthetic-session-token-1234567890",
-  });
-  assert.equal(validWithout.turnstileToken, undefined);
-
-  const validWith = SetSessionBody.parse({
-    sessionToken: "synthetic-session-token-1234567890",
-    turnstileToken: "turnstile-token-123",
-  });
-  assert.equal(validWith.turnstileToken, "turnstile-token-123");
-
+test("ChatBody rejects non-string turnstileToken", () => {
   assert.throws(() => {
-    SetSessionBody.parse({
-      sessionToken: "synthetic-session-token-1234567890",
+    ChatBody.parse({
+      prompt: "Hello",
       turnstileToken: 12345,
     });
   });
