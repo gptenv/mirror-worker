@@ -317,7 +317,7 @@ export function saveVerifiedSession(
   let deviceId: string | undefined;
   let turnstileToken: string | undefined;
   const looksLikeSessionToken = (v: string | undefined) =>
-    typeof v === "string" && (v.length > 25 || /session|token|synthetic/i.test(v));
+    typeof v === "string" && /session|token|synthetic/i.test(v);
   if (d !== undefined) {
     // legacy 4-arg: sessionToken, accountId, deviceId, turnstileToken
     accountId = b;
