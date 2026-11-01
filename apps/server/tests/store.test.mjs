@@ -15,10 +15,8 @@ test("credentials are encrypted and conversation continuity persists", async () 
       "account-1",
       "device-1",
     );
-    assert.equal(
-      store.getSession().sessionToken,
-      "a-sensitive-session-token-value",
-    );
+    assert.equal(store.getSession().accountId, "account-1");
+    assert.equal(store.getSession().sessionToken, undefined);
     assert.equal(
       readFileSync(path.join(dir, "mirror.db")).includes(
         Buffer.from("a-sensitive-session-token-value"),
