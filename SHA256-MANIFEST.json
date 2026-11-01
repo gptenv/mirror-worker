@@ -71,7 +71,7 @@
   "apps/server/tests/cm-integration.mjs": "ee6f012d6025d7996b94c83f74d574f8974463fc7b094a7e5161a29d6d34aa89",
   "apps/server/tests/completion-output.test.mjs": "28db0fe62df224ae2c6511b0cb3ca4f6308028703beb83972d960555b08547c9",
   "apps/server/tests/completion-schema.test.mjs": "dd2ca8a46edb01696fef6fec3ec71e10741ba9bed731ede1a56df466a0a57eaa",
-  "apps/server/tests/conversation-continuation.test.mjs": "ff25b9178eefa889860ee6e12fe203eb6fa65f58ef3834dea6f22b5a4ec226d1",
+  "apps/server/tests/conversation-continuation.test.mjs": "c307cf5f01693526e1dc68a933a906b243c26af6419067fe16da955901cbfb1a",
   "apps/server/tests/conversion-routes.test.mjs": "a41dee175d83da2855a3c86e27f05ddcfe4b1cb6bc1edb2b358da47ebd590d36",
   "apps/server/tests/decoder-challenges.test.mjs": "266bcebfa28c3a69faf560e3dc01a96234ef3417ed9b0bb1e39282085dc881b8",
   "apps/server/tests/egress.test.mjs": "1b6e24db771eece1cd8fbf4c9f29157da3bd13f6d258b13bca127da6203de7a1",
