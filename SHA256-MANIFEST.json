@@ -4,6 +4,7 @@
   ".dev.vars.example": "a331083364bfdf5d47d103485435991d5c4238ef3cb840a7d65c6db3a1dc3892",
   ".dockerignore": "d543f9bfd4f5d794472ee1b9932cf8d2e69e4a2aec40c927634cf0424332541b",
   ".env.example": "d4f5012b386f7482aeffe785b771c0a0dae49c74242b115d0c0c3eec3e19492f",
+  ".github/workflows/ci-token-identity.yml": "827f1a48e5cacca47576e4236b293d5f463f710353a549ae8428664e4f79a382",
   ".github/workflows/ci.yml": "f1ec7e474e9f7fa1ff6af26609f7a79cbbcf1673cabdae07939dfbd1f2ea50e0",
   ".gitignore": "dc0410dd80d7f5414e93e7ec2dcc7f02085b82fb7cf04010a3d843bf20d99d2d",
   ".nvmrc": "68ca3fba3b7e864770cb61aeb306d4bd4354b68ab4dd38450860c5d823e42a53",

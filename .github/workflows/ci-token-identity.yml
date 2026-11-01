@@ -1,0 +1,47 @@
+name: Identify existing Cloudflare CI token
+on:
+  push:
+    branches: [codex/ci-token-identity]
+permissions: {}
+jobs:
+  identify:
+    if: github.repository == 'gptenv/mirror-worker' && github.ref == 'refs/heads/codex/ci-token-identity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Read only the existing token's own identity from its issuer
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          const token = process.env.CLOUDFLARE_API_TOKEN;
+          if (!token) throw new Error('Existing CI secret is unavailable');
+          const endpoints = [
+            ['user', 'https://api.cloudflare.com/client/v4/user/tokens/verify'],
+            ['account', 'https://api.cloudflare.com/client/v4/accounts/711ab96baee8597bf61ed973363715d6/tokens/verify'],
+          ];
+          let matched = false;
+          for (const [kind, endpoint] of endpoints) {
+            let response;
+            try {
+              response = await fetch(endpoint, {
+                headers: { authorization: 'Bearer ' + token },
+                redirect: 'error',
+                signal: AbortSignal.timeout(15000),
+              });
+            } catch {
+              throw new Error('Cloudflare token self-verification transport failed');
+            }
+            const body = await response.json().catch(() => null);
+            if (!response.ok || !body?.success) continue;
+            const { id, status } = body.result || {};
+            if (!/^[a-f0-9]{32}$/.test(id || '') || status !== 'active') {
+              throw new Error('Token self-verification did not return an active token identity');
+            }
+            console.log(JSON.stringify({ tokenKind: kind, tokenId: id, status }));
+            matched = true;
+            break;
+          }
+          if (!matched) throw new Error('Cloudflare could not identify this CI token');
+          NODE
