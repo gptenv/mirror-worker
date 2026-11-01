@@ -10,10 +10,7 @@ test("credentials are encrypted and conversation continuity persists", async () 
   process.env.MIRROR_DATA_DIR = dir;
   const store = await import(`../dist/store.js?test=${Date.now()}`);
   try {
-    store.saveVerifiedSession(
-      "a-sensitive-session-token-value",
-      "account-1",
-      "device-1",
+    store.saveVerifiedSession("account-1", "device-1",
     );
     assert.equal(
       store.getSession().sessionToken,

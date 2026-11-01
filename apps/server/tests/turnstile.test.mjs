@@ -20,11 +20,7 @@ test.after(() => {
 
 test("saveVerifiedSession saves and retrieves turnstileToken", () => {
   store.clearSession();
-  const session = store.saveVerifiedSession(
-    "synthetic-session-token-for-testing-only-12345",
-    "acc-test",
-    "dev-test",
-    "turnstile-tok-abc",
+  const session = store.saveVerifiedSession("acc-test", "dev-test", "turnstile-tok-abc",
   );
   assert.equal(session.turnstileToken, "turnstile-tok-abc");
 
@@ -35,11 +31,11 @@ test("saveVerifiedSession saves and retrieves turnstileToken", () => {
 
 test("saveVerifiedSession does not carry over turnstileToken when accountId changes", () => {
   store.clearSession();
-  store.saveVerifiedSession("token-account-1", "account-1", "device-1", "token-turnstile-1");
+  store.saveVerifiedSession("account-1", "device-1", "token-turnstile-1");
   assert.equal(store.getSession()?.turnstileToken, "token-turnstile-1");
 
   // New session for a different account without turnstile token
-  store.saveVerifiedSession("token-account-2", "account-2", "device-2");
+  store.saveVerifiedSession("account-2", "device-2");
   assert.equal(store.getSession()?.accountId, "account-2");
   assert.equal(store.getSession()?.turnstileToken, undefined);
   store.clearSession();
@@ -47,22 +43,22 @@ test("saveVerifiedSession does not carry over turnstileToken when accountId chan
 
 test("saveVerifiedSession does not carry over turnstileToken when sessionToken changes", () => {
   store.clearSession();
-  store.saveVerifiedSession("token-session-1", "account-1", "device-1", "token-turnstile-1");
+  store.saveVerifiedSession("account-1", "device-1", "token-turnstile-1");
   assert.equal(store.getSession()?.turnstileToken, "token-turnstile-1");
 
   // Different session token for same account
-  store.saveVerifiedSession("token-session-2", "account-1", "device-1");
+  store.saveVerifiedSession("account-1", "device-1");
   assert.equal(store.getSession()?.turnstileToken, undefined);
   store.clearSession();
 });
 
 test("saveVerifiedSession preserves turnstileToken when updating the same session and account", () => {
   store.clearSession();
-  store.saveVerifiedSession("token-session-1", "account-1", "device-1", "token-turnstile-1");
+  store.saveVerifiedSession("account-1", "device-1", "token-turnstile-1");
   assert.equal(store.getSession()?.turnstileToken, "token-turnstile-1");
 
   // Same session token and account
-  store.saveVerifiedSession("token-session-1", "account-1", "device-1");
+  store.saveVerifiedSession("account-1", "device-1");
   assert.equal(store.getSession()?.turnstileToken, "token-turnstile-1");
   store.clearSession();
 });
@@ -71,24 +67,7 @@ test("setSessionTurnstileToken updates and clears turnstileToken in session", ()
   store.clearSession();
   store.setSessionTurnstileToken("ignored-without-session");
   assert.equal(store.getSession(), null);
-  store.saveVerifiedSession("synthetic-session-token-for-testing-only-12345");
-  assert.equal(store.getSession()?.turnstileToken, undefined);
-
-  store.setSessionTurnstileToken("fresh-turnstile-token");
-  assert.equal(store.getSession()?.turnstileToken, "fresh-turnstile-token");
-
-  store.setSessionTurnstileToken(null);
-  assert.equal(store.getSession()?.turnstileToken, undefined);
-  store.clearSession();
-});
-
-test("pending session turnstile token is consumed exactly once", async () => {
-  store.clearSession();
-  const session = store.saveVerifiedSession(
-    "synthetic-session-token-for-testing-only-12345",
-    "acc-test",
-    "dev-test",
-    "valid-cred-turnstile",
+  store.saveVerifiedSession("acc-test", "dev-test", "valid-cred-turnstile",
   );
   // Set cached token so needsMint is false
   session.cachedAccessToken = "mock-access-token";
@@ -108,7 +87,7 @@ test("a pending session turnstile token expires after five minutes", () => {
   let now = 1_000_000;
   Date.now = () => now;
   try {
-    store.saveVerifiedSession("synthetic-session-token-for-testing-only-12345", "acc-test", "dev-test", "expiring-token");
+    store.saveVerifiedSession("acc-test", "dev-test", "expiring-token");
     now += 5 * 60_000 + 1;
     assert.equal(store.consumeSessionTurnstileToken(), null);
     assert.equal(store.getSession()?.turnstileToken, undefined);

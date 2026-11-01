@@ -151,7 +151,7 @@ test("destroys the socket when credentials cannot be minted, before ever touchin
 });
 
 test("proxies a full websocket session: queues pre-open messages, flushes on open, forwards both directions, and cascades close", async () => {
-  store.saveVerifiedSession("ws-session-token", "ws-account", "ws-device");
+  store.saveVerifiedSession("ws-account", "ws-device");
   const req = makeReq();
   const socket = makeSocket();
 
@@ -194,7 +194,7 @@ test("proxies a full websocket session: queues pre-open messages, flushes on ope
 });
 
 test("closes both sockets once the pending queue exceeds the message-count limit", async () => {
-  store.saveVerifiedSession("ws-session-token-2", "ws-account-2", "ws-device-2");
+  store.saveVerifiedSession("ws-account-2", "ws-device-2");
   const req = makeReq();
   const socket = makeSocket();
   await proxy.proxyWebSocketUpgrade(req, socket, Buffer.alloc(0));
@@ -207,7 +207,7 @@ test("closes both sockets once the pending queue exceeds the message-count limit
 });
 
 test("closes both sockets once the pending queue exceeds the byte limit", async () => {
-  store.saveVerifiedSession("ws-session-token-3", "ws-account-3", "ws-device-3");
+  store.saveVerifiedSession("ws-account-3", "ws-device-3");
   const req = makeReq();
   const socket = makeSocket();
   await proxy.proxyWebSocketUpgrade(req, socket, Buffer.alloc(0));
@@ -223,7 +223,7 @@ test("closes both sockets once the pending queue exceeds the byte limit", async 
 });
 
 test("an upstream error or unexpected-response destroys the raw socket", async () => {
-  store.saveVerifiedSession("ws-session-token-4", "ws-account-4", "ws-device-4");
+  store.saveVerifiedSession("ws-account-4", "ws-device-4");
   const req = makeReq();
   const socket = makeSocket();
   await proxy.proxyWebSocketUpgrade(req, socket, Buffer.alloc(0));
@@ -233,7 +233,7 @@ test("an upstream error or unexpected-response destroys the raw socket", async (
 });
 
 test("an unexpected-response from upstream also destroys the raw socket", async () => {
-  store.saveVerifiedSession("ws-session-token-5", "ws-account-5", "ws-device-5");
+  store.saveVerifiedSession("ws-account-5", "ws-device-5");
   const req = makeReq();
   const socket = makeSocket();
   await proxy.proxyWebSocketUpgrade(req, socket, Buffer.alloc(0));
@@ -243,7 +243,7 @@ test("an unexpected-response from upstream also destroys the raw socket", async 
 });
 
 test("an upgrade request with no url falls back to the upstream root path", async () => {
-  store.saveVerifiedSession("ws-session-token-6", "ws-account-6", "ws-device-6");
+  store.saveVerifiedSession("ws-account-6", "ws-device-6");
   const req = makeReq({ url: undefined });
   const socket = makeSocket();
   await proxy.proxyWebSocketUpgrade(req, socket, Buffer.alloc(0));
@@ -252,7 +252,7 @@ test("an upgrade request with no url falls back to the upstream root path", asyn
 });
 
 test("closeBoth swallows an exception thrown by either socket's close() call, still attempting to close the other side", async () => {
-  store.saveVerifiedSession("ws-session-token-7", "ws-account-7", "ws-device-7");
+  store.saveVerifiedSession("ws-account-7", "ws-device-7");
   const req = makeReq();
   const socket = makeSocket();
   await proxy.proxyWebSocketUpgrade(req, socket, Buffer.alloc(0));

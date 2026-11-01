@@ -19,7 +19,7 @@ test.describe("server / chat-service", () => {
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
   store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
 }
 
@@ -258,7 +258,7 @@ test("an ephemeral turn with a verified session that has no accountId also falls
   // store.ts) - distinct from the previous test's "no session at all",
   // this covers getSession() returning a truthy session object whose own
   // .accountId is still undefined.
-  store.saveVerifiedSession("session-token-no-account-ephemeral-long-enough", undefined, "device-no-account-ephemeral");
+  store.saveVerifiedSession(undefined, "device-no-account-ephemeral");
   store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
   const originalFetch = globalThis.fetch;
   try {

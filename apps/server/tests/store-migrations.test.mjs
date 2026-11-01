@@ -179,7 +179,7 @@ test("legacy store.json migration is skipped once a real session already exists"
     const store = await import(`../dist/store.js?store-migrate-skip=${Date.now()}`);
     // Establish a real session *after* the module has already loaded (and
     // thus already decided, at that load, whether to migrate).
-    store.saveVerifiedSession("current-session", "acct");
+    store.saveVerifiedSession("acct");
     assert.equal(store.getSession().sessionToken, "current-session");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -545,7 +545,7 @@ test("getSession throws when the stored session value has been corrupted outside
   try {
     const store = await import(`../dist/store.js?store-corrupted-session=${Date.now()}`);
     // Establish the database file and the settings table/row first.
-    store.saveVerifiedSession("session-token-long-enough-for-test", "acct", "device-1");
+    store.saveVerifiedSession("acct", "device-1");
     // Reach past the module's own encrypt()/decrypt() pair with a second,
     // independent raw connection to the same file, writing a value that
     // doesn't match the "v1.<iv>.<tag>.<ciphertext>" shape decrypt()
@@ -574,7 +574,7 @@ test("onSessionChange notifies registered listeners on every session change and 
       calls += 1;
     });
     const revisionBefore = store.getSessionRevision();
-    store.saveVerifiedSession("session-token-long-enough-for-test", "acct", "device-1");
+    store.saveVerifiedSession("acct", "device-1");
     assert.equal(calls, 1);
     assert.equal(store.getSessionRevision(), revisionBefore + 1);
 

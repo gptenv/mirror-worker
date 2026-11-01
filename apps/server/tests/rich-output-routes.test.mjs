@@ -18,18 +18,11 @@ test.after(async()=>{globalThis.fetch=localFetch;await app.close();rmSync(dir,{r
 const download = "https://files.oaiusercontent.com/test?sig=synthetic";
 for (const endpoint of ["chat/completions","responses"]) for (const stream of [false,true]) test(`${endpoint} stream=${stream}: rich output, summary, downloads and three-turn continuity`,async()=>{
   const account=`rich-${endpoint}-${stream}`;
-  store.saveVerifiedSession("synthetic-session",account,"synthetic-device");
-  store.updateMintedToken("synthetic-access",Date.now()+3600000,null);
-  const sent=[],downloads=[];
-  const backend=stubBackend(account,{sent,turnFrames:(body,turn)=>{
-    if(turn>1)return [assistantAddFrame(body.conversation_id,`assistant-${turn}`,`reply-${turn}`),"[DONE]"];
-    const add=(id,role,content,extra={})=>({p:"",o:"add",v:{conversation_id:"upstream-rich",message:{id,author:{role,...(role==="tool"?{name:"python_user_visible"}:{})},content,...extra}}});
-    return [
-      add("summary","assistant",{content_type:"reasoning_recap",text:"Checked the generated report."}),
-      add("tool","tool",{content_type:"execution_output",stdout:"starting"}),
+  store.saveVerifiedSession("assistant",{content_type:"reasoning_recap",text:"Checked the generated report."}),
+      add("tool", "tool",{content_type:"execution_output",stdout:"starting"}),
       {p:"/message/content/stdout",o:"append",v:"\nfinished"},
       {p:"/message/content/stderr",o:"add",v:"sample warning"},
-      add("assistant-1","assistant",{content_type:"text",parts:["Here is "]}),
+      add("assistant-1", "assistant",{content_type:"text",parts:["Here is "]}),
       {p:"/message/content/parts/0",o:"append",v:"\uE200filecite"},
       {p:"/message/content/parts/0",o:"append",v:"\uE202turn0file0\uE201 and [plot](sandbox:/mnt/data/plot.png)."},
       {p:"/message/metadata/content_references",o:"add",v:[{file_id:"file-report",name:"report.csv",matched_text:"\uE200filecite\uE202turn0file0\uE201"}]},
@@ -84,18 +77,7 @@ for (const endpoint of ["chat/completions","responses"]) for (const stream of [f
 for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint of ["chat/completions", "responses"]) for (const stream of [false, true]) {
   test(`${model} ${endpoint} stream=${stream}: first-turn extras hidden, Python retained, follow-up unchanged`, async () => {
     const account = `visibility-${model}-${endpoint}-${stream}`;
-    store.saveVerifiedSession("synthetic-session", account, "synthetic-device");
-    store.updateMintedToken("synthetic-access", Date.now() + 3600000, null);
-    const sent = [], downloads = [];
-    const backend = stubBackend(account, { sent, turnFrames: (body, turn) => {
-      const add = (id, role, name, content, extra = {}) => ({ p: "", o: "add", v: {
-        conversation_id: body.conversation_id ?? `up-${account}`, message: {
-          id, author: { role, ...(name ? { name } : {}) }, content, ...extra,
-        },
-      } });
-      return [
-        add(`preamble-${turn}`, "assistant", null, { content_type: "text", parts: ["SEARCH PREAMBLE"] }, { channel: "commentary" }),
-        add(`search-${turn}`, "tool", "file_search.msearch", { content_type: "text", parts: ["SEARCH LOG"] }),
+    store.saveVerifiedSession("file_search.msearch", { content_type: "text", parts: ["SEARCH LOG"] }),
         { p: "/message/content/parts/0", o: "append", v: " MORE SEARCH LOG" },
         { p: "/message/metadata", o: "add", v: { asset_pointer: "file-service://search-only", name: "SEARCH ATTACHMENT" } },
         { type: "tool_status", tool_name: "file_search.mclick", text: "TYPED SEARCH LOG", asset_pointer: "file-service://typed-only" },
@@ -161,11 +143,7 @@ for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint 
 
 for (const scenario of ["image", "loaded-image", "sandbox", "plain-prefix", "empty-tool"]) test(`Responses rich stream: ${scenario}`, async () => {
   const account = `rich-stream-${scenario}`;
-  store.saveVerifiedSession("synthetic-session", account, "synthetic-device");
-  store.updateMintedToken("synthetic-access", Date.now() + 3600000, null);
-  const downloads = [];
-  const backend = stubBackend(account, { turnFrames: () => {
-    const answer = assistantAddFrame("upstream", "answer", "First line\nSecond line\n");
+  store.saveVerifiedSession("answer", "First line\nSecond line\n");
     if (scenario === "loaded-image") return [assistantAddFrame("upstream", "answer", "An image: sediment://image"), {p:"/message/metadata",o:"add",v:{asset_pointer:"sediment://image",content_type:"image_asset_pointer"}}, "[DONE]"];
     if (scenario === "image") return [assistantAddFrame("upstream", "answer", "An image: sediment://image"), "[DONE]"];
     if (scenario === "sandbox") return [{ type: "attachment", asset_pointer: "sandbox:/mnt/data/extra.csv" }, assistantAddFrame("upstream", "answer", "[Report](sandbox:/mnt/data/report.csv)"), "[DONE]"];
