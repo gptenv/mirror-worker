@@ -170,7 +170,7 @@ test("GET /api/health reports storage, configuration, and egress status", async 
 
   await withFetch(
     async () => new Response("warp=on\nloc=YY\n", { status: 200 }),
-    () => egress.verifyRequiredEgress(),
+    () => Promise.resolve(egress.getEgressStatus()),
   );
   useSession("acct-health");
   const after = await app.inject({ method: "GET", url: "/api/health", headers: { host: "localhost" } });

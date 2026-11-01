@@ -73,7 +73,7 @@ test("public API compatibility preflight, errors, request IDs and allowlisted di
   assert.equal(health.json().build.revision, "development");
   assert.equal(health.json().storage.schemaVersion, 1);
   process.env.MIRROR_BUILD_REVISION = "abcdef0";
-  globalThis.fetch = async () => new Response("warp=on"); await egress.verifyRequiredEgress();
+  globalThis.fetch = async () => new Response("warp=on"); /* optional WARP binding; verification no longer required */
   assert.match((await app.inject({ url: "/api/diagnostics", headers: auth })).json().nextAction, /Test model/);
   store.clearSession();
   assert.match((await app.inject({ url: "/api/diagnostics", headers: auth })).json().nextAction, /Save a session/);
