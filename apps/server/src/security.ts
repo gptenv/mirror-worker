@@ -103,9 +103,14 @@ export function authorizedLocalRequest(headers: { authorization?: string; cookie
   const cookie = headers.cookie?.split(";").map(x => x.trim()).find(x => x.startsWith("mirror_control="))?.slice(15) ?? "";
   return tokenMatches(cookie, controlSecret ? [controlSecret] : []);
 }
-export function mayBootstrapBrowser(method: string, url: string, headers: Record<string, unknown>): boolean {
+export function mayBootstrapBrowser(method: string, url: string, headers: Record<string, unknown>, publicShell = false): boolean {
   const pathname = url.split("?", 1)[0];
-  const isBrowserPage = pathname === "/" || pathname === "/mirror/playground" || pathname === "/mirror/api-docs" || /^\/c\/[a-z0-9:_-]+$/i.test(pathname);
+  const isBrowserPage = pathname === "/" || pathname === "/mirror/playground" || pathname === "/mirror/api-docs" ||
+    /^\/c\/[a-z0-9:_-]+\/?$/i.test(pathname) ||
+    /^\/g\/g-[a-z0-9_-]+(?:\/c\/[a-z0-9:_-]+|\/project)?\/?$/i.test(pathname);
+  // External navigation grants only a credential-free Worker shell, never
+  // the Node control cookie. API/fetch/iframe requests retain their checks.
   return method === "GET" && isBrowserPage &&
-    String(headers.accept ?? "").includes("text/html") && headers["sec-fetch-site"] !== "cross-site";
+    String(headers.accept ?? "").includes("text/html") && (headers["sec-fetch-site"] !== "cross-site" ||
+      (publicShell && headers["sec-fetch-mode"] === "navigate" && headers["sec-fetch-dest"] === "document"));
 }

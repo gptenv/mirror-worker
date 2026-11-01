@@ -192,4 +192,48 @@ test.describe('server / session delivery', () => {
     } finally { await app.close(); }
   });
 
+  test('external document entry shows a public shell and deep-link content still verifies the owner', async t => {
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async (input, init) => {
+      calls++;
+      const pathname = new URL(String(input)).pathname;
+      if (pathname === '/backend-api/me') return Response.json({ object: 'user', id: new Headers(init.headers).get('authorization') === 'Bearer owner' ? 'owner' : 'other' });
+      return new Response('private thread document', { headers: { 'content-type': 'text/html' } });
+    });
+    const app = await buildApp({ worker: true, ownerUserId: 'owner' });
+    const navigation = { accept: 'text/html', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+    try {
+      for (const url of ['/', '/c/fixture-thread?returnTo=https%3A%2F%2Fevil.example', '/c/fixture-thread/', '/g/g-fixture/c/fixture-thread', '/g/g-p-fixture/project']) {
+        const before = calls;
+        const shell = await app.inject({ url, headers: navigation });
+        assert.equal(shell.statusCode, 200);
+        assert.match(shell.body, /<form id="connect">/);
+        assert.doesNotMatch(shell.body, /private thread document/);
+        assert.equal(shell.headers.location, undefined);
+        assert.equal(calls, before);
+        for (const [token, expected] of [['', 401], ['other', 403], ['owner', 200]]) {
+          const response = await app.inject({ url, headers: { accept: 'text/html', 'x-mirror-document': '1', ...(token ? { authorization: `Bearer ${token}` } : {}) } });
+          assert.equal(response.statusCode, expected);
+          assert.equal(response.body.includes('private thread document'), token === 'owner');
+          assert.equal(response.headers.location, undefined);
+        }
+      }
+      const denied = await app.inject({ method: 'POST', url: '/api/conversations', payload: {}, headers: { ...navigation, origin: 'https://external.example', authorization: 'Bearer owner' } });
+      assert.equal(denied.statusCode, 403, 'cross-site mutation remains blocked even with the owner token');
+      for (const url of ['/api/conversations', '/backend-api/conversation/fixture', '/v1/models']) {
+        assert.equal((await app.inject({ url, headers: navigation })).statusCode, 401);
+      }
+    } finally { await app.close(); }
+  });
+
+  test('external navigation cannot create a Node control cookie', async t => {
+    t.mock.method(globalThis, 'fetch', async () => assert.fail('cross-site Node entry must not reach upstream'));
+    const app = await buildApp();
+    try {
+      const response = await app.inject({ url: '/c/fixture-thread', headers: { accept: 'text/html', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } });
+      assert.equal(response.statusCode, 401);
+      assert.equal(response.headers['set-cookie'], undefined);
+    } finally { await app.close(); }
+  });
+
 });

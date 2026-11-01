@@ -58,6 +58,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
               return Response.json({ accessToken: cookie.includes('expired-other') ? 'fresh-other' : 'fresh-owner' }, { headers: { 'set-cookie': '__Secure-next-auth.session-token=fresh-session; Path=/' } });
             return new Response('Synthetic invalid credential', { status: 401 });
           }
+          if (/^\/(?:c|g)\//.test(new URL(request.url).pathname)) return new Response('<html><body>private fixture thread</body></html>', { headers: { 'content-type': 'text/html' } });
           return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
       } },
       outboundService: () => { throw new Error('Unexpected unbound network access'); },
@@ -128,6 +129,42 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     const accepted = await request('/mirror/playground', { headers: { ...documentHeaders, ...owner } });
     assert.equal(accepted.status, 200);
     assert.equal(await accepted.text(), 'fixture-static-asset');
+  });
+  test('external links and thread URLs expose only the shell until the owner authenticates', async () => {
+    const navigation = { accept: 'text/html', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+    // Node fetch overwrites Sec-Fetch-Mode with cors. Use raw HTTP to model
+    // the headers an actual browser navigation sends to the Worker.
+    const { request: httpRequest } = await import('node:http');
+    const base = await runtime.ready;
+    const navigate = url => new Promise((resolve, reject) => {
+      const req = httpRequest(new URL(url, base), { headers: navigation }, res => {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: res.headers })));
+        res.on('error', reject);
+      });
+      req.on('error', reject); req.end();
+    });
+    for (const url of ['/c/fixture-thread?view=thread', '/g/g-fixture/c/fixture-thread', '/g/g-p-fixture/project']) {
+      const before = upstreamCalls.length;
+      const shell = await navigate(url);
+      assert.equal(shell.status, 200);
+      assert.match(await shell.text(), /<form id="connect">/);
+      assert.equal(upstreamCalls.length, before);
+      const document = { accept: 'text/html', 'x-mirror-document': '1' };
+      assert.equal((await request(url, { headers: document })).status, 401);
+      const other = await request(url, { headers: { ...document, authorization: 'Bearer other-account' } });
+      assert.equal(other.status, 403);
+      assert.doesNotMatch(await other.text(), /private fixture thread/);
+      const accepted = await request(url, { headers: { ...document, ...owner } });
+      assert.equal(accepted.status, 200);
+      assert.match(await accepted.text(), /private fixture thread/);
+      assert.equal(upstreamCalls.at(-1), url.split('?')[0]);
+    }
+    for (const url of ['/api/conversations', '/backend-api/conversation/fixture-thread']) {
+      assert.equal((await request(url, { headers: navigation })).status, 401);
+    }
+    assert.equal((await request('/api/conversations', { method: 'POST', headers: { ...owner, origin: 'https://external.example', 'content-type': 'application/json' }, body: '{}' })).status, 403);
   });
   test('HTTP adapter enforces owner access and saves settings across runtime restart', async () => {
     assert.equal((await request('/api/diagnostics')).status, 401);

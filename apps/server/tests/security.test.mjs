@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  mayBootstrapBrowser,
   bearerToken,
   configuredApiKeys,
   isAllowedOrigin,
@@ -78,4 +79,18 @@ test("OPENAI_API_KEY works alone and alongside Mirror keys while ignoring blanks
   assert.deepEqual(configuredApiKeys({ MIRROR_API_KEY: "mirror", MIRROR_API_KEYS: "second", OPENAI_API_KEY: "compat" }), ["mirror", "second", "compat"]);
   assert.deepEqual(configuredApiKeys({ OPENAI_API_KEY: "   " }), []);
 });
+test("only public document shells allow external top-level navigation", () => {
+  const headers = { accept: 'text/html', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+  for (const url of ['/', '/mirror/playground', '/mirror/api-docs', '/c/fixture-thread', '/c/fixture-thread/?q=1', '/g/g-fixture', '/g/g-fixture/c/fixture-thread', '/g/g-p-fixture/project']) {
+    assert.equal(mayBootstrapBrowser('GET', url, headers, true), true);
+    assert.equal(mayBootstrapBrowser('GET', url, headers), false, 'cross-site navigation cannot mint a Node control cookie');
+    assert.equal(mayBootstrapBrowser('GET', url, { ...headers, 'sec-fetch-mode': 'cors' }, true), false);
+    assert.equal(mayBootstrapBrowser('GET', url, { ...headers, 'sec-fetch-dest': 'iframe' }, true), false);
+    assert.equal(mayBootstrapBrowser('POST', url, headers, true), false);
+  }
+  for (const url of ['/api/conversations', '/backend-api/conversation/fixture', '/v1/models', '//evil.example/c/id', '/c/../api/session', '/g/g-fixture/api/session', '/g/g-fixture/../../api/session', '/g/g-fixture/c/https://evil.example']) {
+    assert.equal(mayBootstrapBrowser('GET', url, headers, true), false);
+  }
+});
+
 });

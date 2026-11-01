@@ -207,7 +207,7 @@ app.addHook("onRequest", async (req, reply) => {
     /^\/unauth-mweb\/(?:assets|scripts)\//.test(pathname!) ||
     ["/mirror/inject.js", "/mirror/inject.css", "/favicon.ico"].includes(pathname!)
   );
-  const browserDocument = options.worker && mayBootstrapBrowser(req.method, req.url, req.headers);
+  const browserDocument = options.worker && mayBootstrapBrowser(req.method, req.url, req.headers, true);
   if (browserDocument && !bearer && req.headers["x-mirror-document"] !== "1") {
     return reply.header("Cache-Control", "no-store").type("text/html; charset=utf-8").send(BROWSER_BOOTSTRAP);
   }
