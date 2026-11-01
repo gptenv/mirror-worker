@@ -4,7 +4,7 @@
   ".dev.vars.example": "a331083364bfdf5d47d103485435991d5c4238ef3cb840a7d65c6db3a1dc3892",
   ".dockerignore": "d543f9bfd4f5d794472ee1b9932cf8d2e69e4a2aec40c927634cf0424332541b",
   ".env.example": "d4f5012b386f7482aeffe785b771c0a0dae49c74242b115d0c0c3eec3e19492f",
-  ".github/workflows/ci.yml": "8386a15b91cf30daad42d18be424ec7806e44f6a4bcdf24a13cb53896fc962e6",
+  ".github/workflows/ci.yml": "f1ec7e474e9f7fa1ff6af26609f7a79cbbcf1673cabdae07939dfbd1f2ea50e0",
   ".gitignore": "dc0410dd80d7f5414e93e7ec2dcc7f02085b82fb7cf04010a3d843bf20d99d2d",
   ".nvmrc": "68ca3fba3b7e864770cb61aeb306d4bd4354b68ab4dd38450860c5d823e42a53",
   "ASSET-RENDERING-REGRESSION.md": "3af6426fd807fcebd333deba2c0ff95d9e38694ae47f3f7ada7b0db84f3acf3a",
@@ -17,7 +17,7 @@
   "LICENSE": "6664fc812841d6d2f3ff737265aac53fafe9a96928b198ab5c931359b4505e89",
   "NEXT-STEPS.md": "01155784acf046c6bd588a14e496d8138645e46fbce776f6f072988f16039088",
   "PROTOCOL.md": "54efd828cb092e44d4d6205a824d3da1aac712634abe63ac32cde772ac5cef57",
-  "README.md": "91ea075ca9617e774a14f28c1d6212d3b97b470fff272c58f44e2bb40d81d511",
+  "README.md": "292c1ff014150e6a7de6769c2b49b4729627233fbec1722387595e8359eb409c",
   "RELEASE-RECOVERY.md": "1f7d512c6a8484349b599b456b7e531fd85d28f75cb561f8d3e083df1ddbea19",
   "TESTING-CHECKPOINT.md": "0c7875f4fe352b09f5b8722e8d882248421a2371b3d430499dd89c311b60a561",
   "TODO.md": "71d73b03835da84a9b8ecff802d872b2a0703416ae43972951ef1d48d8bdbd40",
@@ -34,7 +34,7 @@
   "apps/server/src/browser-patch.ts": "5c3d52a80c6755974d498a6126bb3459aa5ef6880de9fc4b23315d88e260b35f",
   "apps/server/src/chat-service.ts": "00f1efd26c5be0a91b95d1cf3325c3f7bbc93302d1857cec310d3d830eee988f",
   "apps/server/src/cloudflare-compat.d.ts": "d92d1c527dbedc04c924b21f4a1f0bbdb80dcbe6f13131fa82c8021b0ec0500b",
-  "apps/server/src/cloudflare-worker.ts": "f93ff9271683b6a93bf98ea85f501ebc5f33bf4ff4ed0033a8faf23afcffed3b",
+  "apps/server/src/cloudflare-worker.ts": "12821e6da47412eabf07582cd76df4b988e73dfec69d952adc26b08e9bf39d20",
   "apps/server/src/conversation-context.ts": "02ba117f8e14d6bbe91c18867679ca64783718387e13d8ba5e9ad52f379df088",
   "apps/server/src/conversation-sync.ts": "b472e88a9902751ac1fd3fc2c7821212a14f8738440cd9d37662bcb5d83a9204",
   "apps/server/src/conversion-routes.ts": "3c7cda43b783d7c3a564fb5e6a25e3eaae19a1c4b819db75793dc3902010a793",
@@ -190,7 +190,7 @@
   "playwright.config.ts": "6ca4dec3afd759c4d98675e0c60573e274f396cbd380d1964077ff98fc4a1c9e",
   "scripts/check-chatgptbox-assets.mjs": "e81b94815262cc85e248a9ca127e11b23e3607a6d93d8967774bc96a6a2a3286",
   "scripts/check-test-suites.mjs": "333599900642496ff36510c887542130a01f9bffef0984fcc567e4c1dc306e9b",
-  "scripts/deploy-worker-artifact.mjs": "4bb69c3f655932808a5cab315522303390b0a9215ca8dd9aa51b6abd17ac343f",
+  "scripts/deploy-worker-artifact.mjs": "df069168358c2e0f6262362ed9e7c0f09b35739c15e8c984d7b81d905ffc0658",
   "scripts/gen-api-key.mjs": "03004c5d0bd264cdbeb964e3ca11fdee6f3c48ff7d81d1db09c9e1579890f521",
   "scripts/manifest.mjs": "76a90a05eebe79597c8fcd8cb1b683921f2d1f6c5496f1291831021cca3ddd48",
   "scripts/protocol-canary.mjs": "a493113e279918cceb1c186313f34f24ca43b1c976ac6871a308fc50fc484fb3",
@@ -209,5 +209,5 @@
   "tests/worker/runtime.test.mjs": "0a13b1fa9a54e615691cbc1be4f5d41c5d17762adc6b82afef1289a99cd00f17",
   "tests/worker/schema.test.mjs": "5fda364e2504c653307c3b250aa225a37e9415c69e9cc461bdc3358449da113c",
   "tsconfig.base.json": "ea903f97b8096f3cea4d123a67c5f816f1501980dd5317408a0fbc8f411be4e4",
-  "wrangler.jsonc": "a99cb65eec708677e0f00afdb04324e6641d9d26bd98ef028e128e645d68a174"
+  "wrangler.jsonc": "d3e0a1afa2fca3874968cb88f48c7354f2a0a9613d57567ddd2f34253d85163d"
 }
