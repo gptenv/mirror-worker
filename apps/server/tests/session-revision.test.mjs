@@ -13,7 +13,7 @@ test('a pending refresh cannot write credentials into a replacement session',asy
   globalThis.fetch=async()=>{await gate;return Response.json({accessToken:'old-access'});};
   const pending=auth.getValidCredentials();const rejected=assert.rejects(pending,/Session changed/);
   store.saveVerifiedSession('new-account');release();await rejected;
-  assert.equal(store.getSession().sessionToken,'new-session');assert.equal(store.getSession().cachedAccessToken,undefined);
+  assert.equal(store.getSession().accountId,'new-account');assert.equal(store.getSession().sessionToken,undefined);assert.equal(store.getSession().cachedAccessToken,undefined);
  }finally{globalThis.fetch=original;rmSync(dir,{recursive:true,force:true});}
 });
 });

@@ -25,7 +25,8 @@ test("MIRROR_STORE_KEY accepts a hex-encoded 32-byte key", async () => {
   try {
     const store = await import(`../dist/store.js?store-key-hex=${Date.now()}`);
     store.saveVerifiedSession("tok", "acct");
-    assert.equal(store.getSession().sessionToken, "tok");
+    assert.equal(store.getSession().accountId, "tok");
+    assert.equal(store.getSession().sessionToken, undefined);
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -39,7 +40,8 @@ test("MIRROR_STORE_KEY accepts a base64-encoded 32-byte key", async () => {
   try {
     const store = await import(`../dist/store.js?store-key-b64=${Date.now()}`);
     store.saveVerifiedSession("tok2", "acct");
-    assert.equal(store.getSession().sessionToken, "tok2");
+    assert.equal(store.getSession().accountId, "tok2");
+    assert.equal(store.getSession().sessionToken, undefined);
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -67,14 +69,15 @@ test("reuses the on-disk master key across restarts (no MIRROR_STORE_KEY set)", 
   delete process.env.MIRROR_STORE_KEY;
   try {
     const first = await import(`../dist/store.js?store-key-reuse-a=${Date.now()}`);
-    first.saveVerifiedSession("persisted-by-key-file", "acct");
+    first.saveVerifiedSession("acct", "persisted-device");
     assert.ok(existsSync(path.join(dir, "master.key")));
 
     // A second "process" (fresh module instance, same data dir) must load the
     // same on-disk key file rather than minting a new one, or it couldn't
     // decrypt what the first instance wrote.
     const second = await import(`../dist/store.js?store-key-reuse-b=${Date.now()}`);
-    assert.equal(second.getSession().sessionToken, "persisted-by-key-file");
+    assert.equal(second.getSession().accountId, "acct");
+    assert.equal(second.getSession().sessionToken, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -180,7 +183,8 @@ test("legacy store.json migration is skipped once a real session already exists"
     // Establish a real session *after* the module has already loaded (and
     // thus already decided, at that load, whether to migrate).
     store.saveVerifiedSession("acct");
-    assert.equal(store.getSession().sessionToken, "current-session");
+    assert.equal(store.getSession().accountId, "acct");
+    assert.equal(store.getSession().sessionToken, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

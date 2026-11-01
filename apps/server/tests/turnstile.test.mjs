@@ -41,13 +41,13 @@ test("saveVerifiedSession does not carry over turnstileToken when accountId chan
   store.clearSession();
 });
 
-test("saveVerifiedSession does not carry over turnstileToken when sessionToken changes", () => {
+test("saveVerifiedSession does not carry over turnstileToken when accountId changes", () => {
   store.clearSession();
   store.saveVerifiedSession("account-1", "device-1", "token-turnstile-1");
   assert.equal(store.getSession()?.turnstileToken, "token-turnstile-1");
 
-  // Different session token for same account
-  store.saveVerifiedSession("account-1", "device-1");
+  // Different account
+  store.saveVerifiedSession("account-2", "device-2");
   assert.equal(store.getSession()?.turnstileToken, undefined);
   store.clearSession();
 });
