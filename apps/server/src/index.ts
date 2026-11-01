@@ -388,14 +388,17 @@ app.get("/api/models", async () => {
 });
 app.get("/api/gpts", async () => {
   const client = new ChatGptBackendClient(await getValidCredentials());
+  // Sidebar and bootstrap are independent best-effort fetches; a failure
+  // in either still returns whatever the other (and any local data) provides.
   const [projects, gpts] = await Promise.all([
     client
       .fetchGizmoSidebar({
         ownedOnly: false,
         limit: 50,
         conversationsPerGizmo: 0,
-      }),
-    client.fetchGizmoBootstrap({ limit: 20 }),
+      })
+      .catch(() => ({})),
+    client.fetchGizmoBootstrap({ limit: 20 }).catch(() => ({})),
   ]);
   const seen = new Set<string>();
   return [...normalizeGizmos(gpts), ...normalizeGizmos(projects)]
