@@ -1,6 +1,8 @@
 export interface SessionCredentials {
   /** Current browser-provided or freshly minted accessToken sent as Bearer first. */
   accessToken: string;
+  /** False after owner verification or before response headers commit. */
+  sessionRefreshAllowed?: boolean;
   /** Optional cookie string. The working PoC currently succeeds bearer-only. */
   cookie?: string;
   /** Stable per-install/device UUID sent as oai-device-id. */

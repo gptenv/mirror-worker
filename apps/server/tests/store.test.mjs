@@ -5,26 +5,14 @@ import path from "node:path";
 import test from "node:test";
 
 test.describe("server / store", () => {
-test("credentials are encrypted and conversation continuity persists", async () => {
+test("account metadata is encrypted and conversation continuity persists", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "mirror-store-"));
   process.env.MIRROR_DATA_DIR = dir;
   const store = await import(`../dist/store.js?test=${Date.now()}`);
   try {
-    store.saveVerifiedSession(
-      "a-sensitive-session-token-value",
-      "account-1",
-      "device-1",
-    );
-    assert.equal(
-      store.getSession().sessionToken,
-      "a-sensitive-session-token-value",
-    );
-    assert.equal(
-      readFileSync(path.join(dir, "mirror.db")).includes(
-        Buffer.from("a-sensitive-session-token-value"),
-      ),
-      false,
-    );
+    store.saveVerifiedSession("account-1", "device-1");
+    assert.equal(store.getSession().accountId, "account-1");
+    assert.equal(readFileSync(path.join(dir, "mirror.db")).includes(Buffer.from("account-1")), false);
 
     const conversation = store.createConversation({
       model: "auto",

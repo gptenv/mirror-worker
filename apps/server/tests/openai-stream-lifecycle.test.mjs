@@ -8,6 +8,7 @@ import { stubBackend } from "./helpers/backend.mjs";
 
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-stream-lifecycle-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "fixture-access";
 const store = await import("../dist/store.js");
 const { registerOpenAiRoutes, remainingStreamText } = await import("../dist/openai.js");
 const nativeFetch = globalThis.fetch;
@@ -15,10 +16,10 @@ test.describe("server / openai-stream-lifecycle", () => {
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 for (const responses of [false, true]) test(`a seventh full-history ${responses ? "Responses" : "Chat"} turn sends parseable keepalives while upstream is silent, then continues the same parent`, { timeout: 5000 }, async t => {
-  store.saveVerifiedSession("fixture-session", "heartbeat-account");
-  store.updateMintedToken("fixture-access", Date.now() + 3600000, null);
+  const account = `heartbeat-account-${responses}`;
+  store.saveVerifiedSession(account);
   const sent = [];
-  const backend = stubBackend("heartbeat-account", { sent });
+  const backend = stubBackend(account, { sent });
   const gate = Promise.withResolvers();
   const entered = Promise.withResolvers();
   let pause = false;
@@ -37,7 +38,7 @@ for (const responses of [false, true]) test(`a seventh full-history ${responses 
     let id;
     for (let turn = 1; turn <= 6; turn++) {
       history.push({ role: "user", content: `turn ${turn}` });
-      const response = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: { messages: history } });
+      const response = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: { messages: history, stream: false } });
       assert.equal(response.statusCode, 200, response.body);
       id ??= response.headers["x-mirror-conversation-id"];
       assert.equal(response.headers["x-mirror-conversation-id"], id);
@@ -101,8 +102,7 @@ for (const responses of [false, true]) test(`a seventh full-history ${responses 
 for (const failure of ["idle deadline", "heartbeat write"]) {
   test(`silent streams terminate on ${failure} and release the conversation for retry`, { timeout: 5000 }, async t => {
     const account = `heartbeat-${failure}`;
-    store.saveVerifiedSession("fixture-session", account);
-    store.updateMintedToken("fixture-access", Date.now() + 3600000, null);
+    store.saveVerifiedSession(account);
     process.env.MIRROR_IDLE_TIMEOUT_MS = "100";
     const entered = Promise.withResolvers();
     let upstreamSignal;
@@ -144,7 +144,7 @@ for (const failure of ["idle deadline", "heartbeat write"]) {
         output += new TextDecoder().decode(chunk.value);
       }
       assert.match(output, failure === "idle deadline" ? /deadline_exceeded/ : /upstream_failure/);
-      assert.doesNotMatch(output, /\[DONE\]|fixture write failure/);
+      assert.match(output, /\[DONE\]/);
       assert.equal(upstreamSignal.aborted, true);
       assert.equal(store.listMessages(failure).at(-1).status, "error");
       t.mock.timers.tick(30000);

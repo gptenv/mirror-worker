@@ -13,14 +13,14 @@ import test from "node:test";
 // `activeTurns` map that stopConversation/the 409 guard depend on.
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-chat-service-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "synthetic-access-fixture";
 const store = await import("../dist/store.js");
 const service = await import("../dist/chat-service.js");
 test.describe("server / chat-service", () => {
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
 }
 
 function sseBody(payloads) {
@@ -87,13 +87,12 @@ test("ephemeral chat uses upstream temporary mode and leaves no local rows", asy
   }
 });
 
-test("a gizmo's bootstrap payload fetch failure is swallowed and the turn still completes", async () => {
+test("a gizmo lookup failure is reported rather than silently sending without its payload", async () => {
   useSession("account-gizmo");
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = stubHappyBackend("account-gizmo");
-    const result = await service.runChat({ prompt: "hi", model: "auto", gizmoId: "g-123" });
-    assert.equal(result.result.text, "done");
+    await assert.rejects(service.runChat({ prompt: "hi", model: "auto", gizmoId: "g-123" }), /GET \/gizmos\/g-123 failed: 404/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -258,8 +257,7 @@ test("an ephemeral turn with a verified session that has no accountId also falls
   // store.ts) - distinct from the previous test's "no session at all",
   // this covers getSession() returning a truthy session object whose own
   // .accountId is still undefined.
-  store.saveVerifiedSession("session-token-no-account-ephemeral-long-enough", undefined, "device-no-account-ephemeral");
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(undefined, "device-no-account-ephemeral");
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = async (url) => {
@@ -362,4 +360,77 @@ test("an assistant reply with no text and no status is stored as empty content w
     globalThis.fetch = originalFetch;
   }
 });
+
+test("resource rejection cancels upstream, preserves partial output, and allows retry", async () => {
+  const account = "account-stream-budget";
+  useSession(account);
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
+  const backend = stubHappyBackend(account);
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).endsWith("/f/conversation")) return backend(url, init);
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"p":"","o":"add","v":{"conversation_id":"upstream-partial","message":{"id":"partial","author":{"role":"assistant"},"content":{"parts":["partial answer"]}}}}\n\n'));
+          controller.enqueue(new TextEncoder().encode("x".repeat(1024 * 1024 + 1)));
+        },
+        cancel() { cancelled++; },
+      }));
+    };
+    await assert.rejects(service.runChat({ newConversationId: "budget-turn", prompt: "hello" }), /frame exceeds resource limit/);
+    assert.equal(cancelled, 1);
+    const failed = store.listMessages("budget-turn").at(-1);
+    assert.equal(failed.content, "partial answer");
+    assert.equal(failed.status, "error");
+    assert.equal(store.getConversation("budget-turn").currentNodeId, "client-created-root");
+    assert.equal(service.stopConversation("budget-turn"), false);
+    globalThis.fetch = backend;
+    assert.equal((await service.runChat({ conversationId: "budget-turn", prompt: "retry" })).result.text, "done");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("stopping an idle upstream releases its reader, preserves partial output, and allows retry", async () => {
+  const account = "account-idle-stream-stop";
+  useSession(account);
+  const originalFetch = globalThis.fetch;
+  const partial = Promise.withResolvers();
+  const backend = stubHappyBackend(account);
+  let cancelled = 0;
+  let source;
+  let settled;
+  try {
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).endsWith("/f/conversation")) return backend(url, init);
+      // Deliberately ignore init.signal: the protocol owns the response reader.
+      return new Response(new ReadableStream({
+        start(controller) {
+          source = controller;
+          controller.enqueue(new TextEncoder().encode('data: {"p":"","o":"add","v":{"conversation_id":"upstream-partial","message":{"id":"partial","author":{"role":"assistant"},"content":{"parts":["partial answer"]}}}}\n\n'));
+        },
+        cancel() { cancelled++; },
+      }));
+    };
+    settled = service.runChat({ newConversationId: "idle-stop-turn", prompt: "hello", onDelta: () => partial.resolve() })
+      .then(result => ({ result }), error => ({ error }));
+    await partial.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(service.stopConversation("idle-stop-turn"), true);
+    assert.equal((await settled).error.name, "AbortError");
+    assert.equal(cancelled, 1);
+    const stopped = store.listMessages("idle-stop-turn").at(-1);
+    assert.equal(stopped.content, "partial answer");
+    assert.equal(stopped.status, "stopped");
+    assert.equal(stopped.upstreamNodeId, null);
+    assert.equal(store.getConversation("idle-stop-turn").currentNodeId, "client-created-root");
+    assert.equal(service.stopConversation("idle-stop-turn"), false);
+    globalThis.fetch = backend;
+    assert.equal((await service.runChat({ conversationId: "idle-stop-turn", prompt: "retry" })).result.text, "done");
+  } finally {
+    if (source && !cancelled) source.close();
+    await settled;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 });

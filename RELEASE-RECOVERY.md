@@ -1,5 +1,9 @@
 # Release verification and recovery
 
+For the Cloudflare Worker, use [WORKER-RECOVERY.md](WORKER-RECOVERY.md).
+The image, volume, and filesystem backup procedures below apply to Node/Compose
+installations and cannot restore Durable Object storage.
+
 Before upgrading a persistent Mirror installation, keep the previous image and
 a database backup with its matching encryption key. The running database must
 never be the target of a restore test.
@@ -7,7 +11,8 @@ never be the target of a restore test.
 ## Database compatibility
 
 The current schema version is **1**, stored in SQLite's `PRAGMA user_version`
-and exposed as `storage.schemaVersion` by `/api/diagnostics`. Version 0 means
+for Node or the `mirror_schema` table for Workers, and exposed as
+`storage.schemaVersion` by `/api/diagnostics`. Version 0 means
 the historical unversioned SQLite schema. The baseline supports that schema,
 including databases lacking `attachments_json`, `is_private`, or `is_branch`.
 Existing encrypted sessions, messages, instructions, and upstream node IDs are
@@ -123,3 +128,43 @@ TODO.md MIR-20 for that remaining gap). `npm audit` reported 0
 vulnerabilities. The Playwright/browser e2e suite could not be run in this
 environment (see TODO.md MIR-21) - this is not proof it passes, only that
 everything else does.
+
+## Cloudflare Worker acceptance (2026-10-31)
+
+The historical September results above are not a verification claim for the
+Worker fork or the current PR. Run a fresh Node 24 checkout through:
+
+```sh
+npm ci
+npm run typecheck
+npm run test:worker
+npm run coverage
+npm run storage:drill
+npx playwright install --with-deps chromium
+npm run test:e2e
+npm run manifest -- --check
+```
+
+`test:worker` builds the frontend/protocol and bundles the production Worker
+entrypoint, then executes it in local **workerd** through Miniflare. It exercises
+real `cloudflare:node` HTTP adaptation, Durable Object SQL, owner rejection,
+WebSocket rejection, persistence across a complete runtime restart, and JSON/SSE
+completion transcript storage. The upstream WARP service and static asset
+service are synthetic local fixtures, and unbound outbound network requests
+fail closed. Temporary configuration and data never use production bindings,
+credentials, or volumes. This does **not** verify deployed WARP routing, a real
+ChatGPT account, production asset delivery, or live browser/client compatibility.
+The ordinary browser suite separately runs Vite with mocked API responses.
+
+The local runtime gate is separate from the Node instrumented per-file coverage
+gate: workerd execution is not Node V8 coverage. Neither gate is optional in CI.
+The existing `storage:drill` is a Node filesystem/SQLite drill, **not** a Durable
+Object backup/restore procedure. [Worker recovery guidance](WORKER-RECOVERY.md)
+describes migration failures, code rollback limits, and the remaining production
+PITR rehearsal and live acceptance requirements before rollout.
+
+Miniflare is pinned to the version already shipped with the locked Wrangler;
+upgrade those together and rerun the runtime acceptance. Installation requires
+native platform packages and the root `patch-package` postinstall. If the npm
+cache is not writable, supply `npm ci --cache /a/writable/cache`; do not reuse a
+`node_modules` directory copied from another operating system.

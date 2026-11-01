@@ -50,9 +50,8 @@ export function wrapNodeDatabase(database: DatabaseSync): SqliteDatabase {
 export function wrapDurableSql(storage: DurableSqlStorage): SqliteDatabase {
   return {
     exec(sql) {
-      // PRAGMAs are configured by Cloudflare's SQLite-backed Durable Object
-      // storage and are not part of its SQL API.
-      if (/^\s*PRAGMA\b/i.test(sql)) return;
+      // Let the runtime accept supported PRAGMAs (such as table_info) and
+      // reject unsupported ones; silently skipping SQL can hide migrations.
       return storage.sql.exec(sql);
     },
     prepare(sql) {

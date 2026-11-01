@@ -31,6 +31,11 @@ test("rewrites JSON-escaped ChatGPT URLs", () => {
   );
 });
 
+test("does not rewrite hostnames that merely start with a ChatGPT hostname", () => {
+  const input = 'https://chatgpt.com.example/path wss://chat.openai.com.example/path';
+  assert.equal(rewriteChatGptUrls(input, 'https://mirror.example'), input);
+});
+
 test("rewrites ChatGPT subdomains, legacy host, and websocket origins", () => {
   const input = [
     'fetch("https://ab.chatgpt.com/ces/v1/rgstr")',

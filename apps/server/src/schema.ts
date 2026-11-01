@@ -1,9 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { SqliteDatabase } from "./worker-sql.js";
+
+interface SchemaDatabase {
+  exec(sql: string): unknown;
+  prepare(sql: string): { all(): unknown[] };
+}
 
 // Append migrations; never edit a migration after releasing it.
 // Version 0 is the legacy, unversioned SQLite schema.
 const migrations = [
-  function baseline(db: DatabaseSync): void {
+  function baseline(db: SchemaDatabase): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversations (
@@ -81,4 +87,25 @@ export function migrateDatabase(db: DatabaseSync): void {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+/** Workers do not support PRAGMA user_version. Keep their version in SQL data. */
+export function workerDatabaseSchemaVersion(db: SqliteDatabase): number {
+  const row = db.prepare("SELECT version FROM mirror_schema WHERE id = 1").get() as { version: number } | undefined;
+  return row?.version ?? 0;
+}
+
+/** Synchronous constructor initialization: schema and version commit together. */
+export function migrateWorkerDatabase(db: SqliteDatabase): void {
+  db.transaction(() => {
+    db.exec("CREATE TABLE IF NOT EXISTS mirror_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)");
+    const version = workerDatabaseSchemaVersion(db);
+    if (!Number.isInteger(version) || version < 0 || version > DATABASE_SCHEMA_VERSION) {
+      throw new Error("Unsupported database schema version; use a compatible Mirror release or restore a pre-upgrade backup.");
+    }
+    for (let index = version; index < migrations.length; index++) {
+      migrations[index](db);
+      db.prepare("INSERT INTO mirror_schema (id, version) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET version = excluded.version").run(index + 1);
+    }
+  });
 }

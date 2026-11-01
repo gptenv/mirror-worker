@@ -7,3 +7,4 @@ export * from "./session.js";
 export * from "./turnstile.js";
 export * from "./drift.js";
 export * from "./transport.js";
+export * from "./browser-credentials.js";

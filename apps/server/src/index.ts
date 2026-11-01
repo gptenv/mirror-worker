@@ -1,3 +1,4 @@
+import { abortable, turnDeadline } from "./deadlines.js";
 import { registerInsightRoutes } from "./insights.js";
 import { registerDecoderChallengeRoutes } from "./decoder-challenges.js";
 import { registerConversionRoutes } from "./conversion-routes.js";
@@ -8,7 +9,7 @@ import { formatStartupFailure } from "./preflight.js";
 import { syncConversationPage, hasRemoteHistory } from "./conversation-sync.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
@@ -19,6 +20,8 @@ import { stringify as toYaml } from "yaml";
 import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
 import { BROWSER_BOOTSTRAP } from "./browser-bootstrap.js";
+import { EARLY_PATCH } from "./browser-patch.js";
+import { nativeReadCredentials, applyNativeCredentialCookies } from "./native-credentials.js";
 import { chatGptUpstreamPath } from "./url-rewrite.js";
 import {
   ConversationIdParam,
@@ -35,7 +38,7 @@ import {
   normalizeModels,
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
-import { getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
+import { runWithRequestSessionToken, applyRotatedCredentialHeaders, getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -94,12 +97,12 @@ function sessionAuthenticationError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+function sessionTokenLengthDiagnostics(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   const sent = (error as { tokenLengths?: { accessToken?: { sentUpstream?: number }; sessionToken?: { sentUpstream?: number } } })?.tokenLengths;
   return {
     received: {
-      sessionToken: fallbackSessionToken?.length ?? bearer?.length ?? null,
-      accessToken: bearer?.length ?? null,
+      sessionToken: fallbackSessionToken?.length ?? bearer.length,
+      accessToken: bearer.length,
     },
     sent_upstream: {
       sessionToken: sent?.sessionToken?.sentUpstream ?? null,
@@ -108,11 +111,17 @@ function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefine
   };
 }
 
-function sessionAuthenticationErrorBody(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
+function sessionAuthenticationStatus(error: unknown): number {
+  const upstream = error as { statusCode?: number; status?: number } | null | undefined;
+  return Number(upstream?.statusCode ?? upstream?.status ?? 502);
+}
+
+function sessionAuthenticationErrorBody(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   return {
     error: {
       message: sessionAuthenticationError(error),
-      type: "authentication_error",
+      type: sessionAuthenticationStatus(error) === 401 ? "authentication_error" : "upstream_error",
+      code: sessionAuthenticationStatus(error) === 401 ? "credential_rejected" : "upstream_failure",
       token_lengths: sessionTokenLengthDiagnostics(error, bearer, fallbackSessionToken),
     },
   };
@@ -122,7 +131,7 @@ export interface WorkerAssets {
   fetch(request: Request): Promise<Response>;
 }
 
-export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets } = {}) {
+export async function buildApp(options: { worker?: boolean; assets?: WorkerAssets; ownerUserId?: string } = {}) {
 const app = Fastify({
   trustProxy: options.worker ? true : false,
   logger: options.worker ? false : {
@@ -171,6 +180,9 @@ await app.register(multipart, {
 });
 
 const accountKey = () => getSession()?.accountId ?? "default";
+// Worker requests already enter a scope in MirrorStorage.fetch. Node also needs
+// an empty scope so configured credentials stay attached to one request.
+if (!options.worker) app.addHook("onRequest", (_req, _reply, done) => runWithRequestSessionToken(undefined, done));
 app.addHook("onRequest", async (req, reply) => {
   // Normalize before classifying auth: aliases need exactly the same bearer,
   // account headers, retry behavior and upstream path as /backend-api requests.
@@ -182,7 +194,9 @@ app.addHook("onRequest", async (req, reply) => {
   const bearer = bearerToken(req.headers.authorization);
   const isConfiguredApiKey = tokenMatches(bearer, configuredApiKeys());
   const assetContentRequest = ["GET", "HEAD"].includes(req.method) && req.url.split("?", 1)[0] === "/api/asset-content";
-  const encodedAssetCookieToken = assetContentRequest
+  const encodedAssetCookieToken = assetContentRequest && (!options.worker || (!/(?:^|;\s*)__Host-mirror_read=/.test(req.headers.cookie || "") &&
+    ((!req.headers["sec-fetch-site"] || ["same-origin", "none"].includes(String(req.headers["sec-fetch-site"]))) &&
+      (!req.headers.origin || req.headers.origin === `${req.protocol}://${req.headers.host}`))))
     ? req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("mirror_asset_session="))?.slice("mirror_asset_session=".length)
     : undefined;
   let assetCookieToken: string | undefined;
@@ -197,7 +211,7 @@ app.addHook("onRequest", async (req, reply) => {
     /^\/unauth-mweb\/(?:assets|scripts)\//.test(pathname!) ||
     ["/mirror/inject.js", "/mirror/inject.css", "/favicon.ico"].includes(pathname!)
   );
-  const browserDocument = options.worker && mayBootstrapBrowser(req.method, req.url, req.headers);
+  const browserDocument = options.worker && mayBootstrapBrowser(req.method, req.url, req.headers, true);
   if (browserDocument && !bearer && req.headers["x-mirror-document"] !== "1") {
     return reply.header("Cache-Control", "no-store").type("text/html; charset=utf-8").send(BROWSER_BOOTSTRAP);
   }
@@ -205,10 +219,35 @@ app.addHook("onRequest", async (req, reply) => {
     req.url.startsWith("/backend-api/") || req.url.startsWith("/ces/") ||
     req.url.startsWith("/realtime/") || req.url.startsWith("/api/auth/") ||
     assetContentRequest || (pathname === "/api/session" && req.method !== "DELETE");
-  const requestSessionToken = bearer || assetCookieToken || "";
+  const nativePair = nativeReadCredentials(req, Boolean(options.worker && options.ownerUserId));
+  const requestSessionToken = bearer || nativePair?.[0] || nativePair?.[1] || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
-  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
-  if (requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
+  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (!bearer ? nativePair?.[1] || assetCookieToken : undefined));
+  const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
+    /^\/(?:assets|mirror\/assets)\//.test(pathname!) || ["/favicon.ico", "/index.html"].includes(pathname!));
+  if (options.ownerUserId && !workerPublicAsset && pathname !== "/api/health") {
+    if (!requestSessionToken) return reply.code(401).send({ error: { message: "A ChatGPT credential is required", type: "authentication_error" } });
+    try {
+      const credentials = await getValidCredentials();
+      const client = new ChatGptBackendClient(credentials);
+      // Authenticate the current profile's user principal. accountId belongs
+      // to workspace routing and may be absent or cached from an older profile.
+      const profile = await client.fetchMe();
+      if (profile.object !== "user" || typeof profile.id !== "string" || !profile.id)
+        return reply.code(502).send({ error: { message: "Upstream returned an invalid user profile", type: "upstream_error", code: "upstream_failure" } });
+      if (profile.id !== options.ownerUserId)
+        return reply.header("x-mirror-auth-status", "owner_mismatch").code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error", code: "owner_mismatch" } });
+      // No later exchange may replace the identity that passed this gate.
+      credentials.sessionRefreshAllowed = false;
+      reply.header("x-mirror-auth-status", "owner_verified");
+      sessionBearerAuthenticated = true;
+    } catch (error) {
+      const status = sessionAuthenticationStatus(error);
+      if (status === 401) reply.header("x-mirror-auth-status", "credential_rejected");
+      return reply.code(status).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+    }
+  }
+  if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
     // Validate the browser bearer against ChatGPT. The backend client tries it
     // directly as an accessToken and exchanges the client-held sessionToken
     // only after an upstream authentication denial.
@@ -217,7 +256,9 @@ app.addHook("onRequest", async (req, reply) => {
       await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
+      const status = sessionAuthenticationStatus(error);
+      if (status === 401) reply.header("x-mirror-auth-status", "credential_rejected");
+      return reply.code(status).send(
         sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
       );
     }
@@ -264,30 +305,44 @@ app.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.url === "/api/health" || req.url.startsWith("/mirror/assets/")) return;
-  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey && !upstreamAuthenticates) {
-    try {
-      const credentials = await getValidCredentials();
-      await new ChatGptBackendClient(credentials).fetchMe();
-      sessionBearerAuthenticated = true;
-    } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
-        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
-      );
-    }
-  }
+  // Credential validation above either authenticated this request or returned its error.
   if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && !(upstreamAuthenticates && requestSessionToken)) {
     return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT accessToken or sessionToken as the Bearer credential", type: "authentication_error" } });
   }
 });
 
+// Called after route validation, before either SSE handler commits headers.
+async function prepareStream(reply: FastifyReply): Promise<void> {
+  const credentials = await getValidCredentials();
+  if (credentials.sessionRefreshAllowed !== false) {
+    const controller = new AbortController();
+    const deadline = turnDeadline(controller);
+    const abort = () => controller.abort();
+    reply.request.raw.once("aborted", abort);
+    reply.raw.once("close", abort);
+    try {
+      await abortable(new ChatGptBackendClient(credentials).fetchMe(controller.signal), controller.signal);
+    } finally {
+      deadline.close();
+      reply.request.raw.off("aborted", abort);
+      reply.raw.off("close", abort);
+    }
+  }
+  credentials.sessionRefreshAllowed = false;
+  await applyRotatedCredentialHeaders(reply);
+}
+
 app.addHook("onSend", async (req, reply, payload) => {
-  const accessToken = await getRotatedRequestAccessToken();
-  const sessionToken = await getRotatedRequestSessionToken();
+  const nativeRead = await applyNativeCredentialCookies(reply);
+  const deliverRotation = !options.ownerUserId || reply.getHeader("x-mirror-auth-status") === "owner_verified";
+  const accessToken = deliverRotation ? await getRotatedRequestAccessToken() : undefined;
+  const sessionToken = deliverRotation ? await getRotatedRequestSessionToken() : undefined;
+  if (deliverRotation) await applyRotatedCredentialHeaders(reply);
   if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
   if (accessToken) {
     reply.header("Cache-Control", "no-store");
     reply.header("x-mirror-access-token", accessToken);
-    if (req.url.split("?", 1)[0] === "/api/asset-content") {
+    if (!nativeRead && req.url.split("?", 1)[0] === "/api/asset-content") {
       const secure = req.protocol === "https" ? "; Secure" : "";
       reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(sessionToken || getRequestFallbackSessionToken() || getRequestSessionToken() || accessToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
     }
@@ -337,23 +392,24 @@ app.setErrorHandler((error, req, reply) => {
       : error instanceof Error
           ? error.message
           : "Request failed";
-  if (status >= 500) app.log.error({ err: error }, "request failed");
+  if (status >= 500) app.log.error({ status }, "request failed");
   reply.code(status).send({ error: message });
 });
 
 app.get("/api/health", async () => ({
-  ok:
-    databaseHealthy() &&
-    (!getEgressStatus().required || getEgressStatus().verified),
+  // Local liveness is separate from upstream connectivity, which is unverified.
+  ok: databaseHealthy(),
   storage: "sqlite",
   configured: Boolean(getSession()),
   egress: getEgressStatus(),
 }));
 
 app.post("/api/session", async (req, reply) => {
+  const revision = getSessionRevision();
   const credentials = await getValidCredentials();
   const client = new ChatGptBackendClient(credentials);
   const me = await client.fetchMe();
+  assertSessionRevision(revision);
   saveVerifiedSession(
     client.accountId ?? undefined,
     credentials.deviceId,
@@ -592,19 +648,24 @@ app.post("/api/chat", async (req, reply) => {
       .code(404)
       .send({ error: "One or more attachments do not belong to this account" });
   }
+  await prepareStream(reply);
   const controller = new AbortController();
   req.raw.once("aborted", () => controller.abort());
   reply.raw.once("close", () => {
     if (!reply.raw.writableEnded) controller.abort();
   });
   reply.hijack();
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value);
+  }
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
+    "Cache-Control": "no-store, no-transform",
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  reply.raw.socket?.setNoDelay(true);
+  // HTTP adapters may expose a socket-like stream without TCP-specific methods.
+  reply.raw.socket?.setNoDelay?.(true);
   const send = (event: string, data: unknown) =>
     reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
@@ -650,7 +711,7 @@ app.post("/api/chat", async (req, reply) => {
   }
 });
 
-await registerOpenAiRoutes(app);
+await registerOpenAiRoutes(app, prepareStream);
 await registerAssetContentRoute(app);
 await registerInsightRoutes(app);
 registerDecoderChallengeRoutes(app, () => JSON.stringify([accountKey(), getSessionRevision()]));
@@ -672,7 +733,7 @@ if (!options.worker) {
   await app.register(fastifySwaggerUi, { routePrefix: "/mirror/api-docs" });
 } else {
   app.get("/mirror/api-docs", (_req, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mirror API docs</title>
+<html><head><meta charset="utf-8">${EARLY_PATCH}<meta name="viewport" content="width=device-width,initial-scale=1"><title>Mirror API docs</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.20.0/swagger-ui.css"></head>
 <body><div id="swagger-ui"></div><script src="https://unpkg.com/swagger-ui-dist@5.20.0/swagger-ui-bundle.js"></script>
 <script>SwaggerUIBundle({url:"/mirror/openapi",dom_id:"#swagger-ui"})</script></body></html>`));
@@ -739,7 +800,7 @@ app.setNotFoundHandler(async (req, reply) => {
   // Every Mirror-owned /api route is registered above. Any remaining route may
   // belong to the official ChatGPT frontend and must be proxied upstream.
   if (req.url.startsWith("/v1/"))
-    return reply.code(404).send({ error: "Not found" });
+    return reply.code(404).send(apiError(404, "The requested resource was not found.", req.id));
   return proxyChatGpt(req, reply);
 });
 

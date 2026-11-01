@@ -20,7 +20,7 @@ export const ResponsesBody = z.object({
   instructions: z.string().optional(),
   stream: z.boolean().default(true),
   store: z.boolean().default(true),
-  metadata: z.record(z.string()).optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
   reasoning: z.object({ summary: z.enum(["auto", "concise", "detailed"]).optional() }).strict().optional(),
   max_output_tokens: z.number().int().positive().optional(),
 }).strict();

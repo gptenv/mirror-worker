@@ -13,6 +13,7 @@ import { recentFailures } from "../dist/api-errors.js";
 // database, session, and conversation-lock map.
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-openai-routes-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "synthetic-access-fixture";
 const [{ default: Fastify }, store, openai, context] = await Promise.all([
   import("fastify"),
   import("../dist/store.js"),
@@ -31,8 +32,7 @@ test.after(async () => {
 });
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
 }
 
 function sseBody(payloads) {
@@ -81,7 +81,7 @@ function stubBackend(accountId, { sent = [], turnFrames, modelsBody, sidebarBody
       if (bootstrapFails) return new Response("boom", { status: 500 });
       return Response.json(bootstrapBody ?? {});
     }
-    if (pathname.startsWith("/backend-api/gizmos/")) return new Response("not found", { status: 404 });
+    if (pathname.startsWith("/backend-api/gizmos/")) return Response.json({ gizmo: { id: pathname.split('/').at(-1) } });
     if (pathname.endsWith("/conversation/init"))
       return Response.json({ default_model_slug: "model-a", limits_progress: [], blocked_features: [] });
     if (pathname.endsWith("/f/conversation/prepare")) return Response.json({ conduit_token: "conduit" });
@@ -150,7 +150,7 @@ test("GET /v1/models merges models, GPTs, and Projects, marks -wm models unsuppo
   );
 });
 
-test("GET /v1/models tolerates the gizmo sidebar and bootstrap endpoints failing independently", async () => {
+test("GET /v1/models reports failures from either optional catalog", async () => {
   useSession("account-models-2");
   await withFetch(
     stubBackend("account-models-2", {
@@ -160,12 +160,19 @@ test("GET /v1/models tolerates the gizmo sidebar and bootstrap endpoints failing
     }),
     async () => {
       const res = await app.inject({ method: "GET", url: "/v1/models" });
-      assert.equal(res.statusCode, 200, res.body);
-      const body = res.json();
-      assert.ok(body.data.some((m) => m.id === "g-1"));
-      assert.ok(body.data.some((m) => m.id === "gpt-4o"));
+      assert.equal(res.statusCode, 500, res.body);
+      assert.match(res.body, /gizmos\/snorlax\/sidebar/);
     },
   );
+  await withFetch(stubBackend("account-models-2", {
+    modelsBody: { models: [{ slug: "gpt-4o" }] },
+    bootstrapFails: true,
+    sidebarBody: { items: [{ id: "g-p-1", display: { name: "Project" } }] },
+  }), async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/models" });
+    assert.equal(res.statusCode, 500, res.body);
+    assert.match(res.body, /gizmos\/bootstrap/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -177,10 +184,10 @@ test("an unparsable body is rejected with 400 and the schema's own message", asy
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: { model: "auto", messages: [] },
+    payload: { stream: false, model: "auto", messages: [] },
   });
   assert.equal(res.statusCode, 400);
-  assert.match(res.json().error.message, /at least 1 element/i);
+  assert.match(res.json().error.message, /(?:at least 1 element|>=1 items)/i);
 });
 
 test("a Work Mode (-wm) model is rejected before any upstream call", async () => {
@@ -188,7 +195,7 @@ test("a Work Mode (-wm) model is rejected before any upstream call", async () =>
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: { model: "gpt-5-wm", messages: [{ role: "user", content: "hi" }] },
+    payload: { stream: false, model: "gpt-5-wm", messages: [{ role: "user", content: "hi" }] },
   });
   assert.equal(res.statusCode, 400);
   assert.match(res.json().error.message, /Work Mode/);
@@ -199,7 +206,7 @@ test("a Work Mode model reached via metadata.mirror_model is also rejected", asy
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "g-1",
       metadata: { mirror_model: "gpt-5-wm" },
       messages: [{ role: "user", content: "hi" }],
@@ -209,12 +216,13 @@ test("a Work Mode model reached via metadata.mirror_model is also rejected", asy
   assert.match(res.json().error.message, /Work Mode/);
 });
 
-test("a tool-role message is rejected as unsupported", async () => {
+test("a tool-role message is accepted as input for the next turn", async () => {
   useSession("account-validate-3");
+  await withFetch(stubBackend("account-validate-3"), async () => {
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [
         { role: "user", content: "hi" },
@@ -222,8 +230,9 @@ test("a tool-role message is rejected as unsupported", async () => {
       ],
     },
   });
-  assert.equal(res.statusCode, 400);
-  assert.match(res.json().error.message, /Tool messages/);
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().choices[0].message.content, "reply-1");
+  });
 });
 
 test("a final message that isn't from the user is rejected", async () => {
@@ -231,7 +240,7 @@ test("a final message that isn't from the user is rejected", async () => {
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [{ role: "assistant", content: "hi" }],
     },
@@ -245,7 +254,7 @@ test("an empty final user message with no image attachment is rejected", async (
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [{ role: "user", content: "   " }],
     },
@@ -309,7 +318,7 @@ test("a data: URI image attachment is resolved, uploaded, and forwarded to the t
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           {
@@ -338,7 +347,7 @@ test("a data: URI file attachment (non-image) is resolved, uploaded as my_files,
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           {
@@ -381,7 +390,7 @@ test("Playground files preserve bytes through upload and continuation with MIME 
     }];
     let conversationId;
     for (let turn = 0; turn < 3; turn++) {
-      const response = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: {
+      const response = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: { stream: false,
         model: "auto", messages, ...(conversationId ? { metadata: { conversation_id: conversationId } } : {}),
       } });
       assert.equal(response.statusCode, 200, response.body);
@@ -410,7 +419,7 @@ test("a file attachment without a filename defaults to attachment-<index>", asyn
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           {
@@ -450,7 +459,7 @@ test("an empty file attachment is rejected", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           {
@@ -478,7 +487,7 @@ test("an https image_url is fetched server-side and uploaded the same way", asyn
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [
             {
@@ -505,7 +514,7 @@ test("an image_url fetch that fails upstream is reported as a 400", async () => 
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/broken.jpg" } }] }],
         },
@@ -521,7 +530,7 @@ test("an image_url that is neither a data: URI nor an http(s) URL is rejected", 
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "ftp://example.com/x.png" } }] }],
     },
@@ -535,7 +544,7 @@ test("an image_url resolving to a non-image mime type is rejected", async () => 
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:text/plain;base64,aGVsbG8=" } }] }],
     },
@@ -549,7 +558,7 @@ test("an image_url resolving to an empty file is rejected", async () => {
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64," } }] }],
     },
@@ -564,7 +573,7 @@ test("an oversized image_url attachment is rejected", async () => {
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${big}` } }] }],
     },
@@ -673,7 +682,7 @@ test("an explicit conversation_id already owned by a different account is reject
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: {
+    payload: { stream: false,
       model: "auto",
       metadata: { conversation_id: other.id },
       messages: [{ role: "user", content: "hi" }],
@@ -690,7 +699,7 @@ test("resent history alone (no conversation_id) is recognized as a continuation 
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "auto", messages: [{ role: "user", content: "first" }] },
+      payload: { stream: false, model: "auto", messages: [{ role: "user", content: "first" }] },
     });
     assert.equal(first.statusCode, 200, first.body);
     const conversationId = first.headers["x-mirror-conversation-id"];
@@ -698,7 +707,7 @@ test("resent history alone (no conversation_id) is recognized as a continuation 
     const second = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           { role: "user", content: "first" },
@@ -719,14 +728,14 @@ test("resent history with a different private flag is NOT inferred as a continua
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "auto", messages: [{ role: "user", content: "first" }] },
+      payload: { stream: false, model: "auto", messages: [{ role: "user", content: "first" }] },
     });
     const conversationId = first.headers["x-mirror-conversation-id"];
 
     const second = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         metadata: { private: "true" },
         messages: [
@@ -747,14 +756,14 @@ test("resent history with a different gizmo is NOT inferred as a continuation", 
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "auto", messages: [{ role: "user", content: "first" }] },
+      payload: { stream: false, model: "auto", messages: [{ role: "user", content: "first" }] },
     });
     const conversationId = first.headers["x-mirror-conversation-id"];
 
     const second = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "g-different",
         messages: [
           { role: "user", content: "first" },
@@ -780,7 +789,7 @@ test("continuing an explicit conversation with a different gizmo is rejected wit
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "g-original", messages: [{ role: "user", content: "hi" }] },
+      payload: { stream: false, model: "g-original", messages: [{ role: "user", content: "hi" }] },
     });
     const conversationId = first.headers["x-mirror-conversation-id"];
     const turnsBefore = sent.filter((s) => s.pathname.endsWith("/f/conversation")).length;
@@ -788,7 +797,7 @@ test("continuing an explicit conversation with a different gizmo is rejected wit
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "g-changed",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -810,13 +819,13 @@ test("continuing an explicit conversation with a different model is rejected", a
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "gpt-original", messages: [{ role: "user", content: "hi" }] },
+      payload: { stream: false, model: "gpt-original", messages: [{ role: "user", content: "hi" }] },
     });
     const conversationId = first.headers["x-mirror-conversation-id"];
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "gpt-changed",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -837,13 +846,13 @@ test("continuing an explicit conversation with a different private flag is rejec
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+      payload: { stream: false, model: "auto", messages: [{ role: "user", content: "hi" }] },
     });
     const conversationId = first.headers["x-mirror-conversation-id"];
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         metadata: { conversation_id: conversationId, private: "true" },
         messages: [
@@ -889,7 +898,7 @@ test("a streaming completion emits the preamble, a delta chunk, the mirror-conve
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stream: true, messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stream: true, messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       assert.match(res.headers["content-type"], /text\/event-stream/);
@@ -917,7 +926,7 @@ test("a one-shot (store:false) streaming completion never emits a mirror-convers
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stream: true, store: false, messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stream: true, store: false, messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       const frames = parseSseFrames(res.body);
@@ -940,7 +949,7 @@ test("a stop sequence is accepted without truncating the non-streaming answer", 
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stop: "STOPHERE", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stop: "STOPHERE", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       const body = res.json();
@@ -960,7 +969,7 @@ test("stop arrays are accepted without cutting the answer", async () => {
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stop: ["AAA", "BBB"], messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stop: ["AAA", "BBB"], messages: [{ role: "user", content: "hi" }] },
       });
       const body = res.json();
       assert.equal(body.choices[0].message.content, "aaa BBB ccc AAA");
@@ -978,7 +987,7 @@ test("max_tokens never imposes a response length limit", async () => {
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", max_tokens: 2, messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", max_tokens: 2, messages: [{ role: "user", content: "hi" }] },
       });
       const body = res.json();
       assert.equal(body.choices[0].message.content, "0123456789abcdefghij");
@@ -997,7 +1006,7 @@ test("both token fields are accepted without limiting the response", async () =>
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", max_tokens: 100, max_completion_tokens: 1, messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", max_tokens: 100, max_completion_tokens: 1, messages: [{ role: "user", content: "hi" }] },
       });
       const body = res.json();
       assert.equal(body.choices[0].message.content, "0123456789abcdefghij");
@@ -1021,7 +1030,7 @@ test("a stop sequence never cuts off a streaming response", async () => {
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stream: true, stop: "STOP", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stream: true, stop: "STOP", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       const frames = parseSseFrames(res.body);
@@ -1080,7 +1089,7 @@ test("a non-streaming turn preserves tool metadata but does not advertise unreso
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", messages: [{ role: "user", content: "draw something and browse" }] },
+        payload: { stream: false, model: "auto", messages: [{ role: "user", content: "draw something and browse" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       const body = res.json();
@@ -1110,7 +1119,7 @@ test("a streaming turn's final chunk also carries metadata.mirror_tool_events/mi
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stream: true, messages: [{ role: "user", content: "run some code" }] },
+        payload: { stream: false, model: "auto", stream: true, messages: [{ role: "user", content: "run some code" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       const frames = parseSseFrames(res.body);
@@ -1133,7 +1142,7 @@ test("an ordinary turn with no tool/image events carries no metadata key at all"
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+      payload: { stream: false, model: "auto", messages: [{ role: "user", content: "hi" }] },
     });
     assert.equal(res.statusCode, 200, res.body);
     assert.equal(res.json().metadata, undefined);
@@ -1160,7 +1169,7 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
       const first = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [
             { role: "system", content: "Be concise." },
@@ -1182,7 +1191,7 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
       const edited = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           metadata: { conversation_id: conversationId },
           messages: [
@@ -1192,11 +1201,8 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
         },
       });
       assert.equal(edited.statusCode, 502, edited.body);
-      // Public /v1 errors never echo raw upstream exception text (see
-      // api-errors.ts's redaction policy) - only the generic safe category
-      // surfaces, though the failed rebase must still restore local state
-      // correctly (checked below).
-      assert.doesNotMatch(edited.json().error.message, /simulated upstream failure/);
+      // The route preserves upstream error text while restoring local state.
+      assert.match(edited.json().error.message, /simulated upstream failure/);
       assert.equal(edited.json().error.type, "server_error");
       assert.equal(edited.json().error.code, "upstream_failure");
       // rebasePriorMessages for a system-only prior transcript is empty (the
@@ -1213,7 +1219,7 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
 // non-streaming (JSON error body) and streaming (SSE error frame) turns.
 // ---------------------------------------------------------------------------
 
-test("a non-streaming turn that fails upstream with no explicit statusCode reports a generic, redacted 502 error", async () => {
+test("a non-streaming turn that fails upstream with no explicit statusCode reports a 502 error", async () => {
   useSession("account-error-502");
   await withFetch(
     stubBackend("account-error-502", {
@@ -1225,13 +1231,13 @@ test("a non-streaming turn that fails upstream with no explicit statusCode repor
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 502, res.body);
       const body = res.json();
       assert.equal(body.error.type, "server_error");
       assert.equal(body.error.code, "upstream_failure");
-      assert.doesNotMatch(body.error.message, /upstream is on fire/);
+      assert.match(body.error.message, /upstream is on fire/);
     },
   );
 });
@@ -1248,10 +1254,10 @@ test("a non-streaming failure classified against the drift taxonomy records that
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 502, res.body);
-      assert.doesNotMatch(res.body, /no assistant node was received/);
+      assert.match(res.body, /no assistant node was received/);
       const recorded = recentFailures().at(-1);
       assert.equal(recorded?.code, "upstream_failure");
       assert.equal(recorded?.protocolCategory, "unsupported-shape");
@@ -1271,7 +1277,7 @@ test("a streaming turn that fails upstream emits an SSE error frame and closes t
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stream: true, messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stream: true, messages: [{ role: "user", content: "hi" }] },
       });
       // The route already committed to a 200 status + SSE headers before the
       // failure (streaming responses can't change their status code once
@@ -1282,11 +1288,9 @@ test("a streaming turn that fails upstream emits an SSE error frame and closes t
       assert.ok(errorFrame, "expected an SSE frame carrying an error object");
       assert.equal(errorFrame.json.error.type, "server_error");
       assert.equal(errorFrame.json.error.code, "upstream_failure");
-      assert.doesNotMatch(errorFrame.json.error.message, /stream upstream boom/);
-      // The error frame itself ends the turn by closing the connection,
-      // not by also claiming a normal [DONE] completion - a client must
-      // treat the error object as the terminal signal, not wait for DONE.
-      assert.ok(!frames.some((f) => f.done), "did not expect a trailing [DONE] frame after an error");
+      assert.match(errorFrame.json.error.message, /stream upstream boom/);
+      // The in-band error is followed by the stream terminator.
+      assert.ok(frames.some((f) => f.done), "expected a trailing [DONE] frame after an error");
     },
   );
 });
@@ -1302,7 +1306,7 @@ test("a gizmo model with no metadata.private routes without forcing a private fl
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "g-branch-1", messages: [{ role: "user", content: "hi" }] },
+      payload: { stream: false, model: "g-branch-1", messages: [{ role: "user", content: "hi" }] },
     });
     assert.equal(res.statusCode, 200, res.body);
     const conversationId = res.headers["x-mirror-conversation-id"];
@@ -1316,7 +1320,7 @@ test("a gizmo model with metadata.private=true routes as a private conversation"
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "g-branch-2",
         metadata: { private: "true" },
         messages: [{ role: "user", content: "hi" }],
@@ -1333,7 +1337,7 @@ test("a final user message with content: null (no text, no image) is rejected th
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: { model: "auto", messages: [{ role: "user", content: null }] },
+    payload: { stream: false, model: "auto", messages: [{ role: "user", content: null }] },
   });
   assert.equal(res.statusCode, 400, res.body);
   assert.match(res.json().error.message, /must not be empty/);
@@ -1345,7 +1349,7 @@ test("a message carrying an OpenAI 'name' field is accepted and forwarded throug
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [{ role: "user", content: "hi", name: "alice" }],
       },
@@ -1364,7 +1368,7 @@ test("an empty stop string is accepted and simply never matches", async () => {
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", stop: "", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", stop: "", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       assert.equal(res.json().choices[0].message.content, "hello world");
@@ -1401,7 +1405,7 @@ test("a tool event with no status is packed with a null status rather than crash
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 200, res.body);
       const toolEvents = JSON.parse(res.json().metadata.mirror_tool_events);
@@ -1422,7 +1426,7 @@ test("an https image_url whose response has no content-type header falls back to
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [
             {
@@ -1453,7 +1457,7 @@ test("a non-Error value thrown while resolving an image attachment is still repo
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [
             {
@@ -1479,7 +1483,7 @@ test("a data: URI with a bare 'image/' mime type still uploads, defaulting its f
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           {
@@ -1498,14 +1502,13 @@ test("a session with no accountId falls back to the default account for both ima
   // verified session's accountId is optional (see saveVerifiedSession in
   // store.ts), so getSession()?.accountId can genuinely be undefined even
   // with otherwise-valid credentials.
-  store.saveVerifiedSession("session-token-for-no-account-long-enough", undefined, "device-no-account");
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(undefined, "device-no-account");
   const sent = [];
   await withFetch(stubBackendWithUploads("default", { sent }), async () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         messages: [
           {
@@ -1530,7 +1533,7 @@ test("a caller-provided conversation_id for a brand-new conversation is honored 
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "auto",
         metadata: { conversation_id: "caller-chosen-id-42" },
         messages: [{ role: "user", content: "hi" }],
@@ -1548,14 +1551,14 @@ test("resent history with an explicit matching (non-auto) model is still recogni
     const first = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: { model: "gpt-5-6", messages: [{ role: "user", content: "hi" }] },
+      payload: { stream: false, model: "gpt-5-6", messages: [{ role: "user", content: "hi" }] },
     });
     assert.equal(first.statusCode, 200, first.body);
     const conversationId = first.headers["x-mirror-conversation-id"];
     const res = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
-      payload: {
+      payload: { stream: false,
         model: "gpt-5-6",
         messages: [
           { role: "user", content: "hi" },
@@ -1579,7 +1582,7 @@ test("editing only the system prompt (unchanged real history) rebases as a conte
       const first = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [
             { role: "system", content: "Instructions A" },
@@ -1600,7 +1603,7 @@ test("editing only the system prompt (unchanged real history) rebases as a conte
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           metadata: { conversation_id: conversationId },
           messages: [
@@ -1670,7 +1673,7 @@ test("a legacy conversation with a saved context hash but no transcript hash als
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "model-a",
           metadata: { conversation_id: imported.id },
           messages: [
@@ -1699,7 +1702,7 @@ test("a non-Error value thrown mid-turn is still reported as a generic, redacted
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+        payload: { stream: false, model: "auto", messages: [{ role: "user", content: "hi" }] },
       });
       assert.equal(res.statusCode, 502, res.body);
       assert.notEqual(res.json().error.message, "raw string boom");
@@ -1885,7 +1888,7 @@ test("canonical history reconstructs an assistant row removed during upstream st
     return [assistantAddFrame("upstream-missing-assistant", "answer", "Recovered"), "[DONE]"];
   } });
   try {
-    const response = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: {
+    const response = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: { stream: false,
       model: "auto", stream: false, messages: [{ role: "user", content: "hello" }],
     } });
     assert.equal(response.statusCode, 200, response.body);
@@ -1896,4 +1899,39 @@ test("canonical history reconstructs an assistant row removed during upstream st
     ]);
   } finally { globalThis.fetch = originalFetch; db.close(); }
 });
+test("attachment failures cancel the upstream body and release its reader", async () => {
+  const client = { uploadFile: async value => value };
+  let cancelled = 0;
+  let response;
+  await withFetch(async () => {
+    response = new Response(new ReadableStream({ cancel() { cancelled++; } }), { headers: { "content-length": "999999999" } });
+    return response;
+  }, () => assert.rejects(context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/large" } }, 0), /too large/));
+  assert.equal(cancelled, 1);
+  assert.equal(response.body.locked, false);
+
+  cancelled = 0;
+  await withFetch(async () => {
+    response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(21 * 1024 * 1024)); },
+      cancel() { cancelled++; throw new Error("cleanup failure"); },
+    }));
+    return response;
+  }, () => assert.rejects(context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/stream" } }, 0), /too large/));
+  assert.equal(cancelled, 1);
+  assert.equal(response.body.locked, false);
+});
+
+test("empty prompt helpers and redirects with bodies retain their defined behavior", async () => {
+  assert.equal(context.promptFor([]), "");
+  const client = { uploadFile: async value => value };
+  let requests = 0;
+  await withFetch(async () => ++requests === 1
+    ? new Response("redirect body", { status: 302, headers: { location: "/next" } })
+    : new Response(new Uint8Array([1]), { headers: { "content-type": "image/png" } }), async () => {
+      const uploaded = await context.resolveImageAttachment(client, { type: "image_url", image_url: { url: "https://example.com/start" } }, 0);
+      assert.equal(uploaded.data.byteLength, 1);
+    });
+});
+
 });

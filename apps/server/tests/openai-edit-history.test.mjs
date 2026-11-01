@@ -9,6 +9,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
   const dir = mkdtempSync(path.join(tmpdir(), "mirror-openai-edit-"));
   const priorDataDir = process.env.MIRROR_DATA_DIR;
   process.env.MIRROR_DATA_DIR = dir;
+  process.env.MIRROR_API_KEY = "synthetic-access-fixture";
   const originalFetch = globalThis.fetch;
   let app;
   const sent = [];
@@ -21,16 +22,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
         import("../dist/store.js"),
         import("../dist/openai.js"),
       ]);
-    store.saveVerifiedSession(
-      "session-token-long-enough-for-test",
-      "account-1",
-      "device-1",
-    );
-    store.updateMintedToken(
-      "cached-access",
-      Date.now() + 60 * 60 * 1000,
-      null,
-    );
+    store.saveVerifiedSession("account-1", "device-1");
 
     globalThis.fetch = async (url, init = {}) => {
       const pathname = new URL(String(url)).pathname;
@@ -93,6 +85,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "auto",
         messages: [
           { role: "system", content: "Be concise." },
@@ -119,6 +112,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "auto",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -147,6 +141,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "auto",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -168,6 +163,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "auto",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -209,6 +205,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "auto",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -233,6 +230,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "auto",
         metadata: { conversation_id: conversationId },
         messages: [
@@ -297,6 +295,7 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        stream: false,
         model: "model-a",
         metadata: { conversation_id: imported.id },
         messages: [
