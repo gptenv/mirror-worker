@@ -73,7 +73,7 @@
   "apps/server/tests/browser-login.test.mjs": "47177c824f60389ec2aeded92c27445d886acd7b4fef0dc3afecedbba7e0c3df",
   "apps/server/tests/browser-reconnect.test.mjs": "ca52856ae3725b197a923b99c19b512159af791a7cfc606ade9bf5ef9f5723f8",
   "apps/server/tests/chat-service.test.mjs": "f04777b72e11fe7775bba217fae381cb0e32d1250024019fcc7dcab603e11f24",
-  "apps/server/tests/cloudflare-worker.test.mjs": "c0f7895a94680f7f74c12b388a0b92ec7cc199d1edab46d330834ad2c0d3f57c",
+  "apps/server/tests/cloudflare-worker.test.mjs": "27ac8f4bdf7161c674da7a998322dfd9b940acdb516c882f857cf212da2e1e6e",
   "apps/server/tests/cm-integration.mjs": "ee6f012d6025d7996b94c83f74d574f8974463fc7b094a7e5161a29d6d34aa89",
   "apps/server/tests/completion-output.test.mjs": "28db0fe62df224ae2c6511b0cb3ca4f6308028703beb83972d960555b08547c9",
   "apps/server/tests/completion-schema.test.mjs": "dd2ca8a46edb01696fef6fec3ec71e10741ba9bed731ede1a56df466a0a57eaa",
