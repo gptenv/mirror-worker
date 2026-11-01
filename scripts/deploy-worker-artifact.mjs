@@ -30,6 +30,8 @@ async function api(suffix) {
   return body.result;
 }
 function invariantSettings(settings) {
+  // Ignore WARP VPC binding differences while transitioning away from required Mesh routing.
+  if (settings.bindings) settings = { ...settings, bindings: settings.bindings.filter(b => b.name !== "WARP") };
   const { annotations, bindings, ...rest } = settings;
   return { ...rest, bindings: bindings.map(binding => ({ name: binding.name, digest: createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(binding).sort(([a], [b]) => a.localeCompare(b))))).digest('hex') })).sort((a, b) => a.name.localeCompare(b.name)) };
 }
