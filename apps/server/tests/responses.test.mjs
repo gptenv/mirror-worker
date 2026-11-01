@@ -22,7 +22,7 @@ test("Responses stream by default and honors explicit opt-out", () => {
 });
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {
-  store.saveVerifiedSession(account, "synthetic-device");
+  store.saveVerifiedSession("synthetic-session-fixture", account, "synthetic-device");
   store.updateMintedToken("synthetic-access-fixture", Date.now() + 3_600_000, null);
   globalThis.fetch = stubBackend(account, options);
 }

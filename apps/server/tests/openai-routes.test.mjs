@@ -31,7 +31,7 @@ test.after(async () => {
 });
 
 function useSession(accountId) {
-  store.saveVerifiedSession(accountId, `device-${accountId}`);
+  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
   store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
 }
 
@@ -1498,7 +1498,342 @@ test("a session with no accountId falls back to the default account for both ima
   // verified session's accountId is optional (see saveVerifiedSession in
   // store.ts), so getSession()?.accountId can genuinely be undefined even
   // with otherwise-valid credentials.
-  store.saveVerifiedSession("AbortError");
+  store.saveVerifiedSession("session-token-for-no-account-long-enough", undefined, "device-no-account");
+  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  const sent = [];
+  await withFetch(stubBackendWithUploads("default", { sent }), async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "auto",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is this?" },
+              { type: "image_url", image_url: { url: pngDataUrl() } },
+            ],
+          },
+        ],
+      },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    const conversationId = res.headers["x-mirror-conversation-id"];
+    assert.equal(store.getConversation(conversationId).accountId, "default");
+  });
+});
+
+test("a caller-provided conversation_id for a brand-new conversation is honored as its id", async () => {
+  useSession("account-branch-caller-id");
+  await withFetch(stubBackend("account-branch-caller-id", {}), async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "auto",
+        metadata: { conversation_id: "caller-chosen-id-42" },
+        messages: [{ role: "user", content: "hi" }],
+      },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(res.headers["x-mirror-conversation-id"], "caller-chosen-id-42");
+    assert.ok(store.getConversation("caller-chosen-id-42"));
+  });
+});
+
+test("resent history with an explicit matching (non-auto) model is still recognized as a continuation", async () => {
+  useSession("account-branch-explicit-model-continue");
+  await withFetch(stubBackend("account-branch-explicit-model-continue", {}), async () => {
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: { model: "gpt-5-6", messages: [{ role: "user", content: "hi" }] },
+    });
+    assert.equal(first.statusCode, 200, first.body);
+    const conversationId = first.headers["x-mirror-conversation-id"];
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "gpt-5-6",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: "reply-1" },
+          { role: "user", content: "again" },
+        ],
+      },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(res.headers["x-mirror-conversation-id"], conversationId, "must be recognized as the same conversation, not a new one");
+  });
+});
+
+test("editing only the system prompt (unchanged real history) rebases as a context change, not a user-history edit", async () => {
+  useSession("account-branch-context-rebase");
+  await withFetch(
+    stubBackend("account-branch-context-rebase", {
+      turnFrames: (body, turn) => [assistantAddFrame(body?.conversation_id ?? `upstream-${turn}`, `a-${turn}`, `reply-${turn}`), "[DONE]"],
+    }),
+    async () => {
+      const first = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        payload: {
+          model: "auto",
+          messages: [
+            { role: "system", content: "Instructions A" },
+            { role: "user", content: "hello" },
+          ],
+        },
+      });
+      assert.equal(first.statusCode, 200, first.body);
+      const conversationId = first.headers["x-mirror-conversation-id"];
+      assert.deepEqual(
+        store.listMessages(conversationId).map(({ role, content }) => ({ role, content })),
+        [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "reply-1" },
+        ],
+      );
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        payload: {
+          model: "auto",
+          metadata: { conversation_id: conversationId },
+          messages: [
+            { role: "system", content: "Instructions B (changed)" },
+            { role: "user", content: "hello" },
+            { role: "assistant", content: "reply-1" },
+            { role: "user", content: "follow up" },
+          ],
+        },
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      // The real user/assistant history is untouched by the system-prompt
+      // edit, so it must survive the rebase with its original rows intact
+      // rather than being treated as an edited user turn.
+      assert.deepEqual(
+        store.listMessages(conversationId).map(({ role, content }) => ({ role, content })),
+        [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "reply-1" },
+          { role: "user", content: "follow up" },
+          { role: "assistant", content: "reply-2" },
+        ],
+      );
+    },
+  );
+});
+
+test("a legacy conversation with a saved context hash but no transcript hash also rebases as a context change", async () => {
+  useSession("account-branch-legacy-context");
+  const imported = store.createConversation({
+    id: "legacy-ctx-test",
+    accountId: "account-branch-legacy-context",
+    model: "model-a",
+  });
+  imported.conversationId = "legacy-upstream-ctx";
+  imported.currentNodeId = "legacy-assistant-node";
+  imported.initialized = true;
+  store.updateConversation(imported);
+  store.addMessage({
+    conversationId: imported.id,
+    upstreamNodeId: "legacy-user-node",
+    role: "user",
+    content: "question",
+    status: "done",
+    events: [],
+  });
+  store.addMessage({
+    conversationId: imported.id,
+    upstreamNodeId: "legacy-assistant-node",
+    role: "assistant",
+    content: "answer",
+    status: "done",
+    events: [],
+  });
+  // A context hash saved with no matching transcript hash simulates data
+  // that predates transcript fingerprinting but postdates context hashing -
+  // an intermediate migration state. Any placeholder value that won't equal
+  // the freshly-computed hash of the new request's system/developer
+  // messages is enough to force legacyContextChanged to fire.
+  store.saveOpenAiContext(imported.id, "stale-context-hash-value");
+
+  await withFetch(
+    stubBackend("account-branch-legacy-context", {
+      turnFrames: (_body, turn) => [assistantAddFrame("legacy-upstream-ctx", `a-${turn}`, "answer-2"), "[DONE]"],
+    }),
+    async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        payload: {
+          model: "model-a",
+          metadata: { conversation_id: imported.id },
+          messages: [
+            { role: "system", content: "New instructions" },
+            { role: "user", content: "question" },
+            { role: "assistant", content: "answer" },
+            { role: "user", content: "new followup" },
+          ],
+        },
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(res.headers["x-mirror-conversation-id"], imported.id);
+    },
+  );
+});
+
+test("a non-Error value thrown mid-turn is still reported as a generic, redacted 502 error", async () => {
+  useSession("account-branch-nonerror-turn");
+  await withFetch(
+    stubBackend("account-branch-nonerror-turn", {
+      turnFrames: () => {
+        throw "raw string boom";
+      },
+    }),
+    async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        payload: { model: "auto", messages: [{ role: "user", content: "hi" }] },
+      });
+      assert.equal(res.statusCode, 502, res.body);
+      assert.notEqual(res.json().error.message, "raw string boom");
+      assert.equal(res.json().error.type, "server_error");
+      assert.equal(res.json().error.code, "upstream_failure");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// sse()'s slow-consumer guard: reproducing real outbound-socket backpressure
+// end-to-end would be slow/flaky, so it's tested directly as the plain
+// function of reply.raw.writableLength (plus elapsed time, injected via the
+// `now` param) it actually is (see the comment on the exported sse() in
+// openai.ts).
+// ---------------------------------------------------------------------------
+
+test("sse() writes normally below the high-water mark, no matter how long it's been", () => {
+  const writes = [];
+  const reply = {
+    raw: {
+      writableLength: 1024,
+      destroy: () => { throw new Error("should not have destroyed the connection"); },
+      write: (chunk) => writes.push(chunk),
+    },
+  };
+  openai.sse(reply, { hello: "world" });
+  openai.sse(reply, "[DONE]");
+  assert.deepEqual(writes, ['data: {"hello":"world"}\n\n', "data: [DONE]\n\n"]);
+});
+
+test("sse() tolerates a bursty backlog that drains before the stall timeout", () => {
+  const writes = [];
+  let destroyed = false;
+  const raw = {
+    writableLength: 9 * 1024 * 1024,
+    destroy: () => { destroyed = true; },
+    write: (chunk) => writes.push(chunk),
+  };
+  const reply = { raw };
+  const t0 = 1_000_000;
+  openai.sse(reply, { hello: "world" }, t0); // starts the stall clock
+  raw.writableLength = 0; // the consumer caught up
+  openai.sse(reply, { hello: "again" }, t0 + 20_000); // long past the timeout, but it drained meanwhile
+  assert.equal(destroyed, false);
+  assert.deepEqual(writes, ['data: {"hello":"world"}\n\n', 'data: {"hello":"again"}\n\n']);
+});
+
+test("sse() destroys the connection once the backlog stays stalled past the timeout", () => {
+  const writes = [];
+  let destroyed = false;
+  const raw = {
+    writableLength: 9 * 1024 * 1024,
+    destroy: () => { destroyed = true; },
+    write: (chunk) => writes.push(chunk),
+  };
+  const reply = { raw };
+  const t0 = 1_000_000;
+  openai.sse(reply, { hello: "world" }, t0); // starts the stall clock
+  openai.sse(reply, { hello: "still backed up" }, t0 + 5_000); // within the grace window - still fine
+  assert.equal(destroyed, false);
+  assert.throws(
+    () => openai.sse(reply, { hello: "still stuck" }, t0 + 15_001),
+    /Response consumer is too slow/,
+  );
+  assert.equal(destroyed, true);
+  assert.deepEqual(writes, [
+    'data: {"hello":"world"}\n\n',
+    'data: {"hello":"still backed up"}\n\n',
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// Real-socket-only branches: light-my-request's mock socket (used by every
+// app.inject() call above) has no setNoDelay method, so the guard added
+// around it (see the comment in openai.ts right above the call) always
+// takes its "skip" path under inject. A real listener + a real HTTP client
+// is the only way to exercise the "socket really has setNoDelay" branch.
+// ---------------------------------------------------------------------------
+
+test("a streaming completion over a real socket still calls setNoDelay and completes normally", async () => {
+  useSession("account-branch-real-socket");
+  // The real outbound HTTP call this test itself makes (to the app's own
+  // real listener below) must bypass the globalThis.fetch mock that
+  // withFetch() installs for the *app's* upstream calls - capture the real
+  // fetch first, before it gets swapped out.
+  const realFetch = globalThis.fetch;
+  await withFetch(
+    stubBackend("account-branch-real-socket", {
+      turnFrames: (body, turn) => [assistantAddFrame(body?.conversation_id ?? `upstream-${turn}`, `a-${turn}`, "hello real socket"), "[DONE]"],
+    }),
+    async () => {
+      // A dedicated Fastify instance, not the shared `app` every other
+      // test in this file inject()s against: a Fastify instance can't be
+      // listen()'d again once closed, and every real-listener test here
+      // needs to close its own listener when done.
+      const { default: Fastify } = await import("fastify");
+      const realApp = Fastify({ bodyLimit: 30 * 1024 * 1024 });
+      await openai.registerOpenAiRoutes(realApp);
+      await realApp.listen({ port: 0, host: "127.0.0.1" });
+      try {
+        const address = realApp.server.address();
+        const port = typeof address === "object" && address ? address.port : address;
+        const res = await realFetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "auto", stream: true, messages: [{ role: "user", content: "hi" }] }),
+        });
+        assert.equal(res.status, 200);
+        const text = await res.text();
+        assert.match(text, /hello real socket/);
+      } finally {
+        await realApp.close();
+      }
+    },
+  );
+});
+
+test("a client that disconnects mid-stream aborts the in-flight upstream turn", async () => {
+  useSession("account-branch-disconnect");
+  const realFetch = globalThis.fetch;
+  let releaseUpstream;
+  const upstreamGate = new Promise((resolve) => {
+    releaseUpstream = resolve;
+  });
+  const handler = async (url, init = {}) => {
+    const pathname = new URL(String(url)).pathname;
+    if (pathname.endsWith("/f/conversation")) {
+      // Block the upstream turn open until the client has already
+      // disconnected below, so reply.raw's "close" event (and the
+      // !writableEnded guard around controller.abort()) fires while the
+      // turn is still genuinely in flight.
+      await upstreamGate;
+      if (init.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       return sseBody([assistantAddFrame("upstream-1", "a-1", "too late"), "[DONE]"]);
     }
     return stubBackend("account-branch-disconnect", {})(url, init);

@@ -25,6 +25,7 @@ test.after(async () => {
 
 function useSession(accountId, turnstileToken) {
   store.saveVerifiedSession(
+    `session-token-for-${accountId}-long-enough`,
     accountId,
     `device-${accountId}`,
     turnstileToken,
@@ -97,7 +98,7 @@ async function withFetch(handler, fn) {
 // ---------------------------------------------------------------------------
 
 test("saveVerifiedSession saves and updates turnstileToken", () => {
-  store.saveVerifiedSession("acc-1", "dev-1", "ts-token-1");
+  store.saveVerifiedSession("sess-tok-12345678901234567890", "acc-1", "dev-1", "ts-token-1");
   const session = store.getSession();
   assert.equal(session?.turnstileToken, "ts-token-1");
 

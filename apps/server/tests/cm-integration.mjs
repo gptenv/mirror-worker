@@ -35,7 +35,7 @@ const store = await import("../dist/store.js");
 const { buildApp } = await import("../dist/index.js");
 const app = await buildApp();
 const originalFetch = globalThis.fetch;
-function session() { store.saveVerifiedSession("fixture-account"); store.updateMintedToken("synthetic-access", Date.now() + 3600000, null); }
+function session() { store.saveVerifiedSession("synthetic-session", "fixture-account"); store.updateMintedToken("synthetic-access", Date.now() + 3600000, null); }
 
 test.after(async () => { globalThis.fetch = originalFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 

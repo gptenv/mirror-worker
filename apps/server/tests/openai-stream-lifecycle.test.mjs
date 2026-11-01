@@ -15,7 +15,7 @@ test.describe("server / openai-stream-lifecycle", () => {
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 for (const responses of [false, true]) test(`a seventh full-history ${responses ? "Responses" : "Chat"} turn sends parseable keepalives while upstream is silent, then continues the same parent`, { timeout: 5000 }, async t => {
-  store.saveVerifiedSession("heartbeat-account");
+  store.saveVerifiedSession("fixture-session", "heartbeat-account");
   store.updateMintedToken("fixture-access", Date.now() + 3600000, null);
   const sent = [];
   const backend = stubBackend("heartbeat-account", { sent });
@@ -101,7 +101,69 @@ for (const responses of [false, true]) test(`a seventh full-history ${responses 
 for (const failure of ["idle deadline", "heartbeat write"]) {
   test(`silent streams terminate on ${failure} and release the conversation for retry`, { timeout: 5000 }, async t => {
     const account = `heartbeat-${failure}`;
-    store.saveVerifiedSession("hé🙂"), " complete");
+    store.saveVerifiedSession("fixture-session", account);
+    store.updateMintedToken("fixture-access", Date.now() + 3600000, null);
+    process.env.MIRROR_IDLE_TIMEOUT_MS = "100";
+    const entered = Promise.withResolvers();
+    let upstreamSignal;
+    globalThis.fetch = async (_url, init) => {
+      upstreamSignal = init.signal;
+      entered.resolve();
+      return new Promise(() => {});
+    };
+    let failWrite = false;
+    const app = Fastify();
+    app.addHook("onRequest", async (_req, reply) => {
+      const write = reply.raw.write;
+      reply.raw.write = function (...args) {
+        if (failWrite) {
+          failWrite = false;
+          throw new Error("fixture write failure");
+        }
+        return write.apply(this, args);
+      };
+    });
+    await registerOpenAiRoutes(app);
+    let reader;
+    try {
+      const address = await app.listen({ host: "127.0.0.1", port: 0 });
+      t.mock.timers.enable({ apis: ["setInterval"] });
+      const response = await nativeFetch(`${address}/v1/chat/completions`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: "silent turn" }], metadata: { conversation_id: failure }, stream: true }),
+      });
+      reader = response.body.getReader();
+      await reader.read();
+      await entered.promise;
+      failWrite = failure === "heartbeat write";
+      t.mock.timers.tick(10000);
+      let output = "";
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        output += new TextDecoder().decode(chunk.value);
+      }
+      assert.match(output, failure === "idle deadline" ? /deadline_exceeded/ : /upstream_failure/);
+      assert.doesNotMatch(output, /\[DONE\]|fixture write failure/);
+      assert.equal(upstreamSignal.aborted, true);
+      assert.equal(store.listMessages(failure).at(-1).status, "error");
+      t.mock.timers.tick(30000);
+      globalThis.fetch = stubBackend(account);
+      const retry = await app.inject({ method: "POST", url: "/v1/chat/completions", payload: { messages: [{ role: "user", content: "retry" }], metadata: { conversation_id: failure } } });
+      assert.equal(retry.statusCode, 200, retry.body);
+    } finally {
+      await reader?.cancel();
+      t.mock.timers.reset();
+      delete process.env.MIRROR_IDLE_TIMEOUT_MS;
+      globalThis.fetch = nativeFetch;
+      await app.close();
+    }
+  });
+}
+
+
+test("stream output may append to delivered text but cannot replace or truncate it", () => {
+  assert.equal(remainingStreamText("hé🙂 complete", "hé🙂"), " complete");
   assert.equal(remainingStreamText("same", "same"), "");
   assert.equal(remainingStreamText("first answer", ""), "first answer");
   for (const replacement of ["different answer", "already", ""]) {

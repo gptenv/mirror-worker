@@ -25,8 +25,7 @@ test("MIRROR_STORE_KEY accepts a hex-encoded 32-byte key", async () => {
   try {
     const store = await import(`../dist/store.js?store-key-hex=${Date.now()}`);
     store.saveVerifiedSession("tok", "acct");
-    assert.equal(store.getSession().accountId, "tok");
-    assert.equal(store.getSession().sessionToken, undefined);
+    assert.equal(store.getSession().sessionToken, "tok");
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -40,8 +39,7 @@ test("MIRROR_STORE_KEY accepts a base64-encoded 32-byte key", async () => {
   try {
     const store = await import(`../dist/store.js?store-key-b64=${Date.now()}`);
     store.saveVerifiedSession("tok2", "acct");
-    assert.equal(store.getSession().accountId, "tok2");
-    assert.equal(store.getSession().sessionToken, undefined);
+    assert.equal(store.getSession().sessionToken, "tok2");
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -69,15 +67,14 @@ test("reuses the on-disk master key across restarts (no MIRROR_STORE_KEY set)", 
   delete process.env.MIRROR_STORE_KEY;
   try {
     const first = await import(`../dist/store.js?store-key-reuse-a=${Date.now()}`);
-    first.saveVerifiedSession("acct", "persisted-device");
+    first.saveVerifiedSession("persisted-by-key-file", "acct");
     assert.ok(existsSync(path.join(dir, "master.key")));
 
     // A second "process" (fresh module instance, same data dir) must load the
     // same on-disk key file rather than minting a new one, or it couldn't
     // decrypt what the first instance wrote.
     const second = await import(`../dist/store.js?store-key-reuse-b=${Date.now()}`);
-    assert.equal(second.getSession().accountId, "acct");
-    assert.equal(second.getSession().sessionToken, undefined);
+    assert.equal(second.getSession().sessionToken, "persisted-by-key-file");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -182,9 +179,8 @@ test("legacy store.json migration is skipped once a real session already exists"
     const store = await import(`../dist/store.js?store-migrate-skip=${Date.now()}`);
     // Establish a real session *after* the module has already loaded (and
     // thus already decided, at that load, whether to migrate).
-    store.saveVerifiedSession("acct");
-    assert.equal(store.getSession().accountId, "acct");
-    assert.equal(store.getSession().sessionToken, undefined);
+    store.saveVerifiedSession("current-session", "acct");
+    assert.equal(store.getSession().sessionToken, "current-session");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -549,7 +545,7 @@ test("getSession throws when the stored session value has been corrupted outside
   try {
     const store = await import(`../dist/store.js?store-corrupted-session=${Date.now()}`);
     // Establish the database file and the settings table/row first.
-    store.saveVerifiedSession("acct", "device-1");
+    store.saveVerifiedSession("session-token-long-enough-for-test", "acct", "device-1");
     // Reach past the module's own encrypt()/decrypt() pair with a second,
     // independent raw connection to the same file, writing a value that
     // doesn't match the "v1.<iv>.<tag>.<ciphertext>" shape decrypt()
@@ -578,7 +574,7 @@ test("onSessionChange notifies registered listeners on every session change and 
       calls += 1;
     });
     const revisionBefore = store.getSessionRevision();
-    store.saveVerifiedSession("acct", "device-1");
+    store.saveVerifiedSession("session-token-long-enough-for-test", "acct", "device-1");
     assert.equal(calls, 1);
     assert.equal(store.getSessionRevision(), revisionBefore + 1);
 
