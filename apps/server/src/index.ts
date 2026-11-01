@@ -194,9 +194,9 @@ app.addHook("onRequest", async (req, reply) => {
   const bearer = bearerToken(req.headers.authorization);
   const isConfiguredApiKey = tokenMatches(bearer, configuredApiKeys());
   const assetContentRequest = ["GET", "HEAD"].includes(req.method) && req.url.split("?", 1)[0] === "/api/asset-content";
-  const encodedAssetCookieToken = assetContentRequest && (!options.worker ||
+  const encodedAssetCookieToken = assetContentRequest && (!options.worker || (!/(?:^|;\s*)__Host-mirror_read=/.test(req.headers.cookie || "") &&
     ((!req.headers["sec-fetch-site"] || ["same-origin", "none"].includes(String(req.headers["sec-fetch-site"]))) &&
-      (!req.headers.origin || req.headers.origin === `${req.protocol}://${req.headers.host}`)))
+      (!req.headers.origin || req.headers.origin === `${req.protocol}://${req.headers.host}`))))
     ? req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("mirror_asset_session="))?.slice("mirror_asset_session=".length)
     : undefined;
   let assetCookieToken: string | undefined;
@@ -333,7 +333,7 @@ async function prepareStream(reply: FastifyReply): Promise<void> {
 }
 
 app.addHook("onSend", async (req, reply, payload) => {
-  await applyNativeCredentialCookies(reply);
+  const nativeRead = await applyNativeCredentialCookies(reply);
   const deliverRotation = !options.ownerUserId || reply.getHeader("x-mirror-auth-status") === "owner_verified";
   const accessToken = deliverRotation ? await getRotatedRequestAccessToken() : undefined;
   const sessionToken = deliverRotation ? await getRotatedRequestSessionToken() : undefined;
@@ -342,7 +342,7 @@ app.addHook("onSend", async (req, reply, payload) => {
   if (accessToken) {
     reply.header("Cache-Control", "no-store");
     reply.header("x-mirror-access-token", accessToken);
-    if (req.url.split("?", 1)[0] === "/api/asset-content") {
+    if (!nativeRead && req.url.split("?", 1)[0] === "/api/asset-content") {
       const secure = req.protocol === "https" ? "; Secure" : "";
       reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(sessionToken || getRequestFallbackSessionToken() || getRequestSessionToken() || accessToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
     }

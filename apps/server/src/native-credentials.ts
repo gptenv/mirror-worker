@@ -14,20 +14,21 @@ export function nativeReadCredentials(req: FastifyRequest, enabled: boolean): [s
 }
 
 /** Must run before proxy/SSE hijack as well as ordinary Fastify onSend. */
-export async function applyNativeCredentialCookies(reply: FastifyReply): Promise<void> {
+export async function applyNativeCredentialCookies(reply: FastifyReply): Promise<boolean> {
   const pair = nativeReads.get(reply.request);
-  if (!pair) return;
+  if (!pair) return false;
   const status = reply.getHeader("x-mirror-auth-status");
   const output: string[] = [];
   const jar = createBrowserCredentials(undefined, { read: () => reply.request.headers.cookie || "", write: value => output.push(value) });
-  if (status === "credential_rejected" || status === "owner_mismatch") jar.clearCookie(true);
+  if (status === "credential_rejected" || status === "owner_mismatch") jar.rejectCookie();
   else if (status === "owner_verified") {
     const access = await getRotatedRequestAccessToken(), session = await getRotatedRequestSessionToken();
-    if (access || session) jar.writeCookie([access || pair[0], session || pair[1] || (access && access !== pair[0] ? pair[0] : "")]);
+    if (access || session) jar.rotateCookie([access || pair[0], session || pair[1] || (access && access !== pair[0] ? pair[0] : "")]);
   }
   if (output.length) {
     const existing = reply.getHeader("set-cookie");
     reply.header("set-cookie", [...(existing ? Array.isArray(existing) ? existing.map(String) : [String(existing)] : []), ...output]);
     reply.header("cache-control", "no-store");
   }
+  return true;
 }

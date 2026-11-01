@@ -117,4 +117,20 @@ test.describe('server / local-route-auth',()=>{
       assert.notEqual((await send({ cookie: 'mirror_asset_session=owner-token', 'sec-fetch-site': 'same-origin', origin: 'http://localhost:80' }, '/api/asset-content')).statusCode, 401);
     } finally { await app.close(); }
   });
+  test('native asset refresh retains its login-scoped cookies through the legacy onSend path', async () => {
+    const app = await buildApp({ worker: true, ownerUserId: 'owner-account' });
+    const values = []; createBrowserCredentials(undefined, { read: () => '', write: value => { if (!value.includes('Max-Age=0')) values.push(value.split(';')[0]); } }).writeCookie(['expired-access', 'valid-session']);
+    test.mock.method(globalThis, 'fetch', async (input, init) => {
+      if (String(input).endsWith('/api/auth/session')) return Response.json({ accessToken: 'fresh-access' }, { headers: { 'set-cookie': '__Secure-next-auth.session-token=rotated-session; Path=/' } });
+      if (new Headers(init.headers).get('authorization') === 'Bearer expired-access') return new Response('expired', { status: 401 });
+      return Response.json({ object: 'user', id: 'owner-account' });
+    });
+    try {
+      const response = await runWithRequestSessionToken(undefined, () => app.inject({ url: '/api/asset-content', headers: { cookie: values.join('; ') } }), undefined, []);
+      assert.equal(response.statusCode, 404); assert.equal(response.headers['x-mirror-access-token'], 'fresh-access');
+      const cookies = response.headers['set-cookie']; assert.ok(Array.isArray(cookies));
+      assert.ok(cookies.some(value => /^__Host-mirror_read\.[a-z0-9]+=/.test(value)));
+      assert.ok(!cookies.some(value => /^(?:__Host-mirror_read|mirror_asset_session)=/.test(value)));
+    } finally { await app.close(); }
+  });
 });

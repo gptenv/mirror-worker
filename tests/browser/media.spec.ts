@@ -118,6 +118,11 @@ test.describe('browser / Spaces native media through workerd', () => {
       expect(await page.evaluate(() => (window as any).__mirrorCredentials.sync())).toEqual([`fixture-owner-token-${index}`, `fixture-rotating-session-${index + 1}`]);
       const next = await page.context().request.get(base + '/api/library/files/libfile_fixture/content'); expect(next.status()).toBe(200);
     }
+    await page.evaluate(() => { localStorage.setItem('mirror_access_token', 'expired-access'); localStorage.setItem('mirror_session_token', 'fixture-rotating-session-3'); (window as any).__mirrorCredentials.publish(); });
+    // Even a validation failure after owner refresh must preserve cookies on
+    // the legacy asset route; its onSend path used to overwrite the new pair.
+    expect((await page.context().request.get(base + '/api/asset-content')).status()).toBe(404);
+    expect(await page.evaluate(() => (window as any).__mirrorCredentials.sync())).toEqual(['fixture-owner-token-3', 'fixture-rotating-session-4']);
   });
   test('native cookies cover HEAD, ranges, same-origin redirects and direct image tabs, while writes and cross-site reads remain denied', async ({ page, request }) => {
     expect((await request.get(base + '/api/library/files/libfile_fixture/content')).status()).toBe(401);

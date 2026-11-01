@@ -23,8 +23,8 @@ test.describe('server / native read credential boundaries', () => {
       const req = request(); nativeReadCredentials(req, true); const res = reply(req, status);
       await applyNativeCredentialCookies(res);
       if (status === 'owner_mismatch' || status === 'credential_rejected') {
-        assert.ok(res.headers.get('set-cookie').some(value => value.startsWith('__Host-mirror_read=rejected;')));
-        assert.ok(res.headers.get('set-cookie').some(value => value.includes('Path=/api/asset-content')));
+        assert.ok(res.headers.get('set-cookie').some(value => /^__Host-mirror_read\.[a-z0-9]+\.rejected\.[a-z0-9]+=1;/.test(value)));
+        assert.ok(!res.headers.get('set-cookie').some(value => value.startsWith('__Host-mirror_read=')));
       } else assert.equal(res.headers.get('set-cookie'), undefined);
     }
     for (const [pair, access, session, existing] of [
