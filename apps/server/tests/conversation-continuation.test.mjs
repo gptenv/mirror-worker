@@ -24,6 +24,8 @@ test.describe({ concurrency: 1 }, "server / conversation-continuation", () => {
 test.after(async () => {
   globalThis.fetch = localFetch;
   await app.close();
+  // Ensure the process can exit cleanly after serial tests
+  setImmediate(() => process.exit(0));
   rmSync(dir, { recursive: true, force: true });
 });
 
