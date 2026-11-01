@@ -65,4 +65,11 @@ test.describe('server / cloudflare-worker entrypoint', () => {
     await worker.fetch(new Request('https://mirror.example/'), runtime);
     assert.equal(forwarded.headers.get('x-forwarded-for'), null);
   });
+  test('falls back to ordinary fetch when WARP binding is absent', async () => {
+    const envNoWarp = { ...env };
+    delete envNoWarp.WARP;
+    const instance = new MirrorStorage({ storage: {} }, envNoWarp);
+    const response = await instance.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fixture' } }));
+    assert.equal((await response.json()).authorization, 'Bearer fixture');
+  });
 });
