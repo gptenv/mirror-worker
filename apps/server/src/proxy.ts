@@ -282,7 +282,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
       ? await fetchWithAccessTokenFallback(`${UPSTREAM}${req.url}`, init, credentials)
       : await upstreamFetch(`${UPSTREAM}${req.url}`, init);
   } catch (error) {
-    req.log.error({ error, path: req.url }, "mirror upstream request failed");
+    req.log.error({ path: req.url.split("?", 1)[0] }, "mirror upstream request failed");
     const details = error as { upstreamResponseText?: unknown; tokenLengths?: unknown; statusCode?: number; message?: string };
     const upstreamResponseText = typeof details?.upstreamResponseText === "string" ? details.upstreamResponseText : undefined;
     const tokenLengths = details?.tokenLengths;
@@ -309,11 +309,15 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
       "content-security-policy-report-only", "nel", "report-to",
       "reporting-endpoints", "set-cookie", "strict-transport-security",
       "transfer-encoding", "x-frame-options",
+      "x-mirror-auth-status", "x-mirror-access-token", "x-mirror-session-token",
     ].includes(lowerName)) continue;
     responseHeaders[name] = lowerName === "location" && proxyOrigin
       ? rewriteChatGptUrls(value, proxyOrigin)
       : value;
   }
+  // Only the local owner gate may attest to this request's identity.
+  const authStatus = reply.getHeader("x-mirror-auth-status");
+  if (authStatus) responseHeaders["x-mirror-auth-status"] = String(authStatus);
   const cookie = reply.getHeader("set-cookie");
   if (cookie) responseHeaders["set-cookie"] = String(cookie);
   // The lightweight frontend compares its document identity to this readable
@@ -372,7 +376,10 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
     responseHeaders["cache-control"] = "no-store";
   }
   const sessionToken = await getRotatedRequestSessionToken();
-  if (sessionToken) responseHeaders["x-mirror-session-token"] = sessionToken;
+  if (sessionToken) {
+    responseHeaders["x-mirror-session-token"] = sessionToken;
+    responseHeaders["cache-control"] = "no-store";
+  }
   reply.raw.writeHead(upstream.status, responseHeaders);
 
   // Error payloads are diagnostic evidence from the upstream. Preserve the

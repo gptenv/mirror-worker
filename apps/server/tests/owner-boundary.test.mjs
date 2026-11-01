@@ -60,8 +60,8 @@ test.describe('server / Worker owner boundary', () => {
       ]) {
         profile = rejected;
         const response = await read();
-        assert.equal(response.statusCode, 403, 'neither routing identity nor a previously accepted profile authenticates this request');
-        assert.equal(response.json().error.type, 'authorization_error');
+        assert.equal(response.statusCode, rejected.id === 'user-synthetic-other' ? 403 : 502, 'neither routing identity nor a previously accepted profile authenticates this request');
+        assert.equal(response.json().error.type, rejected.id === 'user-synthetic-other' ? 'authorization_error' : 'upstream_error');
         assert.doesNotMatch(response.body, /synthetic-owner|synthetic-other|workspace-/);
       }
       profile = canonical;
@@ -76,7 +76,7 @@ test.describe('server / Worker owner boundary', () => {
       : Response.json(null));
     try {
       const response = await app.inject({ url: '/api/settings/hotkeys', headers: { authorization: 'Bearer synthetic-invalid-access' } });
-      assert.equal(response.statusCode, 401);
+      assert.equal(response.statusCode, mode === 'invalid-auth' ? 401 : 502);
       assert.doesNotMatch(response.body, /synthetic-invalid-access|user-synthetic-owner/);
     } finally { await app.close(); }
   });
@@ -199,7 +199,7 @@ test.describe('server / Worker owner boundary', () => {
     test.mock.method(globalThis, 'fetch', async () => { throw new Error('synthetic transport unavailable'); });
     try {
       const response = await app.inject({ url: '/api/settings/hotkeys', headers: { authorization: 'Bearer fixture-access' } });
-      assert.equal(response.statusCode, 401);
+      assert.equal(response.statusCode, 502);
       assert.equal(response.json().error.message, 'synthetic transport unavailable');
     } finally { await app.close(); }
   });

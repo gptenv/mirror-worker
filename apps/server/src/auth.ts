@@ -1,3 +1,4 @@
+import type { FastifyReply } from "fastify";
 import { upstreamFetch } from "@mirror/protocol";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
@@ -97,7 +98,7 @@ export async function fetchWithAccessTokenFallback(
   }
   init = { ...init, headers: requestHeaders };
   const first = await upstreamFetch(input, init);
-  if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
+  if (credentials.sessionRefreshAllowed === false || !credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
   // Once refresh is selected this response is discarded, even if minting
   // fails. Release it before the exchange and retain the exchange diagnostic.
   await first.body?.cancel().catch(() => {});
@@ -114,7 +115,7 @@ export async function fetchWithAccessTokenFallback(
     throw error;
   });
   credentials.accessToken = minted.accessToken;
-  credentials.rotatedSessionToken = minted.rotatedSessionToken;
+  if (minted.rotatedSessionToken) credentials.rotatedSessionToken = minted.rotatedSessionToken;
   if (minted.rotatedSessionToken) credentials.sessionToken = minted.rotatedSessionToken;
   credentials.cookie = `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || credentials.sessionToken)}`;
   const headers = new Headers(init.headers);
@@ -123,4 +124,13 @@ export async function fetchWithAccessTokenFallback(
     .filter(value => value && !value.startsWith("__Secure-next-auth.session-token="));
   headers.set("cookie", [...otherCookies, credentials.cookie].join("; "));
   return upstreamFetch(input, { ...init, headers });
+}
+
+/** Both ordinary and hijacked responses must deliver settled refreshes. */
+export async function applyRotatedCredentialHeaders(reply: FastifyReply): Promise<void> {
+  const accessToken = await getRotatedRequestAccessToken();
+  const sessionToken = await getRotatedRequestSessionToken();
+  if (accessToken || sessionToken) reply.header("Cache-Control", "no-store");
+  if (accessToken) reply.header("x-mirror-access-token", accessToken);
+  if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
 }

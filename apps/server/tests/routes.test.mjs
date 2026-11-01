@@ -827,7 +827,8 @@ test("GPT listing deduplicates entries shared by bootstrap and sidebar", async (
 for (const [error, expected] of [[new DOMException("aborted", "AbortError"), "Generation stopped"], ["plain failure", "plain failure"]]) {
   test(`chat stream exposes a useful error for ${expected}`, async () => {
     useSession(`error-${expected}`);
-    await withFetch(async () => { throw error; }, async () => {
+    let preflight = true;
+    await withFetch(async () => { if (preflight) { preflight = false; return Response.json({}); } throw error; }, async () => {
       const res = await app.inject({ method: "POST", url: "/api/chat", headers: AUTH, payload: { prompt: "hi", model: "auto" } });
       assert.equal(res.statusCode, 200);
       assert.match(res.body, new RegExp(expected));
@@ -857,7 +858,9 @@ test("disconnecting a local streaming HTTP client aborts upstream work", { timeo
   const upstreamAborted = new Promise(resolve => { observedAbort = resolve; });
   try {
     const address = await probe.listen({ port: 0, host: "127.0.0.1" });
+    let preflight = true;
     await withFetch(async (_url, init) => {
+      if (preflight) { preflight = false; return Response.json({}); }
       started();
       return new Promise((_resolve, reject) => {
         const abort = () => { observedAbort(); reject(new DOMException("disconnected", "AbortError")); };
@@ -923,7 +926,7 @@ test("extension API CORS permits bearer clients but not ambient cookie authentic
     assert.equal(accepted.headers["access-control-allow-origin"], site);
     assert.equal(accepted.headers["access-control-allow-credentials"], undefined);
   }
-  const bootstrap = await app.inject({ url: "/", headers: { host: "localhost", accept: "text/html" } });
+  const bootstrap = await app.inject({ url: "/mirror/playground", headers: { host: "localhost", accept: "text/html" } });
   for (const extra of [{}, { cookie: bootstrap.headers["set-cookie"] }]) {
     const denied = await app.inject({ method: "POST", url: "/v1/chat/completions", headers: { host: "localhost", origin, ...extra }, payload: { messages: [] } });
     assert.equal(denied.statusCode, 401);
@@ -936,8 +939,8 @@ test("extension API CORS permits bearer clients but not ambient cookie authentic
   assert.equal(badHost.statusCode, 421);
   assert.equal(badHost.headers["access-control-allow-origin"], undefined);
   store.clearSession();
-  const streamed = await app.inject({ method: "POST", url: "/v1/chat/completions", headers,
-    payload: { model: "auto", messages: [{ role: "user", content: "test" }], stream: true } });
+  const streamed = await withFetch(async () => Response.json({}), () => app.inject({ method: "POST", url: "/v1/chat/completions", headers,
+    payload: { model: "auto", messages: [{ role: "user", content: "test" }], stream: true } }));
   assert.equal(streamed.statusCode, 200);
   assert.equal(streamed.headers["access-control-allow-origin"], origin);
   assert.match(streamed.body, /data:.*error/);
@@ -997,7 +1000,7 @@ test("Worker owner authentication handles cookie-only and non-Error failures saf
   const mocked = t.mock.method(ChatGptBackendClient.prototype, 'fetchMe', async () => { throw failure; });
   try {
     const cookieOnly = await workerApp.inject({ url: '/api/asset-content', headers: { cookie: 'mirror_asset_session=cookie-fixture' } });
-    assert.equal(cookieOnly.statusCode, 401, cookieOnly.body);
+    assert.equal(cookieOnly.statusCode, 502, cookieOnly.body);
     assert.equal(cookieOnly.json().error.message, 'fixture transport failure');
     assert.deepEqual(cookieOnly.json().error.token_lengths.received, { sessionToken: 0, accessToken: 0 });
     failure = Object.assign(new Error('fixture unavailable'), { statusCode: 503, tokenLengths: { accessToken: { sentUpstream: 7 } } });

@@ -69,7 +69,7 @@ test.describe('server / browser reconnect', () => {
 
   test('invalid credentials, wrong owners and server failures keep a usable form and never render raw error data', async t => {
     for (const status of [401, 403, 503]) {
-      const f = fixture(t, async () => new Response('<script>fixture-secret-echo</script>', { status, headers: rotated }));
+      const f = fixture(t, async () => new Response('<script>fixture-secret-echo</script>', { status, headers: { ...rotated, 'x-mirror-auth-status': status === 401 ? 'credential_rejected' : status === 403 ? 'owner_mismatch' : '' } }));
       await f.run(); await f.submit('fixture-secret-echo');
       assert.equal(f.rendered, undefined);
       assert.equal(f.input.value, '');
@@ -82,7 +82,7 @@ test.describe('server / browser reconnect', () => {
 
   test('expired stored credentials are removed only after their own rejection and can be replaced', async t => {
     let accepted = false;
-    const f = fixture(t, async () => accepted ? new Response('owner HTML') : new Response('denied', { status: 401 }), ['old-access', 'old-session']);
+    const f = fixture(t, async () => accepted ? new Response('owner HTML') : new Response('denied', { status: 401, headers: { 'x-mirror-auth-status': 'credential_rejected' } }), ['old-access', 'old-session']);
     await f.run();
     assert.deepEqual(f.pair(), [null, null]);
     accepted = true;
@@ -133,7 +133,7 @@ test.describe('server / browser reconnect', () => {
     const f = fixture(t, () => (++calls === 1 ? first.promise : second.promise), ['old-access', 'old-session']);
     const old = f.run();
     const newer = f.submit('new-owner');
-    first.resolve(new Response('denied', { status: 401 })); await old;
+    first.resolve(new Response('denied', { status: 401, headers: { 'x-mirror-auth-status': 'credential_rejected' } })); await old;
     assert.equal(f.status(), 'Connecting…');
     assert.equal(f.disabled(), true);
     second.resolve(new Response('new HTML')); await newer;
@@ -158,4 +158,24 @@ test.describe('server / browser reconnect', () => {
     assert.doesNotMatch(f.body(), /fixture-secret-echo/);
     assert.equal(f.disabled(), false);
   });
+  test('transient errors retain stored credentials and never impersonate an owner rejection', async t => {
+    for (const status of [401, 403, 429, 502, 503]) {
+      const f = fixture(t, async () => new Response('untrusted error', { status, headers: rotated }), ['old-access', 'old-session']);
+      await f.run();
+      assert.deepEqual(f.pair(), ['old-access', 'old-session']);
+      assert.match(f.status(), /could not connect/);
+      assert.equal(f.rendered, undefined);
+    }
+  });
+  test('only owner-verified document failures retain rotations, including a submitted candidate', async t => {
+    for (const candidate of [false, true]) for (const verified of [false, true]) {
+      const f = fixture(t, async () => new Response('unavailable', { status: verified ? 503 : 403,
+        headers: { ...rotated, 'x-mirror-auth-status': verified ? 'owner_verified' : 'owner_mismatch' } }), candidate ? [] : ['old-access', 'old-session']);
+      await f.run();
+      if (candidate) await f.submit('candidate');
+      assert.deepEqual(f.pair(), verified ? ['fixture-fresh-access', 'fixture-fresh-session'] : [null, null]);
+      assert.equal(f.rendered, undefined);
+    }
+  });
+
 });

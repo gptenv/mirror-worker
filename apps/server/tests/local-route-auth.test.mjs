@@ -54,9 +54,9 @@ test.describe('server / local-route-auth',()=>{
     });
     try{
       const missing=await app.inject({method:'GET',url:'/api/conversations',headers:{authorization:'Bearer owner-token'}});
-      assert.equal(missing.statusCode,403);
+      assert.equal(missing.statusCode,502);
       const unavailable=await app.inject({method:'GET',url:'/api/conversations',headers:{authorization:'Bearer owner-token'}});
-      assert.notEqual(unavailable.statusCode,200);
+      assert.equal(unavailable.statusCode,503);
     }finally{await app.close();}
   });
   test('settings, diagnostics, history and model routes use access Bearer and session cookie upstream',async()=>{

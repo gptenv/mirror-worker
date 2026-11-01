@@ -212,4 +212,22 @@ test.describe("server / auth", () => {
       globalThis.fetch = originalFetch;
     }
   });
+  test("sealed credentials never exchange or replay a denied proxy mutation", async t => {
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response('expired', { status: 401 }); });
+    const credentials = { accessToken: 'owner', sessionToken: 'session', deviceId: 'device', sessionRefreshAllowed: false };
+    const response = await auth.fetchWithAccessTokenFallback('https://chatgpt.com/backend-api/mutation', { method: 'POST', body: 'fixture' }, credentials);
+    assert.equal(response.status, 401);
+    assert.equal(calls, 1);
+    assert.equal(credentials.accessToken, 'owner');
+  });
+  test("a later exchange without Set-Cookie retains the last rotated session", async t => {
+    t.mock.method(globalThis, 'fetch', async input => String(input).endsWith('/api/auth/session')
+      ? Response.json({ accessToken: 'newer' }) : new Response('expired', { status: 401 }));
+    const credentials = { accessToken: 'fresh', sessionToken: 'rotated', rotatedSessionToken: 'rotated', deviceId: 'device' };
+    await auth.fetchWithAccessTokenFallback('https://chatgpt.com/backend-api/me', {}, credentials);
+    assert.equal(credentials.rotatedSessionToken, 'rotated');
+    assert.equal(credentials.sessionToken, 'rotated');
+  });
+
 });

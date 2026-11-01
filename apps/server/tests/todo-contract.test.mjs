@@ -64,7 +64,8 @@ test("public API compatibility preflight, errors, request IDs and allowlisted di
     const res = await app.inject({ url, headers }); assert.equal(res.statusCode, expected); assert.ok(res.json().error.code); assert.equal(res.json().error.request_id, res.headers["x-request-id"]);
   }
   const invalid = await post([], null); assert.equal(invalid.statusCode, 400); assert.equal(invalid.json().error.code, "invalid_request");
-  globalThis.fetch = async () => { throw new Error("sensitive-upstream-payload"); };
+  let preflightAuth = true;
+  globalThis.fetch = async () => { if (preflightAuth) { preflightAuth = false; return Response.json({}); } throw new Error("sensitive-upstream-payload"); };
   const failed = await post([{ role: "user", content: "test" }], "failed-stream", true);
   assert.match(failed.body, /upstream_failure/); assert.match(failed.body, /sensitive-upstream-payload/); assert.match(failed.body, /\[DONE\]/);
   const health = await app.inject({ url: "/api/diagnostics", headers: auth });

@@ -487,6 +487,7 @@ export type { TextPart };
 
 export async function registerOpenAiRoutes(
   app: FastifyInstance,
+  prepareStream?: (reply: FastifyReply) => Promise<void>,
 ): Promise<void> {
   app.get("/v1/models", async () => {
     const creds = await getValidCredentials();
@@ -603,6 +604,7 @@ export async function registerOpenAiRoutes(
         },
       });
     }
+    if (body.stream) await prepareStream?.(reply);
     let resolvedAttachments: UploadedFile[] | undefined;
     if (imageParts.length || fileParts.length) {
       try {
@@ -684,7 +686,7 @@ export async function registerOpenAiRoutes(
         }
         reply.raw.writeHead(200, {
           "Content-Type": "text/event-stream; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
+          "Cache-Control": "no-store, no-transform",
           Connection: "keep-alive",
           "X-Accel-Buffering": "no",
         });

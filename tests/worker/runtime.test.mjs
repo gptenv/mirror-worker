@@ -44,12 +44,20 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
           upstreamCalls.push(new URL(request.url).pathname);
           if (new URL(request.url).pathname === '/backend-api/me') {
             const token = request.headers.get('authorization');
+            if (token === 'Bearer expired-session' || token === 'Bearer expired-other') return new Response('expired', { status: 401 });
+            if (token === 'Bearer transient') return new Response('temporarily unavailable', { status: 503 });
+            if (token === 'Bearer edge-challenge') return new Response('just a moment', { status: 403 });
             if (token === 'Bearer invalid-auth') return new Response('Synthetic invalid credential', { status: 401 });
             if (token === 'Bearer missing-identity') return Response.json({ account: { account_user_id: 'fixture-owner' } });
             if (token === 'Bearer malformed-profile') return Response.json({ object: 'user', id: { value: 'fixture-owner' } });
-            return Response.json({ object: 'user', id: token === 'Bearer other-account' ? 'other-user' : 'fixture-owner' });
+            return Response.json({ object: 'user', id: ['Bearer other-account', 'Bearer fresh-other'].includes(token) ? 'other-user' : 'fixture-owner' });
           }
-          if (new URL(request.url).pathname === '/api/auth/session') return new Response('Synthetic invalid credential', { status: 401 });
+          if (new URL(request.url).pathname === '/api/auth/session') {
+            const cookie = request.headers.get('cookie');
+            if (cookie?.includes('expired-session') || cookie?.includes('expired-other'))
+              return Response.json({ accessToken: cookie.includes('expired-other') ? 'fresh-other' : 'fresh-owner' }, { headers: { 'set-cookie': '__Secure-next-auth.session-token=fresh-session; Path=/' } });
+            return new Response('Synthetic invalid credential', { status: 401 });
+          }
           return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
       } },
       outboundService: () => { throw new Error('Unexpected unbound network access'); },
@@ -67,6 +75,33 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   const request = (pathname, init = {}) => runtime.dispatchFetch(`https://mirror.example${pathname}`, init);
   const owner = { authorization: 'Bearer fixture-owner' };
 
+  test('refresh headers survive the real HTTP SSE bridge, with repeated owner verification', async () => {
+    for (const [pathname, payload] of [
+      ['/v1/chat/completions', { messages: [{ role: 'user', content: 'fixture' }], stream: true }],
+      ['/v1/responses', { input: 'fixture', stream: true }],
+      ['/api/chat', { prompt: 'fixture' }],
+    ]) {
+      const response = await request(pathname, { method: 'POST', headers: { authorization: 'Bearer expired-session', 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-mirror-access-token'), 'fresh-owner');
+      assert.equal(response.headers.get('x-mirror-session-token'), 'fresh-session');
+      assert.equal(response.headers.get('x-mirror-auth-status'), 'owner_verified');
+      assert.match(response.headers.get('cache-control'), /no-store/);
+      assert.match(await response.text(), /reply-/);
+    }
+    const wrong = await request('/api/diagnostics', { headers: { authorization: 'Bearer expired-other' } });
+    assert.equal(wrong.status, 403);
+    assert.equal(wrong.headers.get('x-mirror-auth-status'), 'owner_mismatch');
+    assert.equal(wrong.headers.get('x-mirror-access-token'), null);
+    assert.equal(wrong.headers.get('x-mirror-session-token'), null);
+    for (const [token, status] of [['transient', 503], ['edge-challenge', 403]]) {
+      const before = upstreamCalls.length;
+      const failed = await request('/api/diagnostics', { headers: { authorization: `Bearer ${token}` } });
+      assert.equal(failed.status, status);
+      assert.equal((await failed.json()).error.type, 'upstream_error');
+      assert.equal(upstreamCalls.length, before + 1);
+    }
+  });
   test('rejects websocket upgrades before contacting upstream', async () => {
     const before = upstreamCalls.length;
     const response = await request('/backend-api/celsius/ws', { headers: { upgrade: 'websocket' } });
@@ -97,7 +132,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   test('HTTP adapter enforces owner access and saves settings across runtime restart', async () => {
     assert.equal((await request('/api/diagnostics')).status, 401);
     assert.equal((await request('/api/diagnostics', { headers: { authorization: 'Bearer other-account' } })).status, 403);
-    for (const [token, status] of [['missing-identity', 403], ['malformed-profile', 403], ['invalid-auth', 401]]) {
+    for (const [token, status] of [['missing-identity', 502], ['malformed-profile', 502], ['invalid-auth', 401]]) {
       assert.equal((await request('/api/diagnostics', { headers: { authorization: `Bearer ${token}` } })).status, status);
     }
     const session = await request('/api/session', { method: 'POST', headers: owner });

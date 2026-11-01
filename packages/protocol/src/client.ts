@@ -200,7 +200,7 @@ export class ChatGptBackendClient {
       attachTokenLengths(error, firstAccessToken, this.creds.sessionToken, false);
       throw error;
     }
-    if (this.creds.sessionToken && await isAccessDeniedResponse(res)) {
+    if (this.creds.sessionRefreshAllowed !== false && this.creds.sessionToken && await isAccessDeniedResponse(res)) {
       // This response is abandoned even if minting or the retry fails. Release
       // its body before refresh; cleanup must not replace upstream diagnostics.
       await res.body?.cancel().catch(() => undefined);
@@ -216,7 +216,7 @@ export class ChatGptBackendClient {
       // the server returns it to the browser, which owns persistent storage.
       this.creds.accessToken = minted.accessToken;
       this.lastTokenLengths.accessToken.sentUpstream = minted.accessToken.length;
-      this.creds.rotatedSessionToken = minted.rotatedSessionToken;
+      if (minted.rotatedSessionToken) this.creds.rotatedSessionToken = minted.rotatedSessionToken;
       if (minted.rotatedSessionToken) this.creds.sessionToken = minted.rotatedSessionToken;
       if (this.creds.cookie) this.creds.cookie = this.creds.cookie.replace(/__Secure-next-auth\.session-token=[^;]*/,
         `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || this.creds.sessionToken)}`);

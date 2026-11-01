@@ -1,3 +1,4 @@
+import { abortable, turnDeadline } from "./deadlines.js";
 import { registerInsightRoutes } from "./insights.js";
 import { registerDecoderChallengeRoutes } from "./decoder-challenges.js";
 import { registerConversionRoutes } from "./conversion-routes.js";
@@ -8,7 +9,7 @@ import { formatStartupFailure } from "./preflight.js";
 import { syncConversationPage, hasRemoteHistory } from "./conversation-sync.js";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
@@ -35,7 +36,7 @@ import {
   normalizeModels,
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
-import { getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
+import { runWithRequestSessionToken, applyRotatedCredentialHeaders, getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -108,11 +109,17 @@ function sessionTokenLengthDiagnostics(error: unknown, bearer: string, fallbackS
   };
 }
 
+function sessionAuthenticationStatus(error: unknown): number {
+  const upstream = error as { statusCode?: number; status?: number } | null | undefined;
+  return Number(upstream?.statusCode ?? upstream?.status ?? 502);
+}
+
 function sessionAuthenticationErrorBody(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
   return {
     error: {
       message: sessionAuthenticationError(error),
-      type: "authentication_error",
+      type: sessionAuthenticationStatus(error) === 401 ? "authentication_error" : "upstream_error",
+      code: sessionAuthenticationStatus(error) === 401 ? "credential_rejected" : "upstream_failure",
       token_lengths: sessionTokenLengthDiagnostics(error, bearer, fallbackSessionToken),
     },
   };
@@ -171,6 +178,9 @@ await app.register(multipart, {
 });
 
 const accountKey = () => getSession()?.accountId ?? "default";
+// Worker requests already enter a scope in MirrorStorage.fetch. Node also needs
+// an empty scope so configured credentials stay attached to one request.
+if (!options.worker) app.addHook("onRequest", (_req, _reply, done) => runWithRequestSessionToken(undefined, done));
 app.addHook("onRequest", async (req, reply) => {
   // Normalize before classifying auth: aliases need exactly the same bearer,
   // account headers, retry behavior and upstream path as /backend-api requests.
@@ -213,15 +223,23 @@ app.addHook("onRequest", async (req, reply) => {
   if (options.ownerUserId && !workerPublicAsset && pathname !== "/api/health") {
     if (!requestSessionToken) return reply.code(401).send({ error: { message: "A ChatGPT credential is required", type: "authentication_error" } });
     try {
-      const client = new ChatGptBackendClient(await getValidCredentials());
+      const credentials = await getValidCredentials();
+      const client = new ChatGptBackendClient(credentials);
       // Authenticate the current profile's user principal. accountId belongs
       // to workspace routing and may be absent or cached from an older profile.
       const profile = await client.fetchMe();
-      if (profile.object !== "user" || typeof profile.id !== "string" || profile.id !== options.ownerUserId)
-        return reply.code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error" } });
+      if (profile.object !== "user" || typeof profile.id !== "string" || !profile.id)
+        return reply.code(502).send({ error: { message: "Upstream returned an invalid user profile", type: "upstream_error", code: "upstream_failure" } });
+      if (profile.id !== options.ownerUserId)
+        return reply.header("x-mirror-auth-status", "owner_mismatch").code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error", code: "owner_mismatch" } });
+      // No later exchange may replace the identity that passed this gate.
+      credentials.sessionRefreshAllowed = false;
+      reply.header("x-mirror-auth-status", "owner_verified");
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+      const status = sessionAuthenticationStatus(error);
+      if (status === 401) reply.header("x-mirror-auth-status", "credential_rejected");
+      return reply.code(status).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
     }
   }
   if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
@@ -233,7 +251,9 @@ app.addHook("onRequest", async (req, reply) => {
       await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
+      const status = sessionAuthenticationStatus(error);
+      if (status === 401) reply.header("x-mirror-auth-status", "credential_rejected");
+      return reply.code(status).send(
         sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
       );
     }
@@ -286,9 +306,32 @@ app.addHook("onRequest", async (req, reply) => {
   }
 });
 
+// Called after route validation, before either SSE handler commits headers.
+async function prepareStream(reply: FastifyReply): Promise<void> {
+  const credentials = await getValidCredentials();
+  if (credentials.sessionRefreshAllowed !== false) {
+    const controller = new AbortController();
+    const deadline = turnDeadline(controller);
+    const abort = () => controller.abort();
+    reply.request.raw.once("aborted", abort);
+    reply.raw.once("close", abort);
+    try {
+      await abortable(new ChatGptBackendClient(credentials).fetchMe(controller.signal), controller.signal);
+    } finally {
+      deadline.close();
+      reply.request.raw.off("aborted", abort);
+      reply.raw.off("close", abort);
+    }
+  }
+  credentials.sessionRefreshAllowed = false;
+  await applyRotatedCredentialHeaders(reply);
+}
+
 app.addHook("onSend", async (req, reply, payload) => {
-  const accessToken = await getRotatedRequestAccessToken();
-  const sessionToken = await getRotatedRequestSessionToken();
+  const deliverRotation = !options.ownerUserId || reply.getHeader("x-mirror-auth-status") === "owner_verified";
+  const accessToken = deliverRotation ? await getRotatedRequestAccessToken() : undefined;
+  const sessionToken = deliverRotation ? await getRotatedRequestSessionToken() : undefined;
+  if (deliverRotation) await applyRotatedCredentialHeaders(reply);
   if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
   if (accessToken) {
     reply.header("Cache-Control", "no-store");
@@ -343,7 +386,7 @@ app.setErrorHandler((error, req, reply) => {
       : error instanceof Error
           ? error.message
           : "Request failed";
-  if (status >= 500) app.log.error({ err: error }, "request failed");
+  if (status >= 500) app.log.error({ status }, "request failed");
   reply.code(status).send({ error: message });
 });
 
@@ -599,15 +642,19 @@ app.post("/api/chat", async (req, reply) => {
       .code(404)
       .send({ error: "One or more attachments do not belong to this account" });
   }
+  await prepareStream(reply);
   const controller = new AbortController();
   req.raw.once("aborted", () => controller.abort());
   reply.raw.once("close", () => {
     if (!reply.raw.writableEnded) controller.abort();
   });
   reply.hijack();
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value);
+  }
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
+    "Cache-Control": "no-store, no-transform",
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
@@ -658,7 +705,7 @@ app.post("/api/chat", async (req, reply) => {
   }
 });
 
-await registerOpenAiRoutes(app);
+await registerOpenAiRoutes(app, prepareStream);
 await registerAssetContentRoute(app);
 await registerInsightRoutes(app);
 registerDecoderChallengeRoutes(app, () => JSON.stringify([accountKey(), getSessionRevision()]));

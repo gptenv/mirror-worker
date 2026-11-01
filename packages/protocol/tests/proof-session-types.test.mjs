@@ -29,7 +29,7 @@ test("session exchange preserves challenge responses and identifies JSON token r
   await assert.rejects(mintAccessToken("fixture"), SessionTokenInvalidError);
   t.mock.restoreAll();
   t.mock.method(globalThis, "fetch", async () => new Response("not JSON", { status: 200 }));
-  await assert.rejects(mintAccessToken("fixture"), SessionTokenInvalidError);
+  await assert.rejects(mintAccessToken("fixture"), { name: "SessionExchangeError", statusCode: 502 });
 });
 test("concurrent exchanges share only an in-flight request", async t => {
   const gate = Promise.withResolvers();
@@ -46,7 +46,7 @@ test("concurrent exchanges share only an in-flight request", async t => {
 test("unreadable exchange bodies are classified without hiding the status", async t => {
   for (const status of [200, 503]) {
     t.mock.method(globalThis, "fetch", async () => ({ ok: status === 200, status, headers: new Headers(), text: async () => { throw new Error("unreadable"); } }));
-    await assert.rejects(mintAccessToken("fixture"), status === 200 ? SessionTokenInvalidError : SessionExchangeError);
+    await assert.rejects(mintAccessToken("fixture"), error => error instanceof SessionExchangeError && error.statusCode === (status === 200 ? 502 : status));
     t.mock.restoreAll();
   }
 });
@@ -199,11 +199,11 @@ test("mintAccessToken preserves non-authentication session endpoint failures", a
   }
 });
 
-test("mintAccessToken throws SessionTokenInvalidError when the body has no accessToken", async () => {
+test("mintAccessToken treats a missing accessToken as an upstream failure", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ notAccessToken: true });
   try {
-    await assert.rejects(mintAccessToken("token"), SessionTokenInvalidError);
+    await assert.rejects(mintAccessToken("token"), { name: "SessionExchangeError", statusCode: 502 });
   } finally {
     globalThis.fetch = original;
   }

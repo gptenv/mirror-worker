@@ -1045,4 +1045,15 @@ for (const method of ["get", "post"]) test(`successful HTTP ${method} with an er
   });
 });
 
+  test('a later refresh without a cookie preserves the latest session rotation', async t => {
+    t.mock.method(globalThis, 'fetch', async (input, init) => {
+      if (String(input).endsWith('/api/auth/session')) return Response.json({ accessToken: 'newer' });
+      return new Headers(init.headers).get('authorization') === 'Bearer newer' ? Response.json({ id: 'owner' }) : new Response('expired', { status: 401 });
+    });
+    const credentials = { accessToken: 'fresh', sessionToken: 'rotated', rotatedSessionToken: 'rotated', deviceId: 'device' };
+    await new ChatGptBackendClient(credentials).fetchMe();
+    assert.equal(credentials.rotatedSessionToken, 'rotated');
+    assert.equal(credentials.sessionToken, 'rotated');
+  });
+
 });
