@@ -97,7 +97,7 @@ function wireWidget(root){
     status.textContent='Verifying…';
     try{
       localStorage.setItem('mirror_access_token',token);localStorage.removeItem('mirror_session_token');
-      document.cookie='mirror_asset_session='+encodeURIComponent(token)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+      if(window.__mirrorCredentials)window.__mirrorCredentials.publish();
       var r=await fetch('/api/session',{method:'POST'});
       var rotatedAccess=r.headers.get('x-mirror-access-token'),rotatedSession=r.headers.get('x-mirror-session-token');
       expectedToken=rotatedAccess||token;
@@ -111,7 +111,7 @@ function wireWidget(root){
       if(attempt!==saveAttempt)return;
       try{
         if(!credentialsMatch(expectedToken,expectedSession)){status.textContent='Credentials changed. Verify the current credential again.';return;}
-        localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');document.cookie='mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+        localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');if(window.__mirrorCredentials)window.__mirrorCredentials.clear();
       }catch(_){}
       status.textContent=e.message||String(e);
     }

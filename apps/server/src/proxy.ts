@@ -1,11 +1,12 @@
 import { BackendApiError, upstreamFetch } from "@mirror/protocol";
 import { EARLY_PATCH } from "./browser-patch.js";
+import { applyNativeCredentialCookies } from "./native-credentials.js";
 export { injectionCss, injectionJs } from "./mirror-controls.js";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { fetchWithAccessTokenFallback, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials } from "./auth.js";
 import { getSession, setSessionAccountId } from "./store.js";
 import { isRewritableContentType, requestOrigin, rewriteChatGptUrls } from "./url-rewrite.js";
-import { authorizedLocalRequest, isAllowedOrigin, isAllowedRequestHost } from "./security.js";
+import { authorizedLocalRequest, configuredApiKeys, isAllowedOrigin, isAllowedRequestHost } from "./security.js";
 
 // Datadog's Browser SDK is configured (on OpenAI's side, in their Datadog
 // dashboard) with an "allowed application URLs" list scoped to chatgpt.com --
@@ -233,13 +234,12 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
     headers.set("cookie", [...identityCookies, pageCredentials.cookie!].join("; "));
   }
 
-  // Determine which paths need authentication headers
-  const needsAuthHeaders =
-    req.url.startsWith("/backend-api/") ||
-    req.url.startsWith("/ces/") ||           // Observation/telemetry endpoints
-    req.url.startsWith("/api/") ||           // API endpoints (excluding /api/auth/session which is special-cased)
-    req.url.startsWith("/realtime/");        // Real-time/Work Mode endpoints
-  // Note: /sentinel/* endpoints don't need auth headers (real ChatGPT doesn't send them)
+  // The app's private route set evolves (Spaces/Library included). Credentials
+  // go to the fixed ChatGPT upstream by default, with explicit public exceptions.
+  const needsAuthHeaders = (Boolean(getRequestSessionToken()) || configuredApiKeys().length > 0) &&
+    !/^\/(?:sentinel|cdn|_next|assets)(?:\/|$)/.test(req.url) &&
+    !/^\/unauth-mweb\/(?:assets|scripts)\//.test(req.url) &&
+    !/^\/(?:favicon\.ico|robots\.txt)(?:\?|$)/.test(req.url);
 
   if (needsAuthHeaders) {
     credentials = await getValidCredentials();
@@ -300,6 +300,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
   const proxyOrigin = requestOrigin(req.protocol, req.headers.host);
 
+  await applyNativeCredentialCookies(reply);
   reply.hijack();
   const responseHeaders: Record<string, string | string[]> = {};
   for (const [name, value] of upstream.headers) {
@@ -319,7 +320,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   const authStatus = reply.getHeader("x-mirror-auth-status");
   if (authStatus) responseHeaders["x-mirror-auth-status"] = String(authStatus);
   const cookie = reply.getHeader("set-cookie");
-  if (cookie) responseHeaders["set-cookie"] = String(cookie);
+  if (cookie) responseHeaders["set-cookie"] = Array.isArray(cookie) ? cookie.map(String) : String(cookie);
   // The lightweight frontend compares its document identity to this readable
   // epoch cookie. Preserve that marker, without persisting ChatGPT credentials.
   const upstreamCookies = (upstream.headers.getSetCookie?.() ?? [upstream.headers.get("set-cookie") ?? ""])
@@ -327,7 +328,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   const identityResponseCookies = upstreamCookies.filter((value) => /^(?:oai-client-session-epoch|oai-did)=/.test(value))
     .map((value) => value.replace(/;\s*Domain=[^;]*/gi, ""));
   if (identityResponseCookies.length) responseHeaders["set-cookie"] = [
-    ...(cookie ? [String(cookie)] : []), ...identityResponseCookies,
+    ...(cookie ? Array.isArray(cookie) ? cookie.map(String) : [String(cookie)] : []), ...identityResponseCookies,
   ];
   responseHeaders["content-type"] = contentType;
   // Only fall back to a 5-minute public cache for genuinely static assets

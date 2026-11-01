@@ -1,19 +1,23 @@
+import { createBrowserCredentials } from "@mirror/protocol/browser-credentials";
 const ACCESS_TOKEN_KEY = "mirror_access_token";
 const SESSION_TOKEN_KEY = "mirror_session_token";
+const browserCredentials = () => createBrowserCredentials(localStorage, { read: () => document.cookie, write: value => { document.cookie = value; } });
+export function publishBrowserCredentials(): void { browserCredentials().publish(); }
+export function clearBrowserCredentials(): void { browserCredentials().clear(); }
 
 export function readStoredBearer(): string {
-  try { return localStorage.getItem(ACCESS_TOKEN_KEY) || localStorage.getItem(SESSION_TOKEN_KEY) || ""; }
+  try { const pair = browserCredentials().sync(); return pair[0] || pair[1]; }
   catch { return ""; }
 }
 export function readStoredSessionToken(): string {
-  try { return localStorage.getItem(SESSION_TOKEN_KEY) || ""; } catch { return ""; }
+  try { return browserCredentials().sync()[1]; } catch { return ""; }
 }
 export function storeAccessToken(token: string, previousBearer?: string, rotatedSessionToken?: string | null): void {
   if (rotatedSessionToken) localStorage.setItem(SESSION_TOKEN_KEY, rotatedSessionToken);
   else if (previousBearer && previousBearer !== token && !readStoredSessionToken())
     localStorage.setItem(SESSION_TOKEN_KEY, previousBearer);
   localStorage.setItem(ACCESS_TOKEN_KEY, token);
-  document.cookie = `mirror_asset_session=${encodeURIComponent(readStoredSessionToken() || token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+  publishBrowserCredentials();
 }
 
 /** Invalid/credential-bearing URLs are never usable endpoints. */

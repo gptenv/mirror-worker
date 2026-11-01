@@ -103,7 +103,7 @@ test.describe('server / proxy authentication boundaries', () => {
     test(`document request forwards only identity cookies${authenticated ? ' and scoped session' : ''}`, async t => {
       t.mock.method(globalThis, 'fetch', async (input, init) => {
         assert.equal(String(input), 'https://chatgpt.com/');
-        assert.equal(init.headers.get('authorization'), null);
+        assert.equal(init.headers.get('authorization'), authenticated ? 'Bearer fixture-access' : null);
         assert.equal(init.headers.get('cookie'), 'oai-did=device-fixture; oai-client-session-epoch=epoch-fixture' + (authenticated ? '; __Secure-next-auth.session-token=fixture-session' : ''));
         return new Response('<html><head></head><body>fixture document</body></html>', { headers: { 'content-type': 'text/html' } });
       });
@@ -134,6 +134,16 @@ test.describe('server / proxy authentication boundaries', () => {
     const { req, reply, state } = exchange('/cdn/fixture.png');
     await runWithRequestSessionToken(undefined, () => proxyChatGpt(req, reply), undefined, []);
     assert.equal(state.headers['set-cookie'], undefined);
+  });
+  test('proxy preserves multiple local credential cookies before writing raw headers', async t => {
+    for (const upstreamCookie of [undefined, 'oai-did=fixture; Path=/']) {
+      t.mock.method(globalThis, 'fetch', async () => new Response('fixture bytes', { headers: upstreamCookie ? { 'set-cookie': upstreamCookie } : {} }));
+      const local = ['__Host-mirror_read.g.0=fixture; Path=/; Secure; SameSite=Strict', '__Host-mirror_read=g:1; Path=/; Secure; SameSite=Strict'];
+      const { req, reply, state } = exchange('/cdn/fixture.png', {}, local);
+      await runWithRequestSessionToken(undefined, () => proxyChatGpt(req, reply), undefined, []);
+      assert.deepEqual(state.headers['set-cookie'], upstreamCookie ? [...local, upstreamCookie] : local);
+      t.mock.restoreAll();
+    }
   });
 
   test('a failed proxy session refresh preserves an empty upstream diagnostic and token lengths', async t => {

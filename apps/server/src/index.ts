@@ -21,6 +21,7 @@ import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
 import { BROWSER_BOOTSTRAP } from "./browser-bootstrap.js";
 import { EARLY_PATCH } from "./browser-patch.js";
+import { nativeReadCredentials, applyNativeCredentialCookies } from "./native-credentials.js";
 import { chatGptUpstreamPath } from "./url-rewrite.js";
 import {
   ConversationIdParam,
@@ -193,7 +194,9 @@ app.addHook("onRequest", async (req, reply) => {
   const bearer = bearerToken(req.headers.authorization);
   const isConfiguredApiKey = tokenMatches(bearer, configuredApiKeys());
   const assetContentRequest = ["GET", "HEAD"].includes(req.method) && req.url.split("?", 1)[0] === "/api/asset-content";
-  const encodedAssetCookieToken = assetContentRequest
+  const encodedAssetCookieToken = assetContentRequest && (!options.worker ||
+    ((!req.headers["sec-fetch-site"] || ["same-origin", "none"].includes(String(req.headers["sec-fetch-site"]))) &&
+      (!req.headers.origin || req.headers.origin === `${req.protocol}://${req.headers.host}`)))
     ? req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("mirror_asset_session="))?.slice("mirror_asset_session=".length)
     : undefined;
   let assetCookieToken: string | undefined;
@@ -216,9 +219,10 @@ app.addHook("onRequest", async (req, reply) => {
     req.url.startsWith("/backend-api/") || req.url.startsWith("/ces/") ||
     req.url.startsWith("/realtime/") || req.url.startsWith("/api/auth/") ||
     assetContentRequest || (pathname === "/api/session" && req.method !== "DELETE");
-  const requestSessionToken = bearer || assetCookieToken || "";
+  const nativePair = nativeReadCredentials(req, Boolean(options.worker && options.ownerUserId));
+  const requestSessionToken = bearer || nativePair?.[0] || nativePair?.[1] || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
-  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (assetContentRequest ? assetCookieToken : undefined));
+  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (!bearer ? nativePair?.[1] || assetCookieToken : undefined));
   const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
     /^\/(?:assets|mirror\/assets)\//.test(pathname!) || ["/favicon.ico", "/index.html"].includes(pathname!));
   if (options.ownerUserId && !workerPublicAsset && pathname !== "/api/health") {
@@ -329,6 +333,7 @@ async function prepareStream(reply: FastifyReply): Promise<void> {
 }
 
 app.addHook("onSend", async (req, reply, payload) => {
+  await applyNativeCredentialCookies(reply);
   const deliverRotation = !options.ownerUserId || reply.getHeader("x-mirror-auth-status") === "owner_verified";
   const accessToken = deliverRotation ? await getRotatedRequestAccessToken() : undefined;
   const sessionToken = deliverRotation ? await getRotatedRequestSessionToken() : undefined;

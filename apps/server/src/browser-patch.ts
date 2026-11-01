@@ -1,5 +1,10 @@
+import { createBrowserCredentials } from "@mirror/protocol/browser-credentials";
 // Browser URL adaptation; no telemetry SDK is initialized here.
 export const EARLY_PATCH = `<script>(function(){
+var __name=function(fn){return fn;};
+var mirrorCredentials=(${createBrowserCredentials.toString()})(localStorage,{read:function(){return document.cookie;},write:function(value){document.cookie=value;}});
+window.__mirrorCredentials=mirrorCredentials;
+mirrorCredentials.sync();
 function rel(u){
   try{
     if(typeof u!=="string") return u;
@@ -13,7 +18,7 @@ function rel(u){
   return u;
 }
 function storedToken(){
-  return localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')||'';
+  var pair=mirrorCredentials.sync();return pair[0]||pair[1]||'';
 }
 function rememberTokens(token,previous,rotatedSessionToken,previousSession){
     // Only the credentials attached to this request may accept its rotation.
@@ -22,8 +27,7 @@ function rememberTokens(token,previous,rotatedSessionToken,previousSession){
     if(rotatedSessionToken)localStorage.setItem('mirror_session_token',rotatedSessionToken);
     else if(previous&&previous!==token&&!localStorage.getItem('mirror_session_token'))localStorage.setItem('mirror_session_token',previous);
     if(token)localStorage.setItem('mirror_access_token',token);
-    var cookieToken=localStorage.getItem('mirror_session_token')||token;
-    document.cookie='mirror_asset_session='+encodeURIComponent(cookieToken)+'; Path=/api/asset-content; SameSite=Strict'+(location.protocol==='https:'?'; Secure':'');
+    mirrorCredentials.publish();
 }
 function wrapFetch(delegate){
   function send(input,init){
@@ -31,7 +35,8 @@ function wrapFetch(delegate){
     try{
       var token=storedToken();
       var url=typeof input==='string'?input:(input&&typeof input.url==='string'?input.url:String(input));
-      if(token&&new URL(url,location.href).origin===location.origin){
+      var sameOrigin=new URL(url,location.href).origin===location.origin;
+      if(token&&sameOrigin){
         mirrorRequest=true;
         sentToken=token;
         sentSession=localStorage.getItem('mirror_session_token')||'';
@@ -40,7 +45,15 @@ function wrapFetch(delegate){
         headers.set('authorization','Bearer '+token);
         headers.delete('x-mirror-session-token');
         if(sentSession)headers.set('x-mirror-session-token',sentSession);
-        opts.headers=headers;init=opts;
+        // Fetch only strips Authorization on cross-origin redirects, not our
+        // custom session header. Never let a credential-bearing fetch follow.
+        opts.headers=headers;opts.redirect='error';init=opts;
+      }else if(!sameOrigin){
+        var external=Object.assign({},init||{}),externalHeaders=new Headers(external.headers||(input&&input.headers)||undefined);
+        externalHeaders.delete('x-mirror-session-token');
+        var supplied=(externalHeaders.get('authorization')||'').replace(/^Bearer\\s+/i,'');
+        if(supplied&&(supplied===token||supplied===(localStorage.getItem('mirror_session_token')||'')))externalHeaders.delete('authorization');
+        external.headers=externalHeaders;external.credentials='omit';external.redirect='error';init=external;
       }
     }catch(e){}
     return Promise.resolve(delegate.call(this,input,init)).then(function(response){
@@ -119,7 +132,13 @@ if(currentFetch){
 var open=XMLHttpRequest.prototype.open;
 var xhrSetRequestHeader=XMLHttpRequest.prototype.setRequestHeader;
 XMLHttpRequest.prototype.setRequestHeader=function(name,value){
-  try{if(this.__mirrorSameOrigin&&(/^(authorization|x-mirror-session-token)$/i).test(name)&&(localStorage.getItem('mirror_access_token')||localStorage.getItem('mirror_session_token')))return;}catch(e){}
+  try{
+    if(/^x-mirror-session-token$/i.test(name))return;
+    if(/^authorization$/i.test(name)){
+      var token=storedToken(),session=localStorage.getItem('mirror_session_token')||'',supplied=String(value).replace(/^Bearer\\s+/i,'');
+      if((this.__mirrorSameOrigin&&token)||(supplied&&(supplied===token||supplied===session)))return;
+    }
+  }catch(e){}
   return xhrSetRequestHeader.call(this,name,value);
 };
 XMLHttpRequest.prototype.open=function(method,url){
@@ -136,11 +155,13 @@ XMLHttpRequest.prototype.send=function(){
     var token=storedToken();
     if(token&&this.__mirrorSameOrigin){
       var sentToken=token,sentSession=localStorage.getItem('mirror_session_token')||'';
-      xhrSetRequestHeader.call(this,'Authorization','Bearer '+token);
-      if(sentSession)xhrSetRequestHeader.call(this,'x-mirror-session-token',sentSession);
+      // XHR has no redirect:error option. Use its standard Authorization
+      // header only (the browser strips it across origins). A session bearer
+      // can refresh at the owner gate without a redirect-leaking custom header.
+      xhrSetRequestHeader.call(this,'Authorization','Bearer '+(sentSession||token));
       var listener=function(){
         try{
-          rememberTokens(this.getResponseHeader('x-mirror-access-token'),sentToken,this.getResponseHeader('x-mirror-session-token'),sentSession);
+          if(new URL(this.responseURL,location.href).origin===location.origin)rememberTokens(this.getResponseHeader('x-mirror-access-token'),sentToken,this.getResponseHeader('x-mirror-session-token'),sentSession);
         }catch(e){}
       };
       this.__mirrorCredentialListener=listener;

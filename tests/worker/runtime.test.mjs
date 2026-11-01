@@ -23,11 +23,11 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     const production = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
     const configPath = path.join(directory, 'wrangler.json');
     writeFileSync(configPath, JSON.stringify({ name: 'mirror-local-acceptance', main: path.resolve(production.main), compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags, durable_objects: production.durable_objects, migrations: production.migrations }));
-    execFileSync(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'deploy', '--config', configPath, '--dry-run', '--outdir', path.join(directory, 'bundle')], { env, stdio: 'pipe', timeout: 60_000 });
+    if (!process.env.MIRROR_TEST_BUNDLE_DIR) execFileSync(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'deploy', '--config', configPath, '--dry-run', '--outdir', path.join(directory, 'bundle')], { env, stdio: 'pipe', timeout: 60_000 });
     const backend = stubBackend('fixture-owner');
     options = convertV4MiniflareOptions({ host: '127.0.0.1', workers: [{
       name: 'mirror-local-acceptance', modules: true,
-      scriptPath: path.join(directory, 'bundle/cloudflare-worker.js'), modulesRoot: path.join(directory, 'bundle'),
+      scriptPath: path.join(process.env.MIRROR_TEST_BUNDLE_DIR || path.join(directory, 'bundle'), 'cloudflare-worker.js'), modulesRoot: process.env.MIRROR_TEST_BUNDLE_DIR || path.join(directory, 'bundle'),
       compatibilityDate: production.compatibility_date, compatibilityFlags: production.compatibility_flags,
       durableObjects: { MIRROR: { className: 'MirrorStorage', useSQLite: true } },
       bindings: { MIRROR_STORE_KEY: 'a'.repeat(64), MIRROR_OWNER_ACCOUNT_ID: 'fixture-owner' },

@@ -22,8 +22,14 @@ const requestAuthentication = new AsyncLocalStorage<RequestAuthentication>();
 
 /** Make the browser-provided bearer available only for this request. */
 export function setRequestSessionToken(token: string, sessionToken?: string): void {
-  if (token && (requestAuthentication.getStore()?.bearerToken !== token || requestAuthentication.getStore()?.sessionToken !== sessionToken))
-    requestAuthentication.enterWith({ bearerToken: token, sessionToken, configuredTokens: requestAuthentication.getStore()?.configuredTokens });
+  const request = requestAuthentication.getStore();
+  if (token && (request?.bearerToken !== token || request?.sessionToken !== sessionToken)) {
+    // The HTTP adapter created this isolated request object before Fastify.
+    // Mutate it so credentials selected in onRequest reach later async hooks;
+    // enterWith alone only replaces the current hook's async continuation.
+    if (request) { request.bearerToken = token; request.sessionToken = sessionToken; request.credentials = undefined; request.initialAccessToken = undefined; }
+    else requestAuthentication.enterWith({ bearerToken: token, sessionToken });
+  }
 }
 
 export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T, sessionToken?: string, configuredTokens?: string[]): T {

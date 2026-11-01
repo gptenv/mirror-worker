@@ -22,7 +22,7 @@ You need Docker and an active ChatGPT account in your browser.
 
 3. Open [http://127.0.0.1:8799](http://127.0.0.1:8799). Select **Mirror controls** in the ChatGPT sidebar, paste the token, and choose **Save & reload**.
 
-By default, Mirror keeps credentials in this browser's local storage. It tries the Bearer value as a ChatGPT accessToken first; only after an upstream authentication denial does it exchange a sessionToken. If ChatGPT rotates the session token during that exchange, Mirror returns the new value to the browser. Request-supplied tokens are not persisted by the Worker; optional configured credentials are stored as Worker secrets. A cookie scoped to native asset downloads is used only where the browser cannot send Authorization headers.
+By default, Mirror keeps credentials in this browser's local storage. It tries the Bearer value as a ChatGPT accessToken first; only after an upstream authentication denial does it exchange a sessionToken. If ChatGPT rotates the session token during that exchange, Mirror returns the new value to the browser. Request-supplied tokens are not persisted by the Worker; optional configured credentials are stored as Worker secrets. Native previews, media and downloads use host-only Secure, SameSite=Strict browser-session cookies across the Mirror origin. The Worker accepts these credentials only for owner-checked GET/HEAD requests; writes still require explicit authentication. Large credentials are split into cookie chunks. Cookies remain JavaScript-readable to synchronize native-request refreshes with local storage; no server credential database is added.
 
 External links and direct conversation URLs open the public reconnect form at the requested address. Standard `/c/<id>`, nested GPT/project `/g/g-<slug>/c/<id>`, and project landing paths keep their path, query, and fragment through reconnect. Protected documents still require the configured owner; API and cross-site mutation checks are unchanged. The form does not accept an external return destination or follow credential-bearing redirects.
 
@@ -66,7 +66,7 @@ for chunk in response:
 
 Mirror provides `GET /v1/models` and `POST /v1/chat/completions` (streaming and non-streaming). The supported request fields and known differences from OpenAI are documented in [COMPATIBILITY.md](COMPATIBILITY.md). Mirror does not call `api.openai.com`; `OPENAI_API_KEY` is an optional alias for a configured ChatGPT credential.
 
-Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror sends the session token as ChatGPT's `__Secure-next-auth.session-token` cookie on upstream API calls and tries the accessToken as Bearer authentication first. Clients may send their session token separately in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Configured tokens are selected in this order: `MIRROR_API_KEY`, entries in `MIRROR_API_KEYS`, then `OPENAI_API_KEY`. When the inbound Bearer matches a configured token, the first configured token supplies the upstream authentication cookie and access-token fallback. These settings must contain ChatGPT credentials, not an unrelated generated key. Unmatched client-held credentials authenticate independently and must still resolve to the configured owner on Workers. Native browser navigation can establish a same-origin control cookie in Node installations; Worker APIs require a request credential, with a scoped cookie for native asset downloads.
+Programmatic clients can pass a ChatGPT accessToken or sessionToken as the Bearer credential, for example as the OpenAI SDK's `api_key`. Mirror sends the session token as ChatGPT's `__Secure-next-auth.session-token` cookie on upstream API calls and tries the accessToken as Bearer authentication first. Clients may send their session token separately in `x-mirror-session-token`; a rotated session token is returned in the response header with the same name. Configured tokens are selected in this order: `MIRROR_API_KEY`, entries in `MIRROR_API_KEYS`, then `OPENAI_API_KEY`. When the inbound Bearer matches a configured token, the first configured token supplies the upstream authentication cookie and access-token fallback. These settings must contain ChatGPT credentials, not an unrelated generated key. Unmatched client-held credentials authenticate independently and must still resolve to the configured owner on Workers. Native browser navigation can establish a same-origin control cookie in Node installations; Worker reads require an owner-verified request credential or native-read cookie; writes require explicit request authentication. Node retains its existing control-cookie and exact asset-route behavior.
 
 To configure an upstream credential, set a ChatGPT session token in `.env` as `MIRROR_API_KEY`, or supply it as a Worker secret.
 
@@ -129,11 +129,28 @@ For development with real configured bindings, add the required secrets to `.dev
 
 Compose uses `MIRROR_PORT`; direct runs use `HOST` and `PORT`. Worker bindings and secrets are configured with Wrangler.
 
+
+Production updates on `codex/worker-reliability` are deployed by the GitHub Actions
+`CI` workflow after its build, coverage, browser, workerd, and container checks pass.
+The browser and workerd acceptance tests use the retained Worker bundle that the
+deploy job uploads with `--no-bundle`; the artifact records its commit SHA and file
+hashes. A production concurrency group serializes uploads, and stale branch runs
+skip deployment. Do not manually deploy while this workflow owns production.
+
+Actions are enabled for this fork. The existing
+organization secret `CLOUDFLARE_API_TOKEN` is available to this public repository;
+its access to the existing Worker is checked by the deployment job. A replacement
+token should have Editor access limited to this Worker; do not copy a local OAuth login into CI. The
+account and target branch are explicit in `.github/workflows/ci.yml`. A README
+clarification on that branch is a useful push-trigger check: verify the `CI` run
+reaches `deploy` and retain its deployment receipt. Missing credentials or disabled
+fork workflows must be resolved before pushing a production change.
+
 ## Security and data
 
 Node installations bind to loopback by default and normally reject non-loopback hosts. The draft Worker instead serves its configured public HTTPS endpoint and checks protected requests against its single configured ChatGPT owner. Public bootstrap, assets, and local health do not grant access to protected history or generation. Neither deployment mode provides multi-user tenant isolation.
 
-The browser stores the accessToken and, when available, the sessionToken in local storage for the Mirror origin. Same-origin API calls use the current stored credentials; a different API origin uses the separately supplied key rather than the Mirror browser credentials. A cookie scoped to `/api/asset-content` supports native browser downloads. The Worker handles request-supplied tokens in memory and does not persist them in its database. Optional configured credentials persist as Worker secrets. Startup removes older stored session/access credentials while retaining valid account metadata. Device metadata may be stored before an explicit session save.
+The browser stores the accessToken and, when available, the sessionToken in local storage for the Mirror origin. Same-origin API calls use the current stored credentials; a different API origin uses the separately supplied key rather than the Mirror browser credentials. Host-only Secure, SameSite=Strict session cookies support owner-checked Worker GET/HEAD requests, including native Spaces/Library images and downloads. These cookies are JavaScript-readable and carry the browser-held credentials; they are not accepted for state-changing requests or cross-site reads. Clearing the playground credential removes both the native-read cookies and the legacy `/api/asset-content` cookie. Authenticated fetches reject redirects; XHR uses only the standard Authorization header, which browsers strip across origins. Native cookies are never forwarded to third-party hosts. The legacy exact asset-route cookie remains for Node compatibility. The Worker handles request-supplied tokens in memory and does not persist them in its database. Optional configured credentials persist as Worker secrets. Startup removes older stored session/access credentials while retaining valid account metadata. Device metadata may be stored before an explicit session save.
 
 `MIRROR_STORE_KEY` encrypts the session metadata setting and seals asset tickets. Conversation text, instructions, events, and most other settings are not encrypted by the application, whether stored in the Node database or the Durable Object. Node request logs redact credential and cookie headers; the Worker's Fastify request logger is disabled. Treat diagnostics, exports, and any platform logs as sensitive.
 

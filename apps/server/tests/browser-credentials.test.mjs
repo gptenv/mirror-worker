@@ -20,7 +20,7 @@ function fixture(t, fetch = async () => Response.json({ configured: true })) {
   storage.setItem('mirror_access_token', 'old-access');
   storage.setItem('mirror_session_token', 'old-session');
   class Xhr extends EventTarget {
-    open() { this.headers = new Headers(); this.responseHeaders = new Headers(); }
+    open(_method, url) { this.responseURL = new URL(url, 'https://mirror.example/').href; this.headers = new Headers(); this.responseHeaders = new Headers(); }
     setRequestHeader(name, value) { this.headers.append(name, value); }
     send() {}
     getResponseHeader(name) { return this.responseHeaders.get(name); }
@@ -88,6 +88,41 @@ test.describe('server / injected browser credentials', () => {
       assert.deepEqual(pair(f), ['old-access', 'session-only']);
     });
   }
+
+  test('credential-bearing fetch forbids redirects and XHR uses only a redirect-stripped standard header', async t => {
+    const f = fixture(t, async (_url, init) => {
+      assert.equal(init.redirect, 'error');
+      assert.equal(init.headers.get('authorization'), 'Bearer old-access');
+      assert.equal(init.headers.get('x-mirror-session-token'), 'old-session');
+      return Response.json({});
+    });
+    f.patch();
+    await f.context.fetch('/api/library/files/libfile_fixture/content', { redirect: 'follow' });
+    const xhr = new f.context.XMLHttpRequest();
+    xhr.open('GET', '/api/library/files/libfile_fixture/content'); xhr.send();
+    assert.equal(xhr.headers.get('authorization'), 'Bearer old-session');
+    assert.equal(xhr.headers.get('x-mirror-session-token'), null);
+    xhr.responseURL = 'https://third-party.example/content'; xhr.finish(rotated);
+    assert.deepEqual(pair(f), ['old-access', 'old-session']);
+  });
+
+  test('explicit Mirror credentials are stripped from third-party fetch and XHR requests', async t => {
+    const f = fixture(t, async (_url, init) => {
+      assert.equal(init.headers.get('authorization'), null);
+      assert.equal(init.headers.get('x-mirror-session-token'), null);
+      assert.equal(init.credentials, 'omit');
+      assert.equal(init.redirect, 'error');
+      return Response.json({});
+    });
+    f.patch();
+    for (const token of ['old-access', 'old-session']) {
+      await f.context.fetch('https://third-party.example/file', { headers: { authorization: 'Bearer ' + token, 'x-mirror-session-token': 'old-session' } });
+      const xhr = new f.context.XMLHttpRequest(); xhr.open('GET', 'https://third-party.example/file');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + token); xhr.setRequestHeader('x-mirror-session-token', 'old-session'); xhr.send();
+      assert.equal(xhr.headers.get('authorization'), null);
+      assert.equal(xhr.headers.get('x-mirror-session-token'), null);
+    }
+  });
 
   test('reusing an XHR after a response without rotation cannot accept external credentials', t => {
     const f = fixture(t); f.patch();

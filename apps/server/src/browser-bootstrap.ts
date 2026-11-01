@@ -1,3 +1,4 @@
+import { createBrowserCredentials } from "@mirror/protocol/browser-credentials";
 /** The public shell collects a browser-local credential before requesting the
  * protected document. Only an owner-verified response may replace this shell. */
 export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect to Mirror</title>
@@ -6,9 +7,11 @@ export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-
 <form id="connect"><label for="credential">ChatGPT credential</label><input id="credential" type="password" autocomplete="off" spellcheck="false" required><button id="submit" type="submit">Connect</button></form>
 <small>Your credential stays in this browser for this Mirror address and is sent to Mirror to authenticate with ChatGPT.</small><p id="status" role="status" aria-live="polite">Enter your credential to continue.</p><noscript>JavaScript is required to connect.</noscript></main><script>
 (async function(){
+  var __name=function(fn){return fn;};
+  var mirrorCredentials=(${createBrowserCredentials.toString()})(localStorage,{read:function(){return document.cookie;},write:function(value){document.cookie=value;}});
   var form=document.getElementById('connect'),input=document.getElementById('credential'),button=document.getElementById('submit'),status=document.getElementById('status');
   var attempt=0;
-  function stored(){return [localStorage.getItem('mirror_access_token')||'',localStorage.getItem('mirror_session_token')||''];}
+  function stored(){return mirrorCredentials.sync();}
   function credentialsMatch(pair){var current=stored();return current[0]===pair[0]&&current[1]===pair[1];}
   async function load(candidate){
     var currentAttempt=++attempt;
@@ -35,10 +38,11 @@ export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-
         if(rotatedSession)localStorage.setItem('mirror_session_token',rotatedSession);
         else if(accessToken&&accessToken!==token&&!sessionToken)localStorage.setItem('mirror_session_token',token);
         if(accessToken)localStorage.setItem('mirror_access_token',accessToken);
+        mirrorCredentials.publish();
       }
       if(!response.ok){
         if(!candidate&&(authStatus==='credential_rejected'||authStatus==='owner_mismatch')){
-          localStorage.removeItem('mirror_access_token');localStorage.removeItem('mirror_session_token');
+          mirrorCredentials.clear();
         }
         status.textContent=authStatus==='owner_mismatch'?"This account is not the allowed owner. Use the owner's ChatGPT credential.":authStatus==='credential_rejected'?'Credential not accepted. Enter a current ChatGPT credential and try again.':'Mirror could not connect. Try again.';
         await response.body?.cancel();

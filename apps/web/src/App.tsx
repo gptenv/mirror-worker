@@ -1,4 +1,4 @@
-import { mirrorFetch as fetch, readStoredBearer, endpointOrigin, endpointHeaders, downloadAuthenticated } from "./client-auth.js";
+import { mirrorFetch as fetch, readStoredBearer, endpointOrigin, endpointHeaders, downloadAuthenticated, publishBrowserCredentials, clearBrowserCredentials } from "./client-auth.js";
 import { readResponsesStream, responseText } from "./responses-stream.js";
 import { ConnectionTools } from "./ConnectionTools.js";
 import { ConversationTools } from "./ConversationTools.js";
@@ -721,11 +721,11 @@ export default function App() {
                   if (value) {
                     localStorage.setItem("mirror_access_token", value);
                     localStorage.removeItem("mirror_session_token");
-                    document.cookie = `mirror_asset_session=${encodeURIComponent(value)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+                    publishBrowserCredentials();
                   } else {
                     localStorage.removeItem("mirror_access_token");
                     localStorage.removeItem("mirror_session_token");
-                    document.cookie = `mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+                    clearBrowserCredentials();
                   }
                 } catch { /* Browser storage may be unavailable. */ }
               }}
