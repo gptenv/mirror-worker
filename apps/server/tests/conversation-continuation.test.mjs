@@ -20,7 +20,7 @@ app.addHook("onRequest", async req => auth.setRequestSessionToken(req.headers.au
 await registerOpenAiRoutes(app);
 const address = await app.listen({ host: "127.0.0.1", port: 0 });
 const localFetch = globalThis.fetch;
-test.describe({ concurrency: 1 }, "server / conversation-continuation", () => {
+test.describe("server / conversation-continuation", { concurrency: 1 }, () => {
 test.after(async () => {
   globalThis.fetch = localFetch;
   await app.close();
