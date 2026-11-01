@@ -491,24 +491,19 @@ export async function registerOpenAiRoutes(
   app.get("/v1/models", async () => {
     const creds = await getValidCredentials();
     const client = new ChatGptBackendClient(creds);
-    // Models are required; gizmo sidebar and bootstrap are best-effort and
-    // independent so a failure in either does not fail the whole /v1/models
-    // response (callers still get the core model list).
     const models = normalizeModels(await client.fetchModels());
     const [projectsRaw, gptsRaw] = await Promise.all([
-      client
-        .fetchGizmoSidebar({
-          ownedOnly: false,
-          limit: 50,
-          conversationsPerGizmo: 0,
-        })
-        .catch(() => ({})),
+      client.fetchGizmoSidebar({
+        ownedOnly: false,
+        limit: 50,
+        conversationsPerGizmo: 0,
+      }).catch(() => ({})),
       client.fetchGizmoBootstrap({ limit: 20 }).catch(() => ({})),
     ]);
     const seen = new Set<string>();
     const gizmos = [
-      ...normalizeGizmos(gptsRaw),
-      ...normalizeGizmos(projectsRaw),
+      ...normalizeGizmos(gptsRaw as Record<string, unknown>),
+      ...normalizeGizmos(projectsRaw as Record<string, unknown>),
     ].filter((item) => {
       if (seen.has(item.id)) return false;
       seen.add(item.id);
