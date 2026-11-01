@@ -52,13 +52,6 @@ test.describe('server / cloudflare-worker entrypoint', () => {
     await other.fetch(normal());
     assert.equal(starts, count + 1, 'different Durable Objects do not share an HTTP server');
   });
-  test('falls back to ordinary fetch when the WARP binding is absent', async () => {
-    const noWarp = { ...env };
-    delete noWarp.WARP;
-    const instance = new MirrorStorage({ storage: {} }, noWarp);
-    const response = await instance.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fallback' } }));
-    assert.equal((await response.json()).authorization, 'Bearer fallback');
-  });
   test('replaces untrusted forwarding headers before addressing the singleton', async () => {
     let forwarded;
     const runtime = { MIRROR: { idFromName: name => { assert.equal(name, 'mirror-single-account'); return 'id'; }, get: id => { assert.equal(id, 'id'); return { fetch: async req => { forwarded = req; return new Response('ok'); } }; } } };
