@@ -192,7 +192,7 @@
   "scripts/check-test-suites.mjs": "333599900642496ff36510c887542130a01f9bffef0984fcc567e4c1dc306e9b",
   "scripts/deploy-worker-artifact.mjs": "df069168358c2e0f6262362ed9e7c0f09b35739c15e8c984d7b81d905ffc0658",
   "scripts/gen-api-key.mjs": "03004c5d0bd264cdbeb964e3ca11fdee6f3c48ff7d81d1db09c9e1579890f521",
-  "scripts/manifest.mjs": "76a90a05eebe79597c8fcd8cb1b683921f2d1f6c5496f1291831021cca3ddd48",
+  "scripts/manifest.mjs": "b3323e7a38b49103cbf35dc43ea24fa0d1c2be7844ada3d7f6ab475951cd7c40",
   "scripts/protocol-canary.mjs": "a493113e279918cceb1c186313f34f24ca43b1c976ac6871a308fc50fc484fb3",
   "scripts/restore-drill.mjs": "22bd55303491d9551d11e12c64e1befeb4c4d5c4fdd341d02da8a82f2028510f",
   "scripts/storage.mjs": "1df9e21d08fd0a99d17698c0ecc079a599499d6873a99398ec95e4dead11d1bf",
