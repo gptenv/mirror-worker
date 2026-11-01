@@ -14,7 +14,7 @@ interface DurableObjectState {
 interface WorkerEnvironment {
   MIRROR: DurableObjectNamespace;
   ASSETS: WorkerAssets;
-  WARP?: { fetch: UpstreamFetch };
+  WARP: { fetch: UpstreamFetch };
   MIRROR_STORE_KEY?: string;
   MIRROR_OWNER_ACCOUNT_ID?: string;
   MIRROR_API_KEY?: string;
@@ -48,8 +48,7 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     });
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
-    const upstream = this.env.WARP?.fetch ? this.env.WARP.fetch.bind(this.env.WARP) : fetch;
-    return runWithUpstreamFetch(upstream, () =>
+    return runWithUpstreamFetch(this.env.WARP.fetch.bind(this.env.WARP), () =>
       runWithRequestSessionToken(token, () => this.handlerPromise!.then((handler) => handler(request)), sessionToken,
         configuredApiKeys({ MIRROR_API_KEY: this.env.MIRROR_API_KEY, MIRROR_API_KEYS: this.env.MIRROR_API_KEYS, OPENAI_API_KEY: this.env.OPENAI_API_KEY })));
   }
