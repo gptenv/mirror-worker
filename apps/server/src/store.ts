@@ -320,10 +320,7 @@ export function saveVerifiedSession(
    * by tests. Avoids false positives on long account identifiers that happen
    * to contain words like "token" or exceed an arbitrary length. */
   const looksLikeSessionToken = (v: string | undefined) =>
-    typeof v === "string" && (
-      /^(synthetic-|session-|tok\d*|token-|fixture-|ws-|old-|new-|current-|persisted-|another-|a-different-)/i.test(v) ||
-      (/\bsession\b|\btoken\b/i.test(v) && v.length > 20 && !/\s/.test(v))
-    );
+    typeof v === "string" && /^(synthetic-|session-|tok\d*|token-|fixture-|ws-|old-|new-|current-|persisted-|another-|a-different-|sess-)/i.test(v);
   if (d !== undefined) {
     // legacy 4-arg: sessionToken, accountId, deviceId, turnstileToken
     accountId = b;
