@@ -105,7 +105,7 @@
   "apps/server/tests/store.test.mjs": "3d09861a21f0bf1d27189a0ed606a9d5176936054bdd1a400c4956f4950c8e17",
   "apps/server/tests/todo-contract.test.mjs": "80102fc355b9161c8d7237b24132a9f863e6ee46aeb313768f56100467ca2cfc",
   "apps/server/tests/turnstile-api.test.mjs": "f58b0c57c07abd6ddcc82280f043823a59950cedabc91431da9740202c804dd0",
-  "apps/server/tests/turnstile.test.mjs": "a1e181e0528523d7d8173eaa92cf8ce6ba56b5b53034a045e13c87e4e0103bab",
+  "apps/server/tests/turnstile.test.mjs": "d6fe7fbe860924b36cf4909d166e6a6b5bf7e6dfa943a6fdb0b0dfb608e501e4",
   "apps/server/tests/upstream-cookie-auth.test.mjs": "749ee7d3d3b3aba0bfd986010da86b1dc3eedbf61b7e038ce1192c80b935baa4",
   "apps/server/tests/upstream-error-body.test.mjs": "3240e3eb0bc85195b259377a2c45d9642501a278f6ce910171f379b931613b3e",
   "apps/server/tests/upstream-errors-audit.test.mjs": "9683b267ca29f626b372d8ff684c3d9de685e33b78a48dbe9d68af1b75f1668b",
