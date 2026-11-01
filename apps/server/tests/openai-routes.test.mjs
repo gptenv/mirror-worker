@@ -31,7 +31,7 @@ test.after(async () => {
 });
 
 function useSession(accountId) {
-  store.saveVerifiedSession(`session-token-for-${accountId}-long-enough`, accountId, `device-${accountId}`);
+  store.saveVerifiedSession(accountId, `device-${accountId}`);
   store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
 }
 
@@ -1498,7 +1498,7 @@ test("a session with no accountId falls back to the default account for both ima
   // verified session's accountId is optional (see saveVerifiedSession in
   // store.ts), so getSession()?.accountId can genuinely be undefined even
   // with otherwise-valid credentials.
-  store.saveVerifiedSession("session-token-for-no-account-long-enough", undefined, "device-no-account");
+  store.saveVerifiedSession(undefined, "device-no-account");
   store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
   const sent = [];
   await withFetch(stubBackendWithUploads("default", { sent }), async () => {

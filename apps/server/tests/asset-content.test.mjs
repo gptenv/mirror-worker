@@ -16,7 +16,7 @@ const fetchBefore = globalThis.fetch;
 const bytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
 const pointer = "sediment://file-image";
 const session = () => {
-  store.saveVerifiedSession("synthetic-session", "asset-account", "synthetic-device");
+  store.saveVerifiedSession("asset-account", "synthetic-device");
   store.updateMintedToken("synthetic-upstream-access", Date.now() + 3600000, null);
 };
 session();
@@ -59,7 +59,7 @@ test("invalid, modified, expired and disconnected-account tickets never reach up
     assert.equal((await request(token)).statusCode, 404);
   }
   const old = ticket(); store.clearSession(); assert.equal((await request(old)).statusCode, 404);
-  store.saveVerifiedSession("another-synthetic-session", "other-account", "other-device");
+  store.saveVerifiedSession("other-account", "other-device");
   assert.equal((await request(old)).statusCode, 404); session();
   const badHost = await app.inject({ url: `/api/asset-content?ticket=${ticket()}`, headers: { host: "attacker.test" } });
   assert.equal(badHost.statusCode, 421);
@@ -159,7 +159,7 @@ test("redirect loops, missing Location and the legacy sandbox resolver", async (
 test("capability issuance requires a session and bounds malformed tokens", () => {
   store.clearSession(); assert.throws(ticket, /No session/); session();
   assert.equal(store.openAssetTicket("x".repeat(12001)), null);
-  store.saveVerifiedSession("synthetic-session");
+  store.saveVerifiedSession();
   const value = ticket(); assert.ok(store.openAssetTicket(value)); session();
 });
 

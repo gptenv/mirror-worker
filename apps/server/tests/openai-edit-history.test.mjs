@@ -22,7 +22,6 @@ test("assistant history is immutable while user edits rebase and continue", asyn
         import("../dist/openai.js"),
       ]);
     store.saveVerifiedSession(
-      "session-token-long-enough-for-test",
       "account-1",
       "device-1",
     );

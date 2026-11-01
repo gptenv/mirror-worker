@@ -27,7 +27,6 @@ function jwtWithExp(secondsFromNow) {
 
 function useSession(accountId, { withAccountId = true } = {}) {
   store.saveVerifiedSession(
-    `session-token-${accountId}`,
     withAccountId ? accountId : undefined,
     `device-${accountId}`,
   );

@@ -11,7 +11,7 @@ test('backup and restore preserve WAL-committed data; retention preserves creden
  const source=path.join(root,'source'),restored=path.join(root,'restored'),backup=path.join(root,'backup');
  const run=(args,dir)=>execFileSync(process.execPath,['scripts/storage.mjs',...args],{cwd:process.cwd(),env:{...process.env,MIRROR_DATA_DIR:dir},stdio:'pipe'});
  try{
-  execFileSync(process.execPath,['--input-type=module','-e',`const s=await import('./apps/server/dist/store.js');s.saveVerifiedSession('synthetic-token','test');const c=s.createConversation({model:'auto',accountId:'test'});s.saveInstructions(c.id,[{role:'system',content:'saved'}]);`],{env:{...process.env,MIRROR_DATA_DIR:source}});
+  execFileSync(process.execPath,['--input-type=module','-e',`const s=await import('./apps/server/dist/store.js');s.saveVerifiedSession('test');const c=s.createConversation({model:'auto',accountId:'test'});s.saveInstructions(c.id,[{role:'system',content:'saved'}]);`],{env:{...process.env,MIRROR_DATA_DIR:source}});
   run(['backup',backup],source);run(['restore',backup,'--offline'],restored);
   const db=new DatabaseSync(path.join(restored,'mirror.db'));
   assert.equal(db.prepare('SELECT count(*) AS n FROM conversations').get().n,1);

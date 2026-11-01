@@ -15,7 +15,7 @@ test.describe("server / openai-stream-lifecycle", () => {
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 
 for (const responses of [false, true]) test(`a seventh full-history ${responses ? "Responses" : "Chat"} turn sends parseable keepalives while upstream is silent, then continues the same parent`, { timeout: 5000 }, async t => {
-  store.saveVerifiedSession("fixture-session", "heartbeat-account");
+  store.saveVerifiedSession("heartbeat-account");
   store.updateMintedToken("fixture-access", Date.now() + 3600000, null);
   const sent = [];
   const backend = stubBackend("heartbeat-account", { sent });
@@ -101,7 +101,7 @@ for (const responses of [false, true]) test(`a seventh full-history ${responses 
 for (const failure of ["idle deadline", "heartbeat write"]) {
   test(`silent streams terminate on ${failure} and release the conversation for retry`, { timeout: 5000 }, async t => {
     const account = `heartbeat-${failure}`;
-    store.saveVerifiedSession("fixture-session", account);
+    store.saveVerifiedSession(account);
     store.updateMintedToken("fixture-access", Date.now() + 3600000, null);
     process.env.MIRROR_IDLE_TIMEOUT_MS = "100";
     const entered = Promise.withResolvers();

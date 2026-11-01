@@ -22,7 +22,7 @@ const egress = await import("../dist/egress.js");
 const app = await buildApp();
 const originalFetch = globalThis.fetch;
 const auth = { host: "localhost", authorization: "Bearer fixture-key" };
-function session() { store.saveVerifiedSession("synthetic-session", "fixture-account"); store.updateMintedToken("synthetic-access", Date.now() + 3600000, null); }
+function session() { store.saveVerifiedSession("fixture-account"); store.updateMintedToken("synthetic-access", Date.now() + 3600000, null); }
 function post(messages, id, stream = false) { return app.inject({ method: "POST", url: "/v1/chat/completions", headers: auth, payload: { model: "auto", messages, stream, ...(id ? { metadata: { conversation_id: id } } : {}) } }); }
 test.describe("server / todo-contract", () => {
 test.after(async () => { globalThis.fetch = originalFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });

@@ -18,7 +18,7 @@ test.after(async()=>{globalThis.fetch=localFetch;await app.close();rmSync(dir,{r
 const download = "https://files.oaiusercontent.com/test?sig=synthetic";
 for (const endpoint of ["chat/completions","responses"]) for (const stream of [false,true]) test(`${endpoint} stream=${stream}: rich output, summary, downloads and three-turn continuity`,async()=>{
   const account=`rich-${endpoint}-${stream}`;
-  store.saveVerifiedSession("synthetic-session",account,"synthetic-device");
+  store.saveVerifiedSession(account, "synthetic-device");
   store.updateMintedToken("synthetic-access",Date.now()+3600000,null);
   const sent=[],downloads=[];
   const backend=stubBackend(account,{sent,turnFrames:(body,turn)=>{
@@ -84,7 +84,7 @@ for (const endpoint of ["chat/completions","responses"]) for (const stream of [f
 for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint of ["chat/completions", "responses"]) for (const stream of [false, true]) {
   test(`${model} ${endpoint} stream=${stream}: first-turn extras hidden, Python retained, follow-up unchanged`, async () => {
     const account = `visibility-${model}-${endpoint}-${stream}`;
-    store.saveVerifiedSession("synthetic-session", account, "synthetic-device");
+    store.saveVerifiedSession(account, "synthetic-device");
     store.updateMintedToken("synthetic-access", Date.now() + 3600000, null);
     const sent = [], downloads = [];
     const backend = stubBackend(account, { sent, turnFrames: (body, turn) => {
@@ -161,7 +161,7 @@ for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint 
 
 for (const scenario of ["image", "loaded-image", "sandbox", "plain-prefix", "empty-tool"]) test(`Responses rich stream: ${scenario}`, async () => {
   const account = `rich-stream-${scenario}`;
-  store.saveVerifiedSession("synthetic-session", account, "synthetic-device");
+  store.saveVerifiedSession(account, "synthetic-device");
   store.updateMintedToken("synthetic-access", Date.now() + 3600000, null);
   const downloads = [];
   const backend = stubBackend(account, { turnFrames: () => {
