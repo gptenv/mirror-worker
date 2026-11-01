@@ -20,6 +20,7 @@ import { stringify as toYaml } from "yaml";
 import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
 import { BROWSER_BOOTSTRAP } from "./browser-bootstrap.js";
+import { EARLY_PATCH } from "./browser-patch.js";
 import { chatGptUpstreamPath } from "./url-rewrite.js";
 import {
   ConversationIdParam,
@@ -727,7 +728,7 @@ if (!options.worker) {
   await app.register(fastifySwaggerUi, { routePrefix: "/mirror/api-docs" });
 } else {
   app.get("/mirror/api-docs", (_req, reply) => reply.type("text/html; charset=utf-8").send(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mirror API docs</title>
+<html><head><meta charset="utf-8">${EARLY_PATCH}<meta name="viewport" content="width=device-width,initial-scale=1"><title>Mirror API docs</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.20.0/swagger-ui.css"></head>
 <body><div id="swagger-ui"></div><script src="https://unpkg.com/swagger-ui-dist@5.20.0/swagger-ui-bundle.js"></script>
 <script>SwaggerUIBundle({url:"/mirror/openapi",dom_id:"#swagger-ui"})</script></body></html>`));

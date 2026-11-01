@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { BROWSER_BOOTSTRAP } from '../dist/browser-bootstrap.js';
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
-const rotated = { 'x-mirror-access-token': 'fixture-fresh-access', 'x-mirror-session-token': 'fixture-fresh-session' };
+const rotated = { 'content-type': 'text/html', 'x-mirror-access-token': 'fixture-fresh-access', 'x-mirror-session-token': 'fixture-fresh-session' };
 function fixture(t, fetch, initial = []) {
   const dom = new JSDOM(BROWSER_BOOTSTRAP, { url: 'https://mirror.example/mirror/playground', runScripts: 'outside-only' });
   t.after(() => dom.window.close());
@@ -67,6 +67,16 @@ test.describe('server / browser reconnect', () => {
     assert.deepEqual(f.pair(), ['fixture-fresh-access', 'fixture-fresh-session']);
   });
 
+  test('successful data documents render inert text rather than executable markup', async t => {
+    const body = '<img src=x onerror="window.pwned=true"><script>window.pwned=true</script>';
+    for (const type of ['application/json', 'application/yaml', 'text/plain', '']) {
+      const f = fixture(t, async () => ({ ok: true, headers: new Headers({ 'content-type': type }), text: async () => body }), ['owner']);
+      await f.run();
+      assert.equal(f.rendered, undefined);
+      assert.match(f.body(), /&lt;img/);
+      assert.doesNotMatch(f.body(), /<img|<script/);
+    }
+  });
   test('invalid credentials, wrong owners and server failures keep a usable form and never render raw error data', async t => {
     for (const status of [401, 403, 503]) {
       const f = fixture(t, async () => new Response('<script>fixture-secret-echo</script>', { status, headers: { ...rotated, 'x-mirror-auth-status': status === 401 ? 'credential_rejected' : status === 403 ? 'owner_mismatch' : '' } }));
@@ -82,7 +92,7 @@ test.describe('server / browser reconnect', () => {
 
   test('expired stored credentials are removed only after their own rejection and can be replaced', async t => {
     let accepted = false;
-    const f = fixture(t, async () => accepted ? new Response('owner HTML') : new Response('denied', { status: 401, headers: { 'x-mirror-auth-status': 'credential_rejected' } }), ['old-access', 'old-session']);
+    const f = fixture(t, async () => accepted ? new Response('owner HTML', { headers: { 'content-type': 'text/html' } }) : new Response('denied', { status: 401, headers: { 'x-mirror-auth-status': 'credential_rejected' } }), ['old-access', 'old-session']);
     await f.run();
     assert.deepEqual(f.pair(), [null, null]);
     accepted = true;
@@ -95,13 +105,13 @@ test.describe('server / browser reconnect', () => {
     for (const initial of [['old-access'], [null, 'old-session']]) {
       const f = fixture(t, async (_url, init) => {
         assert.equal(init.headers.get('authorization'), 'Bearer ' + (initial[0] || initial[1]));
-        return new Response('owner HTML', { headers: { 'x-mirror-access-token': 'fresh' } });
+        return new Response('owner HTML', { headers: { 'content-type': 'text/html', 'x-mirror-access-token': 'fresh' } });
       }, initial);
       await f.run();
       assert.deepEqual(f.pair(), ['fresh', initial[0] || initial[1]]);
       assert.equal(f.rendered, 'owner HTML');
     }
-    const f = fixture(t, async () => new Response('owner HTML', { headers: { 'x-mirror-session-token': 'fresh-session' } }), ['old-access', 'old-session']);
+    const f = fixture(t, async () => new Response('owner HTML', { headers: { 'content-type': 'text/html', 'x-mirror-session-token': 'fresh-session' } }), ['old-access', 'old-session']);
     await f.run();
     assert.deepEqual(f.pair(), ['old-access', 'fresh-session']);
   });
@@ -136,7 +146,7 @@ test.describe('server / browser reconnect', () => {
     first.resolve(new Response('denied', { status: 401, headers: { 'x-mirror-auth-status': 'credential_rejected' } })); await old;
     assert.equal(f.status(), 'Connecting…');
     assert.equal(f.disabled(), true);
-    second.resolve(new Response('new HTML')); await newer;
+    second.resolve(new Response('new HTML', { headers: { 'content-type': 'text/html' } })); await newer;
     assert.deepEqual(f.pair(), ['new-owner', null]);
     assert.equal(f.rendered, 'new HTML');
   });

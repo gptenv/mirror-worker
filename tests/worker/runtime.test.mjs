@@ -58,7 +58,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
               return Response.json({ accessToken: cookie.includes('expired-other') ? 'fresh-other' : 'fresh-owner' }, { headers: { 'set-cookie': '__Secure-next-auth.session-token=fresh-session; Path=/' } });
             return new Response('Synthetic invalid credential', { status: 401 });
           }
-          if (/^\/(?:c|g)\//.test(new URL(request.url).pathname)) return new Response('<html><body>private fixture thread</body></html>', { headers: { 'content-type': 'text/html' } });
+          if (/^\/(?:c|g|space)\//.test(new URL(request.url).pathname)) return new Response('<html><body>private fixture thread</body></html>', { headers: { 'content-type': 'text/html' } });
           return backend(request.url, { method: request.method, headers: request.headers, body: request.method === 'GET' ? undefined : await request.text() });
       } },
       outboundService: () => { throw new Error('Unexpected unbound network access'); },
@@ -75,6 +75,22 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   });
   const request = (pathname, init = {}) => runtime.dispatchFetch(`https://mirror.example${pathname}`, init);
   const owner = { authorization: 'Bearer fixture-owner' };
+  const navigate = async (url, headers = { accept: 'text/html', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'cross-site' }) => {
+    // Node fetch overwrites Sec-Fetch-Mode with cors. Use raw HTTP to model
+    // the headers an actual browser navigation sends to the Worker.
+    const { request: httpRequest } = await import('node:http');
+    const base = await runtime.ready;
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(new URL(url, base), { headers }, res => {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: res.headers })));
+        res.on('error', reject);
+      });
+      req.on('error', reject); req.end();
+    });
+  };
+
 
   test('refresh headers survive the real HTTP SSE bridge, with repeated owner verification', async () => {
     for (const [pathname, payload] of [
@@ -112,7 +128,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   });
   test('reconnect shell is public while its document stays owner-protected', async () => {
     const before = upstreamCalls.length;
-    const shell = await request('/mirror/playground', { headers: { accept: 'text/html' } });
+    const shell = await navigate('/mirror/playground');
     assert.equal(shell.status, 200);
     const html = await shell.text();
     assert.match(html, /<form id="connect">/);
@@ -132,20 +148,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
   });
   test('external links and thread URLs expose only the shell until the owner authenticates', async () => {
     const navigation = { accept: 'text/html', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
-    // Node fetch overwrites Sec-Fetch-Mode with cors. Use raw HTTP to model
-    // the headers an actual browser navigation sends to the Worker.
-    const { request: httpRequest } = await import('node:http');
-    const base = await runtime.ready;
-    const navigate = url => new Promise((resolve, reject) => {
-      const req = httpRequest(new URL(url, base), { headers: navigation }, res => {
-        const chunks = [];
-        res.on('data', chunk => chunks.push(chunk));
-        res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: res.headers })));
-        res.on('error', reject);
-      });
-      req.on('error', reject); req.end();
-    });
-    for (const url of ['/c/fixture-thread?view=thread', '/g/g-fixture/c/fixture-thread', '/g/g-p-fixture/project']) {
+    for (const url of ['/space/', '/space/files', '/space/d/external-gdrive%3Aaccount%3Afixture%3Aroot', '/c/fixture-thread?view=thread', '/g/g-fixture/c/fixture-thread', '/g/g-p-fixture/project']) {
       const before = upstreamCalls.length;
       const shell = await navigate(url);
       assert.equal(shell.status, 200);
@@ -160,6 +163,14 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       assert.equal(accepted.status, 200);
       assert.match(await accepted.text(), /private fixture thread/);
       assert.equal(upstreamCalls.at(-1), url.split('?')[0]);
+    }
+    for (const headers of [
+      { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' },
+      { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' },
+    ]) {
+      const shell = await navigate('/space/files?view=all', headers);
+      assert.equal(shell.status, 200);
+      assert.match(await shell.text(), /<form id="connect">/);
     }
     for (const url of ['/api/conversations', '/backend-api/conversation/fixture-thread']) {
       assert.equal((await request(url, { headers: navigation })).status, 401);

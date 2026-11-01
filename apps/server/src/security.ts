@@ -104,13 +104,31 @@ export function authorizedLocalRequest(headers: { authorization?: string; cookie
   return tokenMatches(cookie, controlSecret ? [controlSecret] : []);
 }
 export function mayBootstrapBrowser(method: string, url: string, headers: Record<string, unknown>, publicShell = false): boolean {
+  if (publicShell) {
+    // The proxy serves an open-ended set of frontend routes (including /space).
+    // Classify browser document intent, not a second, incomplete route table.
+    // This grants only the credential-free shell; its fetch still passes the
+    // owner gate. Keep Node's control-cookie bootstrap separate below.
+    if (method !== "GET" || !url.startsWith("/") || url.startsWith("//")) return false;
+    let pathname: string;
+    try { pathname = decodeURIComponent(url.split("?", 1)[0]!); } catch { return false; }
+    if (pathname.startsWith("//") || /[\\\x00-\x1f]/.test(pathname) || pathname.includes("://")) return false;
+    pathname = new URL(pathname, "https://mirror.invalid").pathname;
+    if (/^\/(?:api|backend-api|__codex-api|v1|ces|realtime|sentinel|cdn|_next|assets)(?:\/|$)/i.test(pathname) ||
+      /^\/(?:mirror\/assets|unauth-mweb\/(?:assets|scripts))(?:\/|$)/i.test(pathname) ||
+      /\.(?:data|json|js|mjs|css|map|wasm|png|jpe?g|gif|svg|ico|webp|avif|woff2?|ttf|txt|xml|webmanifest)$/i.test(pathname) || pathname === "/index.html") return false;
+    const query = new URLSearchParams(url.slice(url.indexOf("?") + 1));
+    const accept = String(headers.accept ?? "").toLowerCase();
+    if (headers.rsc === "1" || accept.includes("text/x-component") || query.has("_rsc") || query.has("_data")) return false;
+    const mode = headers["sec-fetch-mode"], destination = headers["sec-fetch-dest"];
+    if (mode !== undefined || destination !== undefined) return mode === "navigate" && destination === "document";
+    // Older browsers/WebViews may omit Fetch Metadata, including on Android.
+    return accept.includes("text/html");
+  }
   const pathname = url.split("?", 1)[0];
   const isBrowserPage = pathname === "/" || pathname === "/mirror/playground" || pathname === "/mirror/api-docs" ||
     /^\/c\/[a-z0-9:_-]+\/?$/i.test(pathname) ||
     /^\/g\/g-[a-z0-9_-]+(?:\/c\/[a-z0-9:_-]+|\/project)?\/?$/i.test(pathname);
-  // External navigation grants only a credential-free Worker shell, never
-  // the Node control cookie. API/fetch/iframe requests retain their checks.
   return method === "GET" && isBrowserPage &&
-    String(headers.accept ?? "").includes("text/html") && (headers["sec-fetch-site"] !== "cross-site" ||
-      (publicShell && headers["sec-fetch-mode"] === "navigate" && headers["sec-fetch-dest"] === "document"));
+    String(headers.accept ?? "").includes("text/html") && headers["sec-fetch-site"] !== "cross-site";
 }

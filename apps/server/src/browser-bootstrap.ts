@@ -47,12 +47,19 @@ export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-
       // Retain an accepted refresh on an interrupted body, but never render
       // a previous identity's document after another attempt or tab replaces it.
       var accepted=stored();
-      var html=await response.text();
+      var body=await response.text();
       if(currentAttempt!==attempt||!credentialsMatch(accepted)){
         if(currentAttempt===attempt)status.textContent='Credentials changed while connecting. Reload to continue.';
         return;
       }
-      document.open();document.write(html);document.close();
+      if((response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()==='text/html'){
+        document.open();document.write(body);document.close();
+      }else{
+        // OpenAPI JSON/YAML and other data documents must never execute as HTML.
+        var pre=document.createElement('pre');pre.textContent=body;
+        pre.style.whiteSpace='pre-wrap';document.title='Mirror document';
+        document.body.replaceChildren(pre);
+      }
     }catch(error){if(currentAttempt===attempt)status.textContent='Connection interrupted. Try again, or reload to use your saved credential.';}
     finally{if(currentAttempt===attempt)button.disabled=false;}
   }

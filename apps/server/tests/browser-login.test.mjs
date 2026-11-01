@@ -24,7 +24,7 @@ test.describe('server / browser-login', () => {
         assert.equal(url, context.location.href);
         assert.equal(init.headers.get('authorization'), 'Bearer ' + storage.get('mirror_access_token'));
         assert.equal(init.headers.get('x-mirror-document'), '1');
-        return new Response('<html>authenticated</html>', { headers: { 'x-mirror-access-token': 'access-new', 'x-mirror-session-token': 'session-new' } });
+        return new Response('<html>authenticated</html>', { headers: { 'content-type': 'text/html', 'x-mirror-access-token': 'access-new', 'x-mirror-session-token': 'session-new' } });
       },
       document: { open() {}, write(html) { written = html; }, close() {}, getElementById(id) { assert.ok(id in elements); return elements[id]; } },
     };
