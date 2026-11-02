@@ -65,14 +65,20 @@ test.describe('server / cloudflare-worker entrypoint', () => {
     await worker.fetch(new Request('https://mirror.example/'), runtime);
     assert.equal(forwarded.headers.get('x-forwarded-for'), null);
   });
-  test('falls back to ordinary fetch when WARP binding is absent or incomplete', async () => {
-    const envNoWarp = { ...env };
-    delete envNoWarp.WARP;
-    const without = new MirrorStorage({ storage: {} }, envNoWarp);
-    const response = await without.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fixture' } }));
-    assert.equal((await response.json()).authorization, 'Bearer fixture');
-    const incomplete = new MirrorStorage({ storage: {} }, { ...env, WARP: {} });
-    const second = await incomplete.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Bearer incomplete' } }));
-    assert.equal((await second.json()).authorization, 'Bearer incomplete');
+  test('fails closed before startup when the required WARP binding is absent or incomplete', async () => {
+    const before = starts;
+    const ordinary = mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected ordinary egress'); });
+    try {
+      for (const WARP of [undefined, {}, { fetch: 'invalid' }]) {
+        const instance = new MirrorStorage({ storage: {} }, { ...env, WARP });
+        const response = await instance.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fixture' } }));
+        assert.equal(response.status, 503);
+        assert.equal(response.headers.get('x-mirror-auth-status'), 'upstream_failure');
+        assert.equal(response.headers.get('cache-control'), 'no-store');
+        assert.equal((await response.json()).error.code, 'upstream_transport_unavailable');
+      }
+      assert.equal(starts, before);
+      assert.equal(ordinary.mock.callCount(), 0);
+    } finally { ordinary.mock.restore(); }
   });
 });

@@ -14,7 +14,7 @@ interface DurableObjectState {
 interface WorkerEnvironment {
   MIRROR: DurableObjectNamespace;
   ASSETS: WorkerAssets;
-  WARP?: { fetch: UpstreamFetch };
+  WARP: { fetch: UpstreamFetch };
   MIRROR_STORE_KEY?: string;
   MIRROR_OWNER_ACCOUNT_ID?: string;
   MIRROR_API_KEY?: string;
@@ -42,13 +42,17 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       return new Response("WebSocket proxying is disabled in this Worker deployment.", { status: 501 });
     }
+    if (typeof this.env.WARP?.fetch !== "function") {
+      return Response.json({ error: { type: "upstream_error", code: "upstream_transport_unavailable", message: "Required WARP upstream transport is unavailable." } },
+        { status: 503, headers: { "x-mirror-auth-status": "upstream_failure", "cache-control": "no-store" } });
+    }
     this.handlerPromise ??= this.startServer().catch((error: unknown) => {
       this.handlerPromise = undefined;
       throw error;
     });
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
-    const upstream = this.env.WARP?.fetch ? this.env.WARP.fetch.bind(this.env.WARP) : fetch;
+    const upstream = this.env.WARP.fetch.bind(this.env.WARP);
     return runWithUpstreamFetch(upstream, () =>
       runWithRequestSessionToken(token, () => this.handlerPromise!.then((handler) => handler(request)), sessionToken,
         configuredApiKeys({ MIRROR_API_KEY: this.env.MIRROR_API_KEY, MIRROR_API_KEYS: this.env.MIRROR_API_KEYS, OPENAI_API_KEY: this.env.OPENAI_API_KEY })));

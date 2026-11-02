@@ -243,7 +243,7 @@ app.addHook("onRequest", async (req, reply) => {
       sessionBearerAuthenticated = true;
     } catch (error) {
       const status = sessionAuthenticationStatus(error);
-      if (status === 401) reply.header("x-mirror-auth-status", "credential_rejected");
+      reply.header("x-mirror-auth-status", status === 401 ? "credential_rejected" : "upstream_failure");
       return reply.code(status).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
     }
   }
@@ -257,7 +257,7 @@ app.addHook("onRequest", async (req, reply) => {
       sessionBearerAuthenticated = true;
     } catch (error) {
       const status = sessionAuthenticationStatus(error);
-      if (status === 401) reply.header("x-mirror-auth-status", "credential_rejected");
+      reply.header("x-mirror-auth-status", status === 401 ? "credential_rejected" : "upstream_failure");
       return reply.code(status).send(
         sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
       );

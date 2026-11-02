@@ -86,7 +86,7 @@ test.describe('server / browser reconnect', () => {
       assert.deepEqual(f.pair(), [null, null]);
       assert.equal(f.disabled(), false);
       assert.doesNotMatch(f.body(), /fixture-secret-echo/);
-      assert.match(f.status(), status === 403 ? /not the allowed owner/ : status === 401 ? /Credential not accepted/ : /could not connect/);
+      assert.match(f.status(), status === 403 ? /not the allowed owner/ : status === 401 ? /Credential not accepted/ : /temporarily unavailable/);
     }
   });
 
@@ -173,7 +173,7 @@ test.describe('server / browser reconnect', () => {
       const f = fixture(t, async () => new Response('untrusted error', { status, headers: rotated }), ['old-access', 'old-session']);
       await f.run();
       assert.deepEqual(f.pair(), ['old-access', 'old-session']);
-      assert.match(f.status(), /could not connect/);
+      assert.match(f.status(), status >= 500 ? /temporarily unavailable/ : status === 429 ? /Too many connection attempts/ : /could not confirm/);
       assert.equal(f.rendered, undefined);
     }
   });
@@ -184,8 +184,33 @@ test.describe('server / browser reconnect', () => {
       await f.run();
       if (candidate) await f.submit('candidate');
       assert.deepEqual(f.pair(), verified ? ['fixture-fresh-access', 'fixture-fresh-session'] : [null, null]);
+      assert.match(f.status(), verified ? /credential was verified.*page could not load/ : /not the allowed owner/);
       assert.equal(f.rendered, undefined);
     }
+  });
+
+  test('upstream blocks explain the connectivity failure and preserve the verified credential boundary', async t => {
+    let blocked = true, calls = 0;
+    const f = fixture(t, async () => {
+      calls++;
+      return blocked ? new Response('<script>untrusted-upstream-secret</script>', { status: 403, headers: {
+        ...rotated, 'x-mirror-auth-status': 'upstream_failure',
+      } }) : new Response('owner HTML', { headers: rotated });
+    }, ['saved-access', 'saved-session']);
+    await f.run();
+    for (let i = 0; i < 2; i++) {
+      await f.submit('new-unverified-session');
+      assert.match(f.status(), /ChatGPT blocked Mirror.*before your credential could be verified/);
+      assert.match(f.status(), /check upstream connectivity before you replace your token/);
+      assert.deepEqual(f.pair(), ['saved-access', 'saved-session']);
+      assert.doesNotMatch(f.body(), /untrusted-upstream-secret|new-unverified-session/);
+      assert.equal(f.disabled(), false);
+    }
+    assert.equal(calls, 3, 'one request per attempt, no automatic retry loop');
+    blocked = false;
+    await f.submit('new-owner-session');
+    assert.equal(f.rendered, 'owner HTML');
+    assert.deepEqual(f.pair(), ['fixture-fresh-access', 'fixture-fresh-session']);
   });
 
 });

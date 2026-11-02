@@ -69,13 +69,42 @@ test.describe('browser / protected navigation through workerd', () => {
   test('empty, expired and temporarily unavailable credentials retain a usable direct-entry form', async ({ page }) => {
     await page.goto(base + '/library');
     await expect(page.locator('#credential')).toBeVisible();
-    for (const [token, message] of [['fixture-expired', 'Credential not accepted'], ['fixture-transient', 'Mirror could not connect']]) {
+    for (const [token, message] of [['fixture-expired', 'Credential not accepted'], ['fixture-transient', 'temporarily unavailable']]) {
       await page.evaluate(value => localStorage.setItem('mirror_access_token', value), token);
       await page.reload();
       await expect(page.locator('#status')).toContainText(message);
       expect(await page.evaluate(() => localStorage.getItem('mirror_access_token'))).toBe(token === 'fixture-expired' ? null : token);
       await expect(page).toHaveURL(base + '/library');
     }
+  });
+  test('an upstream block keeps saved credentials, explains repeated Connect failures, and accepts a session after recovery', async ({ page }) => {
+    await page.goto(base + '/space/files');
+    await page.evaluate(() => {
+      localStorage.setItem('mirror_access_token', 'fixture-edge-blocked');
+      localStorage.setItem('mirror_session_token', 'fixture-owner-session');
+    });
+    await page.reload();
+    await expect(page.locator('#status')).toContainText("ChatGPT blocked Mirror's connection");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const rejected = page.waitForResponse(response => response.url() === base + '/space/files' && response.request().headers()['x-mirror-document'] === '1');
+      await page.locator('#credential').fill('fixture-edge-blocked');
+      await page.locator('#submit').click();
+      const response = await rejected;
+      expect(response.status()).toBe(403);
+      expect(response.headers()['x-mirror-auth-status']).toBe('upstream_failure');
+      await expect(page.locator('#status')).toContainText('check upstream connectivity before you replace your token');
+      expect(await page.evaluate(() => [localStorage.getItem('mirror_access_token'), localStorage.getItem('mirror_session_token')])).toEqual(['fixture-edge-blocked', 'fixture-owner-session']);
+      await expect(page.locator('#owner-document')).toHaveCount(0);
+      await expect(page.locator('#submit')).toBeEnabled();
+    }
+    await page.locator('#credential').fill('fixture-owner-session');
+    await page.locator('#submit').click();
+    await expect(page.locator('#owner-document')).toBeVisible();
+    expect(await page.evaluate(() => [localStorage.getItem('mirror_access_token'), localStorage.getItem('mirror_session_token')])).toEqual(['fixture-owner-token', 'fixture-owner-session']);
+    await expect.poll(() => page.locator('#space-preview').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
+    await page.reload();
+    await expect(page.locator('#owner-document')).toBeVisible();
+    await expect(page.locator('#credential')).toHaveCount(0);
   });
   test('OpenAPI navigation restores credentials and renders JSON/YAML as text; API requests stay protected', async ({ page, request }) => {
     await page.goto(base + '/');

@@ -13,6 +13,15 @@ export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-
   var attempt=0;
   function stored(){return mirrorCredentials.sync();}
   function credentialsMatch(pair){var current=stored();return current[0]===pair[0]&&current[1]===pair[1];}
+  function failureMessage(response,authStatus){
+    if(authStatus==='owner_mismatch')return "This account is not the allowed owner. Use the owner's ChatGPT credential.";
+    if(authStatus==='credential_rejected')return 'Credential not accepted. Enter a current ChatGPT credential and try again.';
+    if(authStatus==='owner_verified')return 'Your credential was verified, but the requested page could not load (HTTP '+response.status+'). Reload to retry with your saved credential.';
+    if(authStatus==='upstream_failure'&&response.status===403)return "ChatGPT blocked Mirror's connection before your credential could be verified (HTTP 403). Mirror's operator should check upstream connectivity before you replace your token.";
+    if(response.status===429)return 'Too many connection attempts. Wait a moment, then reload. Your saved credential has been kept.';
+    if(response.status>=500)return 'The upstream connection is temporarily unavailable (HTTP '+response.status+'). Your saved credential has been kept. Try again later.';
+    return 'Mirror could not confirm your connection (HTTP '+response.status+'). Reload this Mirror address and try again. Your saved credential has been kept.';
+  }
   async function load(candidate){
     var currentAttempt=++attempt;
     button.disabled=true;
@@ -44,7 +53,7 @@ export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-
         if(!candidate&&(authStatus==='credential_rejected'||authStatus==='owner_mismatch')){
           mirrorCredentials.clear();
         }
-        status.textContent=authStatus==='owner_mismatch'?"This account is not the allowed owner. Use the owner's ChatGPT credential.":authStatus==='credential_rejected'?'Credential not accepted. Enter a current ChatGPT credential and try again.':'Mirror could not connect. Try again.';
+        status.textContent=failureMessage(response,authStatus);
         await response.body?.cancel();
         return;
       }

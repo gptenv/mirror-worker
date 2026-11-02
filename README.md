@@ -28,6 +28,13 @@ External links and direct conversation URLs open the public reconnect form at th
 
 The Worker verifies its configured owner before accepting a refreshed credential. Streaming routes settle refresh before sending SSE headers; later authentication failures end the request without refreshing or replaying it. The reconnect page retains an owner-verified refresh if loading the document fails, and only clears saved credentials after an explicit credential rejection or owner mismatch. Transport failures, upstream challenges, and malformed session responses do not mean the credential is invalid.
 
+If reconnect reports that ChatGPT blocked Mirror's connection before verification,
+the operator should check the Worker's configured egress and upstream response
+before replacing credentials. Saved credentials remain intact during this failure.
+Browser and workerd fixtures assert that the production configuration retains the
+required WARP network; synthetic upstream success does not establish live ChatGPT
+acceptance.
+
 API clients must retain `x-mirror-access-token` and `x-mirror-session-token` response headers and send their current values on later requests. Headers alone do not make a fixed API key survive ChatGPT credential rotation. Mirror does not currently provide persistent refresh credentials behind a stable, revocable client key.
 
 
@@ -88,7 +95,7 @@ The draft Worker build serves Mirror's HTTP routes and browser assets for one co
 
 Configure `MIRROR_STORE_KEY` and `MIRROR_OWNER_ACCOUNT_ID` as Worker secrets; startup requires both. The key must decode to 32 bytes from base64 or be 64 hex characters. Despite the retained secret name, set the owner value to the top-level `id` (for example, `user-…`) from the owner's authenticated ChatGPT `/backend-api/me` response with `object: "user"`. This is the user principal, not a Sites account-user ID, email, organization, or workspace routing ID. Keep the key and credentials out of logs and issues. Preserve the exact key for recovery: changing it does not re-encrypt existing metadata or sealed asset tickets.
 
-ChatGPT upstream traffic prefers the optional `WARP` Workers VPC Network binding (`cf1:network`) when present, including session exchanges, backend requests, uploads, downloads, and their response streams. When the binding is configured it routes Worker egress through the account's Cloudflare Mesh/Gateway network and its existing policies. It does not run a WARP client inside the Worker or change the public browser-to-Worker entry point. If the binding is absent the Worker falls back to ordinary Worker fetch. Gateway connection failures are reported rather than retried over ordinary Worker egress. Configure the account's Zero Trust network and Gateway policies to allow the required destinations if using the binding; the binding does not guarantee ChatGPT authentication acceptance. Node deployments continue using their normal fetch transport. The binding is omitted from the checked-in Wrangler configuration so that CI can deploy without the Connectivity Directory Bind permission.
+ChatGPT upstream traffic uses the `WARP` Workers VPC Network binding (`cf1:network`), including session exchanges, backend requests, uploads, downloads, and their response streams. This routes Worker egress through the account's Cloudflare Mesh/Gateway network and its existing policies. It does not run a WARP client inside the Worker or change the public browser-to-Worker entry point. Gateway connection failures are reported rather than retried over ordinary Worker egress. Configure the account's Zero Trust network and Gateway policies to allow the required destinations; the binding does not guarantee ChatGPT authentication acceptance. Node deployments continue using their normal fetch transport.
 
 ```sh
 npm ci
@@ -145,6 +152,18 @@ account and target branch are explicit in `.github/workflows/ci.yml`. A README
 clarification on that branch is a useful push-trigger check: verify the `CI` run
 reaches `deploy` and retain its deployment receipt. Missing credentials or disabled
 fork workflows must be resolved before pushing a production change.
+
+Deployment is currently paused at an explicit CI gate because the existing token
+was rejected when binding `WARP`. After confirming that this exact token has
+`Connectivity Directory Bind` for account `711ab96baee8597bf61ed973363715d6`, set
+the repository Actions variable `MIRROR_VPC_BIND_CONFIRMED` to `true` and rerun the
+failed deployment job. Its retained artifact must still match the deployment
+branch head. The build, test, artifact-integrity, and binding-preservation checks
+remain required; do not remove `WARP` or use ordinary Worker egress to bypass a
+permission failure. An unset or false variable stops the job before deployment
+credentials are used. Pushes from a GitHub account with an unverified email are
+rejected by Actions before jobs start; verify that account's email before using it
+to trigger CI.
 
 ## Security and data
 

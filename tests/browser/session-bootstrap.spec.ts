@@ -19,7 +19,7 @@ test.describe('browser / session bootstrap', () => {
       });
     });
     await page.goto('/mirror/playground');
-    await expect(page.locator('#status')).toContainText(mode === 'wrong-owner' ? 'not the allowed owner' : 'could not connect');
+    await expect(page.locator('#status')).toContainText(mode === 'wrong-owner' ? 'not the allowed owner' : mode === 'verified-refresh' ? 'credential was verified' : 'could not confirm');
     expect(await page.evaluate(() => [localStorage.getItem('mirror_access_token'), localStorage.getItem('mirror_session_token')])).toEqual(
       mode === 'wrong-owner' ? [null, null] : mode === 'verified-refresh' ? ['fixture-fresh-access', 'fixture-fresh-session'] : ['fixture-old-access', 'fixture-old-session']);
     expect(calls).toBe(1);

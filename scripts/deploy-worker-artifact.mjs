@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { invariantSettings } from './worker-deployment-settings.mjs';
 
 const directory = path.resolve(process.argv[2]);
 const sha = process.env.GITHUB_SHA;
@@ -29,14 +29,8 @@ async function api(suffix) {
   assert.equal(body.success, true, 'Cloudflare metadata request failed');
   return body.result;
 }
-function invariantSettings(settings) {
-  // Ignore WARP VPC binding differences while the Mesh routing is optional.
-  if (settings.bindings) settings = { ...settings, bindings: settings.bindings.filter(b => b.name !== "WARP") };
-  const { annotations, bindings, ...rest } = settings;
-  return { ...rest, bindings: bindings.map(binding => ({ name: binding.name, digest: createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(binding).sort(([a], [b]) => a.localeCompare(b))))).digest('hex') })).sort((a, b) => a.name.localeCompare(b.name)) };
-}
 const before = await api('/deployments');
-const settingsBefore = invariantSettings(await api('/settings'));
+const settingsBefore = invariantSettings(await api('/settings'), true);
 const receipt = { sha, previousDeployment: before.deployments[0], status: 'deploying' };
 writeFileSync(receiptPath, JSON.stringify(receipt, null, 2));
 const latestHead = execFileSync('git', ['ls-remote', 'origin', 'refs/heads/codex/worker-reliability'], { encoding: 'utf8' }).split(/\s/)[0];

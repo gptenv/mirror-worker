@@ -69,7 +69,7 @@ test.describe('server / session delivery', () => {
       assert.equal(mints, 3, 'each request independently refreshes and verifies ownership');
     } finally { await app.close(); }
   });
-  for (const status of [403, 429, 503, 'network', 'malformed']) test(`owner validation preserves upstream failure ${status}`, async t => {
+  for (const owner of [true, false]) for (const status of [403, 429, 503, 'network', 'malformed']) test(`credential validation preserves upstream failure ${status} (owner=${owner})`, async t => {
     let calls = 0;
     t.mock.method(globalThis, 'fetch', async () => {
       calls++;
@@ -77,12 +77,12 @@ test.describe('server / session delivery', () => {
       if (status === 'malformed') return new Response('not JSON');
       return new Response('edge unavailable', { status });
     });
-    const app = await buildApp({ worker: true, ownerUserId: 'owner' });
+    const app = await buildApp({ worker: true, ...(owner ? { ownerUserId: 'owner' } : {}) });
     try {
       const response = await app.inject({ url: '/api/diagnostics', headers: { authorization: 'Bearer fixture' } });
       assert.equal(response.statusCode, typeof status === 'number' ? status : 502);
       assert.equal(response.json().error.type, 'upstream_error');
-      assert.equal(response.headers['x-mirror-auth-status'], undefined);
+      assert.equal(response.headers['x-mirror-auth-status'], 'upstream_failure');
       assert.equal(calls, 1, 'no retries for ambiguous or transient failures');
     } finally { await app.close(); }
   });

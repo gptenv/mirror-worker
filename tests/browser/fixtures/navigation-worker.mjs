@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 // Production HTTP adapter, middleware and proxy; only external services are fake.
 const directory = mkdtempSync(path.join(tmpdir(), 'mirror-navigation-'));
 const production = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+assert.deepEqual(production.vpc_networks, [{ binding: 'WARP', network_id: 'cf1:network', remote: true }], 'Production must retain the required WARP network');
 const config = path.join(directory, 'wrangler.json');
 const assetDirectory = path.resolve(process.env.MIRROR_TEST_ASSETS_DIR || 'apps/web/dist');
 async function assets(request) {
@@ -35,6 +37,7 @@ const options = convertV4MiniflareOptions({ host: '127.0.0.1', https: true, work
     const url = new URL(request.url);
     const token = request.headers.get('authorization');
     if (url.pathname === '/backend-api/me') {
+      if (token === 'Bearer fixture-edge-blocked') return new Response('<!doctype html><title>Unable to load site</title><p>Please try again later.</p>', { status: 403, headers: { 'content-type': 'text/html' } });
       if (token === 'Bearer fixture-transient') return new Response('temporarily unavailable', { status: 503 });
       if (!/^Bearer fixture-owner-token(?:-\d+)?$/.test(token || '') && token !== 'Bearer fixture-other-token') return new Response('expired', { status: 401 });
       return Response.json({ object: 'user', id: token === 'Bearer fixture-other-token' ? 'other-user' : 'fixture-owner' });

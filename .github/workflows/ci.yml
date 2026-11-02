@@ -99,6 +99,11 @@ jobs:
       group: mirror-worker-production
       cancel-in-progress: false
     steps:
+      - name: Require confirmed CI access to the existing WARP network
+        if: vars.MIRROR_VPC_BIND_CONFIRMED != 'true'
+        run: |
+          echo '::error::Deployment is paused until the existing CI token has Connectivity Directory Bind for account 711ab96baee8597bf61ed973363715d6. After verifying that permission, set repository variable MIRROR_VPC_BIND_CONFIRMED=true and rerun this failed deployment job. No Cloudflare deployment was attempted.'
+          exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

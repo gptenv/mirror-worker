@@ -21,6 +21,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     const env = { ...process.env, WRANGLER_SEND_METRICS: 'false', XDG_CONFIG_HOME: path.join(directory, 'config') };
     for (const key of Object.keys(env)) if (/^(CLOUDFLARE_|CF_API_|MIRROR_|OPENAI_API_KEY)/.test(key)) delete env[key];
     const production = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+    assert.deepEqual(production.vpc_networks, [{ binding: 'WARP', network_id: 'cf1:network', remote: true }], 'Production must retain the required WARP network');
     const configPath = path.join(directory, 'wrangler.json');
     writeFileSync(configPath, JSON.stringify({ name: 'mirror-local-acceptance', main: path.resolve(production.main), compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags, durable_objects: production.durable_objects, migrations: production.migrations }));
     if (!process.env.MIRROR_TEST_BUNDLE_DIR) execFileSync(process.execPath, ['node_modules/wrangler/bin/wrangler.js', 'deploy', '--config', configPath, '--dry-run', '--outdir', path.join(directory, 'bundle')], { env, stdio: 'pipe', timeout: 60_000 });
@@ -115,6 +116,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       const before = upstreamCalls.length;
       const failed = await request('/api/diagnostics', { headers: { authorization: `Bearer ${token}` } });
       assert.equal(failed.status, status);
+      assert.equal(failed.headers.get('x-mirror-auth-status'), 'upstream_failure');
       assert.equal((await failed.json()).error.type, 'upstream_error');
       assert.equal(upstreamCalls.length, before + 1);
     }
