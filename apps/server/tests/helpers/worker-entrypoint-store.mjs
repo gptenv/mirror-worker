@@ -1,4 +1,7 @@
+// Replaced by node:test in cloudflare-worker.test.mjs.
 export function initializeWorkerStore() {
-  globalThis.__testInitialized = (globalThis.__testInitialized || 0) + 1;
+  throw new Error('Worker entrypoint test requires its storage fixture');
 }
-export function getOrCreateDeviceId() { return 'fixture-device'; }
+export function getOrCreateDeviceId() {
+  throw new Error('Worker entrypoint test requires its storage fixture');
+}

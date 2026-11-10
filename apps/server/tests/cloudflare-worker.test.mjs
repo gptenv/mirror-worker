@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import { registerHooks } from 'node:module';
 
+// Node cannot load Cloudflare's built-in modules. Map only those platform
+// imports to small adapters; a separate test exercises the real runtime.
 const fixtureModules = new Map([
   [new URL('../dist/index.js', import.meta.url).href, new URL('./helpers/worker-entrypoint-app.mjs', import.meta.url).href],
   [new URL('../dist/store.js', import.meta.url).href, new URL('./helpers/worker-entrypoint-store.mjs', import.meta.url).href],
@@ -12,86 +14,56 @@ registerHooks({ resolve(specifier, context, next) {
   const resolved = next(specifier, context);
   return fixtureModules.has(resolved.url) ? { ...resolved, url: fixtureModules.get(resolved.url) } : resolved;
 } });
-
-globalThis.__testStarts = 0;
-globalThis.__testShouldFail = false;
-
+let starts = 0;
+let shouldFail = false;
+let initialized = 0;
+// Give generated mock modules fixture URLs: Node's ?node-test-mock modules
+// contain different code, so mapping their offsets onto production source
+// would invent uncovered import branches in the c8 report.
+mock.module('./helpers/worker-entrypoint-app.mjs', { exports: { buildApp: async (options) => {
+  starts++;
+  if (shouldFail) { shouldFail = false; throw new Error('fixture startup failure'); }
+  return { ready: async () => {}, server: { fetch: async request => Response.json({ owner: options.ownerUserId, authorization: request.headers.get('authorization') }) } };
+} } });
+mock.module('./helpers/worker-entrypoint-store.mjs', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device' } });
 const { MirrorStorage, default: worker } = await import('../dist/cloudflare-worker.js');
-const env = { MIRROR_STORE_KEY: 'fixture', WARP: { fetch: async () => new Response() }, ASSETS: {} };
+const env = { MIRROR_OWNER_ACCOUNT_ID: ' owner ', MIRROR_STORE_KEY: 'fixture', WARP: { fetch: async () => new Response() }, ASSETS: {} };
 
 test.describe('server / cloudflare-worker entrypoint', () => {
-  test('rejects websocket upgrades', async () => {
+  test('rejects upgrades and retries a failed application startup', async () => {
     const instance = new MirrorStorage({ storage: {} }, env);
-    const response = await instance.fetch(new Request('https://mirror.example/ws', { headers: { upgrade: 'websocket' } }));
-    assert.equal(response.status, 501);
+    assert.equal((await instance.fetch(new Request('https://mirror.example/ws', { headers: { upgrade: 'websocket' } }))).status, 501);
+    shouldFail = true;
+    const normal = () => new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fixture', 'x-mirror-session-token': 'session' } });
+    await assert.rejects(instance.fetch(normal()), /fixture startup failure/);
+    const response = await instance.fetch(normal());
+    assert.deepEqual(await response.json(), { owner: 'owner', authorization: 'Bearer fixture' });
+    const count = starts;
+    await instance.fetch(normal());
+    assert.equal(starts, count, 'successful server is reused by its Durable Object');
+    const anonymous = await instance.fetch(new Request('https://mirror.example/api'));
+    assert.equal((await anonymous.json()).authorization, null);
+    const other = new MirrorStorage({ storage: {} }, env);
+    await other.fetch(normal());
+    assert.equal(starts, count + 1, 'different Durable Objects do not share an HTTP server');
   });
-
-  test('starts server and reuses it, covers WARP present and absent', async () => {
-    const instance = new MirrorStorage({ storage: {} }, env);
-    const req = new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fixture', 'x-mirror-session-token': 'session' } });
-    const response = await instance.fetch(req);
-    const body = await response.json(); assert.equal(body.authorization, 'Bearer fixture');
-    assert.equal(globalThis.__testStarts, 1);
-
-    // reuse
-    await instance.fetch(req);
-    assert.equal(globalThis.__testStarts, 1);
-
-    // no authorization
-    const anon = await instance.fetch(new Request('https://mirror.example/api'));
-    assert.equal((await anon.json()).authorization, null);
-
-    // bad authorization
-    const bad = await instance.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Basic xxx' } }));
-    assert.equal((await bad.json()).authorization, 'Basic xxx');
-
-    // no WARP
-    const envNoWarp = { ...env };
-    delete envNoWarp.WARP;
-    const instance2 = new MirrorStorage({ storage: {} }, envNoWarp);
-    const response2 = await instance2.fetch(req);
-    assert.equal((await response2.json()).authorization, 'Bearer fixture');
-    assert.equal(globalThis.__testStarts, 1); // shared across DOs
-  });
-
-  test('strips untrusted forwarding headers', async () => {
+  test('replaces untrusted forwarding headers before addressing the singleton', async () => {
     let forwarded;
-    const runtime = {
-      MIRROR: {
-        idFromName: name => {
-          assert.equal(name, 'mirror-single-account');
-          return 'id';
-        },
-        get: id => {
-          assert.equal(id, 'id');
-          return {
-            fetch: async req => {
-              forwarded = req;
-              return new Response('ok');
-            }
-          };
-        }
-      }
-    };
-    const response = await worker.fetch(new Request('https://mirror.example/path', {
-      headers: {
-        forwarded: 'bad',
-        'x-forwarded-for': 'bad',
-        'x-forwarded-host': 'bad',
-        'x-forwarded-proto': 'bad',
-        'x-real-ip': 'bad',
-        'cf-connecting-ip': '192.0.2.1'
-      }
-    }), runtime);
+    const runtime = { MIRROR: { idFromName: name => { assert.equal(name, 'mirror-single-account'); return 'id'; }, get: id => { assert.equal(id, 'id'); return { fetch: async req => { forwarded = req; return new Response('ok'); } }; } } };
+    const response = await worker.fetch(new Request('https://mirror.example/path', { headers: { forwarded: 'bad', 'x-forwarded-for': 'bad', 'x-forwarded-host': 'bad', 'x-forwarded-proto': 'bad', 'x-real-ip': 'bad', 'cf-connecting-ip': '192.0.2.1' } }), runtime);
     assert.equal(await response.text(), 'ok');
     assert.equal(forwarded.headers.get('forwarded'), null);
     assert.equal(forwarded.headers.get('x-real-ip'), null);
     assert.equal(forwarded.headers.get('x-forwarded-for'), '192.0.2.1');
     assert.equal(forwarded.headers.get('x-forwarded-host'), 'mirror.example');
     assert.equal(forwarded.headers.get('x-forwarded-proto'), 'https');
-
-    // no client ip
     await worker.fetch(new Request('https://mirror.example/'), runtime);
     assert.equal(forwarded.headers.get('x-forwarded-for'), null);
+  });
+  test('accepts an unset owner and falls back to the standard Worker fetch binding', async () => {
+    const instance = new MirrorStorage({ storage: {} }, { ...env, MIRROR_OWNER_ACCOUNT_ID: undefined, WARP: undefined });
+    const response = await instance.fetch(new Request('https://mirror.example/api', { headers: { authorization: 'Bearer fixture' } }));
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).owner, undefined);
   });
 });

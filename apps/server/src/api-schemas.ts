@@ -19,55 +19,55 @@ import { z } from "zod";
 // browsed, loaded, and managed through these routes.
 export const ConversationIdParam = z
   .object({
-    id: z.string().min(1).openapi({ description: "A Mirror conversation id (UUID or a caller-supplied slug)." }),
+    id: z.string().min(1).meta({ description: "A Mirror conversation id (UUID or a caller-supplied slug)." }),
   })
-  .openapi({ ref: "ConversationIdParam" });
+  .meta({ id: "ConversationIdParam" });
 
 export const ModelUpdateBody = z
   .object({ model: z.string().min(1) })
-  .openapi({ ref: "ModelUpdateBody", description: "Change a conversation's model." });
+  .meta({ id: "ModelUpdateBody", description: "Change a conversation's model." });
 
 export const BranchBody = z
   .object({
-    messageId: z.string().uuid().openapi({ description: "The message id to branch from; must have an upstreamNodeId." }),
+    messageId: z.string().uuid().meta({ description: "The message id to branch from; must have an upstreamNodeId." }),
     title: z.string().optional(),
   })
-  .openapi({ ref: "BranchBody" });
+  .meta({ id: "BranchBody" });
 
 export const NewConversationBody = z
   .object({
     model: z.string().default("auto"),
     gizmoId: z.string().nullable().optional(),
   })
-  .openapi({ ref: "NewConversationBody" });
+  .meta({ id: "NewConversationBody" });
 
 const queryBoolean = z.enum(["true", "false"]).transform((value) => value === "true");
 export const ConversationsQuery = z
   .object({
     limit: z.coerce.number().int().min(1).max(200).default(50),
     offset: z.coerce.number().int().min(0).default(0),
-    sync: queryBoolean.default("true").openapi({
+    sync: queryBoolean.default(true).meta({
       description: "Whether to sync this page against the real ChatGPT sidebar before reading the local mirror of it.",
       type: "string",
     }),
     // Restart the incremental sync cursor from the very top instead of
     // resuming where a previous call left off - only worth paying for on an
     // explicit user-initiated refresh (see App.tsx), not on every page load.
-    resync: queryBoolean.default("false").openapi({
+    resync: queryBoolean.default(false).meta({
       description: "Restart the incremental sync cursor from the top instead of resuming where a previous call left off.",
       type: "string",
     }),
   })
-  .openapi({ ref: "ConversationsQuery" });
+  .meta({ id: "ConversationsQuery" });
 
 export const AssetsQuery = z
   .object({
-    pointer: z.string().openapi({ description: "A file-service:// or sediment:// asset pointer." }),
-    upstreamConversationId: z.string().optional().openapi({
+    pointer: z.string().meta({ description: "A file-service:// or sediment:// asset pointer." }),
+    upstreamConversationId: z.string().optional().meta({
       description: "Required when pointer is a sediment:// pointer, to verify ownership of the source conversation.",
     }),
   })
-  .openapi({ ref: "AssetsQuery" });
+  .meta({ id: "AssetsQuery" });
 
 
 export const ChatAttachment = z
@@ -79,9 +79,9 @@ export const ChatAttachment = z
     useCase: z.enum(["multimodal", "my_files"]),
     width: z.number().optional(),
     height: z.number().optional(),
-    raw: z.record(z.unknown()).default({}),
+    raw: z.record(z.string(), z.unknown()).default({}),
   })
-  .openapi({ ref: "ChatAttachment", description: "A file previously uploaded via POST /api/files." });
+  .meta({ id: "ChatAttachment", description: "A file previously uploaded via POST /api/files." });
 
 export const ChatBody = z
   .object({
@@ -92,11 +92,11 @@ export const ChatBody = z
     timezone: z.string().optional(),
     timezoneOffsetMin: z.number().optional(),
     attachments: z.array(ChatAttachment).default([]),
-    turnstileToken: z.string().optional().openapi({
+    turnstileToken: z.string().optional().meta({
       description: "Optional Cloudflare Turnstile token override for sentinel requirements.",
     }),
   })
-  .openapi({
-    ref: "ChatBody",
+  .meta({
+    id: "ChatBody",
     description: "Mirror's native chat request, used by the proxied ChatGPT UI and Playground (see POST /api/chat).",
   });

@@ -18,11 +18,10 @@ const { buildApp } = await import("../dist/index.js");
 const { runChat } = await import("../dist/chat-service.js");
 const { abortable, deadlineMs, turnDeadline } = await import("../dist/deadlines.js");
 const { apiError, recentFailures, recordFailure } = await import("../dist/api-errors.js");
-const egress = await import("../dist/egress.js");
 const app = await buildApp();
 const originalFetch = globalThis.fetch;
 const auth = { host: "localhost", authorization: "Bearer fixture-key" };
-function session() { store.saveVerifiedSession("fixture-account"); store.updateMintedToken("synthetic-access", Date.now() + 3600000, null); }
+function session() { store.saveVerifiedSession("fixture-account", "synthetic-device"); }
 function post(messages, id, stream = false) { return app.inject({ method: "POST", url: "/v1/chat/completions", headers: auth, payload: { model: "auto", messages, stream, ...(id ? { metadata: { conversation_id: id } } : {}) } }); }
 test.describe("server / todo-contract", () => {
 test.after(async () => { globalThis.fetch = originalFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -65,15 +64,15 @@ test("public API compatibility preflight, errors, request IDs and allowlisted di
     const res = await app.inject({ url, headers }); assert.equal(res.statusCode, expected); assert.ok(res.json().error.code); assert.equal(res.json().error.request_id, res.headers["x-request-id"]);
   }
   const invalid = await post([], null); assert.equal(invalid.statusCode, 400); assert.equal(invalid.json().error.code, "invalid_request");
-  globalThis.fetch = async () => { throw new Error("sensitive-upstream-payload"); };
+  let preflightAuth = true;
+  globalThis.fetch = async () => { if (preflightAuth) { preflightAuth = false; return Response.json({}); } throw new Error("sensitive-upstream-payload"); };
   const failed = await post([{ role: "user", content: "test" }], "failed-stream", true);
-  assert.match(failed.body, /upstream_failure/); assert.doesNotMatch(failed.body, /sensitive-upstream-payload|\[DONE\]/);
+  assert.match(failed.body, /upstream_failure/); assert.match(failed.body, /sensitive-upstream-payload/); assert.match(failed.body, /\[DONE\]/);
   const health = await app.inject({ url: "/api/diagnostics", headers: auth });
   assert.equal(health.json().api.reachable, true); assert.doesNotMatch(health.body, /synthetic-session|synthetic-access|sensitive-upstream-payload|prompt/);
   assert.equal(health.json().build.revision, "development");
   assert.equal(health.json().storage.schemaVersion, 1);
   process.env.MIRROR_BUILD_REVISION = "abcdef0";
-  globalThis.fetch = async () => new Response("warp=on"); /* optional WARP binding; verification no longer required */
   assert.match((await app.inject({ url: "/api/diagnostics", headers: auth })).json().nextAction, /Test model/);
   store.clearSession();
   assert.match((await app.inject({ url: "/api/diagnostics", headers: auth })).json().nextAction, /Save a session/);

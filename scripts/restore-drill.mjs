@@ -15,7 +15,7 @@ const run = (args, env) => execFileSync(process.execPath, args, {
 });
 const seed = `
   const s = await import('./apps/server/dist/store.js');
-  s.saveVerifiedSession('synthetic-restore-session', 'fixture-account', 'fixture-device');
+  s.saveVerifiedSession('fixture-account', 'fixture-device');
   const c = s.createConversation({model:'auto', accountId:'fixture-account', title:'Restore fixture'});
   s.updateConversation({...c, conversationId:'fixture-upstream', currentNodeId:'fixture-parent'});
   s.saveInstructions(c.id, [{role:'system', content:'Fixture instructions'}]);
@@ -24,7 +24,9 @@ const seed = `
 const verify = `
   const assert = (await import('node:assert/strict')).default;
   const s = await import('./apps/server/dist/store.js');
-  assert.equal(s.getSession().sessionToken, 'synthetic-restore-session');
+  assert.equal(s.getSession().accountId, 'fixture-account');
+  assert.equal(s.getSession().deviceId, 'fixture-device');
+  assert.equal(s.getSession().sessionToken, undefined);
   const [c] = s.listConversations('fixture-account');
   assert.equal(c.conversationId, 'fixture-upstream');
   assert.equal(c.currentNodeId, 'fixture-parent');
@@ -57,7 +59,7 @@ try {
     assert.throws(() => run(["scripts/storage.mjs", "restore", backup, "--offline"], restoredEnv));
     const wrongKeyEnv = {...restoredEnv, MIRROR_STORE_KEY:randomBytes(32).toString("hex")};
     assert.throws(() => run(["--input-type=module", "-e", verify], wrongKeyEnv));
-    modes.push({mode, integrity:true, credentialsDecrypted:true, historyAndParentPreserved:true, sourceUnchanged:true, overwriteRejected:true, wrongKeyRejected:true});
+    modes.push({mode, integrity:true, accountMetadataDecrypted:true, historyAndParentPreserved:true, sourceUnchanged:true, overwriteRejected:true, wrongKeyRejected:true});
   }
   console.log(JSON.stringify({kind:"mirror-offline-restore-drill", synthetic:true, liveContinuationVerified:false, modes}, null, 2));
 } catch {

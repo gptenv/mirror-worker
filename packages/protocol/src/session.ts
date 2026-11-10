@@ -67,7 +67,7 @@ function extractRotatedSessionToken(res: Response): string | null {
 export class SessionTokenInvalidError extends Error {
   public readonly statusCode = 401;
   constructor(
-    message = "Session token was rejected or has no accessToken in the response — it's likely expired.",
+    message = "Session token was rejected by the upstream authentication service.",
     public readonly upstreamResponseText?: string,
   ) {
     super(message);
@@ -128,7 +128,7 @@ export async function mintAccessToken(sessionToken: string): Promise<MintedAcces
   let json: any = null;
   try { json = JSON.parse(responseText); } catch { /* preserve the upstream response below */ }
   if (!json || typeof json.accessToken !== "string" || json.accessToken.length === 0) {
-    throw new SessionTokenInvalidError(undefined, responseText);
+    throw new SessionExchangeError(502, responseText);
   }
 
   const expSeconds = decodeJwtExpSeconds(json.accessToken);

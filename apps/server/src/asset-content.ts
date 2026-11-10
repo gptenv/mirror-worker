@@ -111,7 +111,8 @@ export async function registerAssetContentRoute(app: FastifyInstance): Promise<v
       return reply.send(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream));
     } catch (error) {
       clearTimeout(timer);
-      throw error;
+      if (error instanceof BackendApiError || typeof (error as { statusCode?: unknown } | null)?.statusCode === "number") throw error;
+      return reply.code(502).send({ error: "Asset download unavailable" });
     }
   });
 }
