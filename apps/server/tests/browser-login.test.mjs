@@ -15,6 +15,7 @@ test.describe('server / browser-login', () => {
 
   test('navigation loads credentials from browser storage and preserves rotation before rendering', async () => {
     const storage = new Map([['mirror_access_token', 'session-' + 'x'.repeat(24000)]]);
+    const elements = { connect: {}, credential: { value: '' }, submit: { disabled: false }, status: { textContent: '' } };
     let written;
     const context = {
       Headers, location: { href: 'https://mirror.example/c/abc' },
@@ -23,9 +24,9 @@ test.describe('server / browser-login', () => {
         assert.equal(url, context.location.href);
         assert.equal(init.headers.get('authorization'), 'Bearer ' + storage.get('mirror_access_token'));
         assert.equal(init.headers.get('x-mirror-document'), '1');
-        return new Response('<html>authenticated</html>', { headers: { 'x-mirror-access-token': 'access-new', 'x-mirror-session-token': 'session-new' } });
+        return new Response('<html>authenticated</html>', { headers: { 'content-type': 'text/html', 'x-mirror-access-token': 'access-new', 'x-mirror-session-token': 'session-new' } });
       },
-      document: { open() {}, write(html) { written = html; }, close() {}, getElementById() { throw Error('unexpected error'); } },
+      document: { cookie: '', open() {}, write(html) { written = html; }, close() {}, getElementById(id) { assert.ok(id in elements); return elements[id]; } },
     };
     await vm.runInNewContext(BROWSER_BOOTSTRAP.match(/<script>([\s\S]*)<\/script>/)[1], context);
     assert.equal(written, '<html>authenticated</html>');

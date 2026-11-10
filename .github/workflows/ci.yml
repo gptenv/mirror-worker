@@ -12,7 +12,10 @@
 # ubuntu-latest - no paid Docker Hub/registry, no larger/custom runners,
 # no macOS or Windows runners, which are the ones that actually cost).
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -26,6 +29,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Build the release artifact once
+        run: |
+          npm run build:worker
+          node scripts/worker-artifact.mjs build "$RUNNER_TEMP/mirror-worker-release"
+          node scripts/worker-artifact.mjs check "$RUNNER_TEMP/mirror-worker-release" --deployment
+      - name: Verify the release artifact in real workerd with synthetic upstream services
+        env:
+          MIRROR_TEST_BUNDLE_DIR: ${{ runner.temp }}/mirror-worker-release/worker
+        run: npm run test:worker
       - run: npm run typecheck
       # .c8rc.json enables check-coverage with 100% thresholds for statements,
       # branches, functions, and lines, enforced separately for every file.
@@ -42,8 +54,20 @@ jobs:
       - name: Verify isolated backup and restore in both key modes
         run: npm run storage:drill
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - name: Verify browser behavior against the same Worker artifact
+        env:
+          MIRROR_TEST_BUNDLE_DIR: ${{ runner.temp }}/mirror-worker-release/worker
+          MIRROR_TEST_ASSETS_DIR: ${{ runner.temp }}/mirror-worker-release/assets
+        run: npm run test:e2e
       - run: npm run manifest -- --check
+      - name: Retain the passing deployment artifact
+        run: node scripts/worker-artifact.mjs check "$RUNNER_TEMP/mirror-worker-release" --deployment
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mirror-worker-${{ github.sha }}
+          path: ${{ runner.temp }}/mirror-worker-release/
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -65,3 +89,4 @@ jobs:
         run: |
           docker run --rm --network none -e EXPECTED_REVISION --entrypoint node mirror-verified -e 'require("node:assert/strict").equal(process.env.MIRROR_BUILD_REVISION, process.env.EXPECTED_REVISION)'
           docker image inspect --format '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}' mirror-verified
+

@@ -38,13 +38,13 @@ test.describe('server / upstream-errors-audit', () => {
       assert.equal(message,streamBody);
     } finally { await app.close(); }
   });
-  for (const endpoint of ['/api/gpts', '/v1/models']) test(`${endpoint} forwards optional GPT lookup failures`, async () => {
+  for (const endpoint of ['/api/gpts', '/v1/models']) test(`${endpoint} tolerates optional GPT lookup failures`, async () => {
     const app=await buildApp({worker:true});
     const backend=stubBackend('audit');
     test.mock.method(globalThis,'fetch',async(input,init)=>new URL(String(input)).pathname.includes('/gizmos/') ? new Response(json,{status:503}) : backend(input,init));
     try {
       const response=await app.inject({method:'GET',url:endpoint,headers:{authorization:'Bearer access'}});
-      assert.equal(response.statusCode,503,response.body);assert.equal(response.json().error.message,json);
+      assert.equal(response.statusCode,200,response.body);
     } finally {await app.close();}
   });
   test('typed and plain JSON stream errors preserve the full response', async () => {

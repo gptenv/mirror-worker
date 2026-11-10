@@ -1,3 +1,4 @@
+import type { FastifyReply } from "fastify";
 import { upstreamFetch } from "@mirror/protocol";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
@@ -21,12 +22,20 @@ const requestAuthentication = new AsyncLocalStorage<RequestAuthentication>();
 
 /** Make the browser-provided bearer available only for this request. */
 export function setRequestSessionToken(token: string, sessionToken?: string): void {
-  if (token && (requestAuthentication.getStore()?.bearerToken !== token || requestAuthentication.getStore()?.sessionToken !== sessionToken))
-    requestAuthentication.enterWith({ bearerToken: token, sessionToken, configuredTokens: requestAuthentication.getStore()?.configuredTokens });
+  const request = requestAuthentication.getStore();
+  if (token && (request?.bearerToken !== token || request?.sessionToken !== sessionToken)) {
+    // The HTTP adapter created this isolated request object before Fastify.
+    // Mutate it so credentials selected in onRequest reach later async hooks;
+    // enterWith alone only replaces the current hook's async continuation.
+    if (request) { request.bearerToken = token; request.sessionToken = sessionToken; request.credentials = undefined; request.initialAccessToken = undefined; }
+    else requestAuthentication.enterWith({ bearerToken: token, sessionToken });
+  }
 }
 
 export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T, sessionToken?: string, configuredTokens?: string[]): T {
-  return token || configuredTokens?.length ? requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback) : callback();
+  // Anonymous requests need a boundary too: never inherit an enclosing
+  // request's bearer, configured credentials, or rotated token state.
+  return requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback);
 }
 
 /** Compatibility name retained for existing call sites; this is now the client-held bearer. */
@@ -48,16 +57,16 @@ export async function getValidCredentials(): Promise<SessionCredentials> {
   const configuredToken = !request?.bearerToken || tokenMatches(request.bearerToken, configuredTokens)
     ? configuredTokens[0] : undefined;
   const accessToken = configuredToken || request?.bearerToken;
-  const sessionToken = configuredToken || request?.sessionToken || request?.bearerToken;
   if (!accessToken) {
     const err = new Error("Supply a ChatGPT accessToken or sessionToken as a Bearer credential.");
     (err as any).statusCode = 401;
     throw err;
   }
+  const sessionToken = configuredToken || request?.sessionToken || accessToken;
   const credentials = () => Promise.resolve({
     accessToken,
     sessionToken,
-    ...(sessionToken ? { cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}` } : {}),
+    cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`,
     deviceId: getOrCreateDeviceId(),
   });
   if (!request) return credentials();
@@ -71,7 +80,7 @@ export async function getRotatedRequestAccessToken(): Promise<string | undefined
   const request = requestAuthentication.getStore();
   if (!request?.credentials) return undefined;
   const credentials = await request.credentials;
-  return credentials.accessToken !== (request.initialAccessToken ?? request.bearerToken) ? credentials.accessToken : undefined;
+  return credentials.accessToken !== request.initialAccessToken ? credentials.accessToken : undefined;
 }
 
 export async function getRotatedRequestSessionToken(): Promise<string | undefined> {
@@ -95,7 +104,10 @@ export async function fetchWithAccessTokenFallback(
   }
   init = { ...init, headers: requestHeaders };
   const first = await upstreamFetch(input, init);
-  if (!credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
+  if (credentials.sessionRefreshAllowed === false || !credentials.sessionToken || !await isAccessDeniedResponse(first)) return first;
+  // Once refresh is selected this response is discarded, even if minting
+  // fails. Release it before the exchange and retain the exchange diagnostic.
+  await first.body?.cancel().catch(() => {});
   const minted = await mintAccessTokenShared(credentials.sessionToken).catch((error) => {
     if (error && typeof error === "object") {
       Object.assign(error, {
@@ -109,12 +121,22 @@ export async function fetchWithAccessTokenFallback(
     throw error;
   });
   credentials.accessToken = minted.accessToken;
-  credentials.rotatedSessionToken = minted.rotatedSessionToken;
+  if (minted.rotatedSessionToken) credentials.rotatedSessionToken = minted.rotatedSessionToken;
   if (minted.rotatedSessionToken) credentials.sessionToken = minted.rotatedSessionToken;
   credentials.cookie = `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || credentials.sessionToken)}`;
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${minted.accessToken}`);
-  headers.set("cookie", credentials.cookie);
-  await first.body?.cancel().catch(() => {});
+  const otherCookies = (headers.get("cookie") ?? "").split(";").map(value => value.trim())
+    .filter(value => value && !value.startsWith("__Secure-next-auth.session-token="));
+  headers.set("cookie", [...otherCookies, credentials.cookie].join("; "));
   return upstreamFetch(input, { ...init, headers });
+}
+
+/** Both ordinary and hijacked responses must deliver settled refreshes. */
+export async function applyRotatedCredentialHeaders(reply: FastifyReply): Promise<void> {
+  const accessToken = await getRotatedRequestAccessToken();
+  const sessionToken = await getRotatedRequestSessionToken();
+  if (accessToken || sessionToken) reply.header("Cache-Control", "no-store");
+  if (accessToken) reply.header("x-mirror-access-token", accessToken);
+  if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
 }

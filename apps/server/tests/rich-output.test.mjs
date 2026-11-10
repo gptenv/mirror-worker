@@ -7,6 +7,10 @@ const message = (raw) => ({ kind: "message", messageId: "a", role: "assistant", 
 const url = "https://files.oaiusercontent.com/example?sig=synthetic&expires=123";
 
 test.describe("server / rich-output", () => {
+test("preserves upstream asset response failures instead of silently replacing them", async () => {
+  const failure = Object.assign(new Error("upstream asset failure"), { upstreamResponseText: "fixture response" });
+  await assert.rejects(renderRichOutput([text("file-service://fixture")], "", async () => { throw failure; }), error => error === failure);
+});
 test("late citation mapping replaces private marker inline and preserves the surrounding answer", async () => {
   const marker = "\uE200filecite\uE202turn0file0\uE201";
   const calls = [];

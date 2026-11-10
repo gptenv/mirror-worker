@@ -1,4 +1,4 @@
-import { mirrorFetch as fetch } from "./client-auth.js";
+import { mirrorFetch as fetch, downloadAuthenticated } from "./client-auth.js";
 import { useState } from "react";
 
 interface Item {
@@ -187,13 +187,9 @@ export function ConversationTools({
             />
             Include IDs, model, and message metadata
           </label>
-          <a href={`${base}&format=json`} download>
-            Export JSON
-          </a>
+          <button disabled={disabled} onClick={() => void downloadAuthenticated(`${base}&format=json`, "mirror-conversation.json").catch(error => setStatus(String(error)))}>Export JSON</button>
           {" · "}
-          <a href={`${base}&format=markdown`} download>
-            Export Markdown
-          </a>
+          <button disabled={disabled} onClick={() => void downloadAuthenticated(`${base}&format=markdown`, "mirror-conversation.md").catch(error => setStatus(String(error)))}>Export Markdown</button>
           <p>
             Exports contain conversation text. Attachment references exclude
             signed URLs and raw events. An export is an archive, not a resumable

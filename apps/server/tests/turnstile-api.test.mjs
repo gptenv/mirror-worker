@@ -6,6 +6,7 @@ import test from "node:test";
 
 const dir = mkdtempSync(path.join(tmpdir(), "mirror-turnstile-api-"));
 process.env.MIRROR_DATA_DIR = dir;
+process.env.MIRROR_API_KEY = "synthetic-access";
 
 const [{ default: Fastify }, store, openai, { buildApp }] = await Promise.all([
   import("fastify"),
@@ -24,12 +25,7 @@ test.after(async () => {
 });
 
 function useSession(accountId, turnstileToken) {
-  store.saveVerifiedSession(
-    accountId,
-    `device-${accountId}`,
-    turnstileToken,
-  );
-  store.updateMintedToken("cached-access", Date.now() + 60 * 60 * 1000, null);
+  store.saveVerifiedSession(accountId, `device-${accountId}`, turnstileToken);
 }
 
 function sseBody(payloads) {
@@ -125,7 +121,7 @@ test("POST /v1/chat/completions forwards turnstile token from request header", a
         headers: {
           "openai-sentinel-turnstile-token": "custom-hdr-turnstile-123",
         },
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [{ role: "user", content: "hello" }],
         },
@@ -155,7 +151,7 @@ test("POST /v1/chat/completions forwards turnstile token from metadata.mirror_tu
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           metadata: {
             mirror_turnstile_token: "meta-turnstile-456",
@@ -193,7 +189,7 @@ test("POST /v1/chat/completions uses a request token without persisting it", asy
         headers: {
           "x-turnstile-token": "retrieved-turnstile-token-789",
         },
-        payload: {
+        payload: { stream: false,
           model: "auto",
           messages: [{ role: "user", content: "hello" }],
         },
@@ -215,7 +211,7 @@ test("POST /v1/chat/completions redacts turnstile tokens from response metadata"
       const res = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           metadata: {
             turnstile_token: "secret-token-1",
@@ -241,7 +237,7 @@ test("POST /v1/responses redacts turnstile tokens from response metadata", async
       const res = await app.inject({
         method: "POST",
         url: "/v1/responses",
-        payload: {
+        payload: { stream: false,
           model: "auto",
           metadata: {
             turnstile_token: "secret-token-1",

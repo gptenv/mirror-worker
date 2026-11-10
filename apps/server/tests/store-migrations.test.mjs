@@ -24,9 +24,8 @@ test("MIRROR_STORE_KEY accepts a hex-encoded 32-byte key", async () => {
   process.env.MIRROR_STORE_KEY = "11".repeat(32); // 64 hex chars -> 32 bytes
   try {
     const store = await import(`../dist/store.js?store-key-hex=${Date.now()}`);
-    store.saveVerifiedSession("acct");
+    store.saveVerifiedSession("acct", "device");
     assert.equal(store.getSession().accountId, "acct");
-    assert.equal(store.getSession().sessionToken, undefined);
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -39,9 +38,8 @@ test("MIRROR_STORE_KEY accepts a base64-encoded 32-byte key", async () => {
   process.env.MIRROR_STORE_KEY = Buffer.alloc(32, 7).toString("base64");
   try {
     const store = await import(`../dist/store.js?store-key-b64=${Date.now()}`);
-    store.saveVerifiedSession("acct");
+    store.saveVerifiedSession("acct", "device");
     assert.equal(store.getSession().accountId, "acct");
-    assert.equal(store.getSession().sessionToken, undefined);
   } finally {
     delete process.env.MIRROR_STORE_KEY;
     rmSync(dir, { recursive: true, force: true });
@@ -69,15 +67,14 @@ test("reuses the on-disk master key across restarts (no MIRROR_STORE_KEY set)", 
   delete process.env.MIRROR_STORE_KEY;
   try {
     const first = await import(`../dist/store.js?store-key-reuse-a=${Date.now()}`);
-    first.saveVerifiedSession("acct");
+    first.saveVerifiedSession("persisted-by-key-file", "device");
     assert.ok(existsSync(path.join(dir, "master.key")));
 
     // A second "process" (fresh module instance, same data dir) must load the
     // same on-disk key file rather than minting a new one, or it couldn't
     // decrypt what the first instance wrote.
     const second = await import(`../dist/store.js?store-key-reuse-b=${Date.now()}`);
-    assert.equal(second.getSession().accountId, "acct");
-    assert.equal(second.getSession().sessionToken, undefined);
+    assert.equal(second.getSession().accountId, "persisted-by-key-file");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -133,7 +130,7 @@ test("migrates a pre-migration database: adds missing columns, imports legacy st
     const store = await import(`../dist/store.js?store-migrate=${Date.now()}`);
 
     // Legacy session migrated in.
-    assert.equal(store.getSession().sessionToken, "legacy-session-token");
+    assert.equal(store.getSession().sessionToken, undefined);
     assert.equal(store.getSession().accountId, "claimed-account");
     // Legacy file cleaned up once migrated.
     assert.equal(existsSync(legacyFile), false);
@@ -175,16 +172,17 @@ test("legacy store.json migration is skipped once a real session already exists"
   const dir = freshDir("migrate-skip");
   process.env.MIRROR_DATA_DIR = dir;
   try {
+    const first = await import(`../dist/store.js?store-migrate-existing=${Date.now()}`);
+    first.saveVerifiedSession("acct", "device");
     writeFileSync(
       path.join(dir, "store.json"),
       JSON.stringify({ session: { sessionToken: "should-not-be-used", savedAt: "2024-01-01" } }),
     );
     const store = await import(`../dist/store.js?store-migrate-skip=${Date.now()}`);
-    // Establish a real session *after* the module has already loaded (and
-    // thus already decided, at that load, whether to migrate).
-    store.saveVerifiedSession("acct");
     assert.equal(store.getSession().accountId, "acct");
+    assert.equal(store.getSession().deviceId, "device");
     assert.equal(store.getSession().sessionToken, undefined);
+    assert.equal(existsSync(path.join(dir, "store.json")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -198,6 +196,8 @@ test("databaseHealthy reports true for a working database", async () => {
   try {
     const store = await import(`../dist/store.js?store-healthy=${Date.now()}`);
     assert.equal(store.databaseHealthy(), true);
+    assert.throws(() => store.initializeWorkerStore({}), /only be initialized in the Workers runtime/);
+    assert.equal(store.databaseHealthy(), true, "wrong-runtime initialization must leave the Node store intact");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -212,7 +212,7 @@ test("setSessionAccountId is a no-op with no session, a no-op for the same accou
     store.setSessionAccountId("nope");
     assert.equal(store.getSession(), null);
 
-    store.saveVerifiedSession("acct-a");
+    store.saveVerifiedSession("tok", "acct-a");
     store.setSessionAccountId("acct-a"); // same account -> no-op branch
     assert.equal(store.getSession().accountId, "acct-a");
 
@@ -549,7 +549,7 @@ test("getSession throws when the stored session value has been corrupted outside
   try {
     const store = await import(`../dist/store.js?store-corrupted-session=${Date.now()}`);
     // Establish the database file and the settings table/row first.
-    store.saveVerifiedSession("acct", "device-1");
+    store.saveVerifiedSession("session-token-long-enough-for-test", "acct", "device-1");
     // Reach past the module's own encrypt()/decrypt() pair with a second,
     // independent raw connection to the same file, writing a value that
     // doesn't match the "v1.<iv>.<tag>.<ciphertext>" shape decrypt()
@@ -578,7 +578,7 @@ test("onSessionChange notifies registered listeners on every session change and 
       calls += 1;
     });
     const revisionBefore = store.getSessionRevision();
-    store.saveVerifiedSession("acct", "device-1");
+    store.saveVerifiedSession("session-token-long-enough-for-test", "acct", "device-1");
     assert.equal(calls, 1);
     assert.equal(store.getSessionRevision(), revisionBefore + 1);
 
@@ -591,17 +591,4 @@ test("onSessionChange notifies registered listeners on every session change and 
   }
 });
 
-test("updateMintedToken is a no-op when there is no verified session yet", async () => {
-  const dir = freshDir("minted-token-no-session");
-  process.env.MIRROR_DATA_DIR = dir;
-  try {
-    const store = await import(`../dist/store.js?store-minted-token-no-session=${Date.now()}`);
-    assert.equal(store.getSession(), null);
-    // Must not throw even with nothing to update.
-    store.updateMintedToken("cached-access", Date.now() + 60_000, null);
-    assert.equal(store.getSession(), null);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 });

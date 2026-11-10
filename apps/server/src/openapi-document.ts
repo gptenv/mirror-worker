@@ -38,23 +38,23 @@ const ErrorResponse = z
       z.object({ message: z.string(), type: z.string() }),
     ]),
   })
-  .openapi({ ref: "Error", description: "Error envelope returned by Mirror's error handler." });
+  .meta({ id: "Error", description: "Error envelope returned by Mirror's error handler." });
 
 const OkResponse = z
   .object({ ok: z.boolean() })
-  .openapi({ ref: "OkResponse" });
+  .meta({ id: "OkResponse" });
 
 // --- /v1 (OpenAI-compatible) response schemas -----------------------------
 
 const ModelSchema = z
   .object({
-    id: z.string().openapi({ example: "gpt-4o" }),
+    id: z.string().meta({ example: "gpt-4o" }),
     object: z.literal("model"),
     created: z.number().int(),
     owned_by: z.string(),
   })
-  .openapi({
-    ref: "Model",
+  .meta({
+    id: "Model",
     description:
       "An OpenAI-shaped model entry. Mirror lists both real ChatGPT model slugs (gpt-4o, " +
       "o1, ...) and Custom GPT / Project pseudo-models (ids like g-<hex> / g-p-<hex>) - " +
@@ -66,24 +66,24 @@ const ModelsResponse = z
     object: z.literal("list"),
     data: z.array(ModelSchema),
   })
-  .openapi({ ref: "ModelsResponse" });
+  .meta({ id: "ModelsResponse" });
 
 const ChatMessageResponse = z
   .object({
     role: z.enum(["system", "developer", "user", "assistant"]),
     content: z.string().nullable(),
   })
-  .openapi({ ref: "ChatMessageResponse" });
+  .meta({ id: "ChatMessageResponse" });
 
 const CompletionResponseMetadata = z
   .object({
-    mirror_tool_events: z.string().optional().openapi({
+    mirror_tool_events: z.string().optional().meta({
       description:
         "JSON-stringified array of {name, status} objects, one per ChatGPT built-in tool " +
         "invocation observed during the turn (web browsing, the code-interpreter sandbox, " +
         "etc). Parse with JSON.parse.",
     }),
-    mirror_images: z.string().optional().openapi({
+    mirror_images: z.string().optional().meta({
       description:
         "JSON-stringified array of {url} objects for any in-chat DALL-E image(s) ChatGPT " +
         "generated during the turn (distinct from the official /v1/images/generations " +
@@ -91,8 +91,8 @@ const CompletionResponseMetadata = z
         "is a self-contained image data URI when preview bytes are available. Unavailable previews are omitted.",
     }),
   })
-  .openapi({
-    ref: "CompletionResponseMetadata",
+  .meta({
+    id: "CompletionResponseMetadata",
     description:
       "Response-only convention: Mirror attaches ChatGPT-only, no-official-schema-slot " +
       "information here rather than inventing new top-level response fields the official " +
@@ -110,13 +110,13 @@ const CompletionResponse = z
       z.object({
         index: z.number().int(),
         message: ChatMessageResponse,
-        finish_reason: z.literal("stop").openapi({
+        finish_reason: z.literal("stop").meta({
           description:
             "Mirror reports stop on successful completion and never truncates responses based on token limits or stop strings.",
         }),
       }),
     ),
-    usage: z.null().openapi({
+    usage: z.null().meta({
       description:
         "Always null. backend-api reports no token counts anywhere - ChatGPT bills by plan " +
         "usage windows, not per-token metering - so there is nothing real to put here. See " +
@@ -124,7 +124,7 @@ const CompletionResponse = z
     }),
     metadata: CompletionResponseMetadata.optional(),
   })
-  .openapi({ ref: "CompletionResponse" });
+  .meta({ id: "CompletionResponse" });
 
 // --- Shared building blocks, modeled on @mirror/protocol's types.ts -------
 
@@ -145,10 +145,10 @@ const AssistantTextEvent = z
   .object({
     kind: z.literal("assistant_text"),
     messageId: z.string().nullable(),
-    delta: z.string().openapi({ description: "The text added by this SSE event alone." }),
-    text: z.string().openapi({ description: "The full assistant text accumulated so far, including this delta." }),
+    delta: z.string().meta({ description: "The text added by this SSE event alone." }),
+    text: z.string().meta({ description: "The full assistant text accumulated so far, including this delta." }),
   })
-  .openapi({ ref: "AssistantTextEvent" });
+  .meta({ id: "AssistantTextEvent" });
 
 const MessageEvent = z
   .object({
@@ -157,20 +157,20 @@ const MessageEvent = z
     role: z.string().nullable(),
     contentType: z.string().nullable(),
     authorName: z.string().nullable(),
-    raw: z.record(z.unknown()).openapi({ description: "The raw upstream message envelope." }),
+    raw: z.record(z.string(), z.unknown()).meta({ description: "The raw upstream message envelope." }),
   })
-  .openapi({ ref: "MessageEvent" });
+  .meta({ id: "MessageEvent" });
 
 const ToolEvent = z
   .object({
     kind: z.literal("tool"),
     messageId: z.string().nullable(),
-    name: z.string().openapi({ description: "The built-in ChatGPT tool's name, e.g. web, python, dalle." }),
-    status: z.string().nullable().optional().openapi({ description: "e.g. \"in_progress\", \"completed\", when backend-api reports one." }),
-    raw: z.record(z.unknown()).openapi({ description: "The raw upstream tool-call envelope." }),
+    name: z.string().meta({ description: "The built-in ChatGPT tool's name, e.g. web, python, dalle." }),
+    status: z.string().nullable().optional().meta({ description: "e.g. \"in_progress\", \"completed\", when backend-api reports one." }),
+    raw: z.record(z.string(), z.unknown()).meta({ description: "The raw upstream tool-call envelope." }),
   })
-  .openapi({
-    ref: "ToolEvent",
+  .meta({
+    id: "ToolEvent",
     description: "A ChatGPT built-in tool invocation (web browsing, code interpreter, etc) - see COMPATIBILITY.md.",
   });
 
@@ -179,29 +179,29 @@ const CitationEvent = z
     kind: z.literal("citation"),
     fileId: z.string().optional(),
     title: z.string().optional(),
-    raw: z.unknown().openapi({ description: "The raw upstream citation envelope; shape varies by citation type." }),
+    raw: z.unknown().meta({ description: "The raw upstream citation envelope; shape varies by citation type." }),
   })
-  .openapi({ ref: "CitationEvent" });
+  .meta({ id: "CitationEvent" });
 
 const ImageEvent = z
   .object({
     kind: z.literal("image"),
-    assetPointer: z.string().openapi({ description: "Resolve via GET /api/assets?pointer=..." }),
-    raw: z.unknown().openapi({ description: "The raw upstream image-generation envelope." }),
+    assetPointer: z.string().meta({ description: "Resolve via GET /api/assets?pointer=..." }),
+    raw: z.unknown().meta({ description: "The raw upstream image-generation envelope." }),
   })
-  .openapi({
-    ref: "ImageEvent",
+  .meta({
+    id: "ImageEvent",
     description: "An in-chat DALL-E generated image - see COMPATIBILITY.md.",
   });
 
 const FileEvent = z
   .object({
     kind: z.literal("file"),
-    assetPointer: z.string().openapi({ description: "Resolve via GET /api/assets?pointer=..." }),
+    assetPointer: z.string().meta({ description: "Resolve via GET /api/assets?pointer=..." }),
     title: z.string().optional(),
-    raw: z.unknown().openapi({ description: "The raw upstream file envelope." }),
+    raw: z.unknown().meta({ description: "The raw upstream file envelope." }),
   })
-  .openapi({ ref: "FileEvent" });
+  .meta({ id: "FileEvent" });
 
 const MarkerEvent = z
   .object({
@@ -209,9 +209,9 @@ const MarkerEvent = z
     messageId: z.string().nullable(),
     marker: z.string().optional(),
     event: z.string().optional(),
-    raw: z.record(z.unknown()).openapi({ description: "The raw upstream marker/event envelope." }),
+    raw: z.record(z.string(), z.unknown()).meta({ description: "The raw upstream marker/event envelope." }),
   })
-  .openapi({ ref: "MarkerEvent" });
+  .meta({ id: "MarkerEvent" });
 
 const StatusEvent = z
   .object({
@@ -219,14 +219,14 @@ const StatusEvent = z
     messageId: z.string().nullable(),
     status: z.string(),
   })
-  .openapi({ ref: "StatusEvent" });
+  .meta({ id: "StatusEvent" });
 
 const RawEvent = z
   .object({
     kind: z.literal("raw"),
-    raw: z.unknown().openapi({ description: "An unrecognized upstream SSE payload, passed through unparsed." }),
+    raw: z.unknown().meta({ description: "An unrecognized upstream SSE payload, passed through unparsed." }),
   })
-  .openapi({ ref: "RawEvent" });
+  .meta({ id: "RawEvent" });
 
 /**
  * Mirrors @mirror/protocol's NormalizedConversationEvent discriminated
@@ -252,7 +252,7 @@ const NormalizedConversationEvent = z
     StatusEvent,
     RawEvent,
   ])
-  .openapi({ ref: "NormalizedConversationEvent" });
+  .meta({ id: "NormalizedConversationEvent" });
 
 /** Mirrors UploadedFile from @mirror/protocol, minus the `raw` field Mirror strips before returning it publicly. */
 const PublicUploadedFile = z
@@ -261,14 +261,14 @@ const PublicUploadedFile = z
     fileName: z.string(),
     fileSize: z.number(),
     mimeType: z.string(),
-    useCase: z.enum(["multimodal", "my_files"]).openapi({
+    useCase: z.enum(["multimodal", "my_files"]).meta({
       description: "multimodal for images passed to the vision model; my_files for anything else (code interpreter, retrieval, etc).",
     }),
-    width: z.number().optional().openapi({ description: "Present for image uploads." }),
-    height: z.number().optional().openapi({ description: "Present for image uploads." }),
+    width: z.number().optional().meta({ description: "Present for image uploads." }),
+    height: z.number().optional().meta({ description: "Present for image uploads." }),
   })
-  .openapi({
-    ref: "UploadedFile",
+  .meta({
+    id: "UploadedFile",
     description: "A file uploaded to ChatGPT's file service via POST /api/files, with the raw upstream response stripped.",
   });
 
@@ -277,15 +277,15 @@ const StoredMessage = z
   .object({
     id: z.string().uuid(),
     conversationId: z.string(),
-    upstreamNodeId: z.string().nullable().openapi({ description: "The backend-api message node id, or null if this turn never reached upstream." }),
+    upstreamNodeId: z.string().nullable().meta({ description: "The backend-api message node id, or null if this turn never reached upstream." }),
     role: z.enum(["user", "assistant"]),
     content: z.string(),
-    status: z.string().openapi({ description: "e.g. \"finished_successfully\", \"in_progress\" - passed through from backend-api." }),
+    status: z.string().meta({ description: "e.g. \"finished_successfully\", \"in_progress\" - passed through from backend-api." }),
     events: z.array(NormalizedConversationEvent),
     attachments: z.array(PublicUploadedFile).optional(),
-    createdAt: z.string().datetime().openapi({ description: "ISO 8601 timestamp." }),
+    createdAt: z.string().datetime().meta({ description: "ISO 8601 timestamp." }),
   })
-  .openapi({ ref: "StoredMessage", description: "A single stored message in a Mirror conversation (store.ts)." });
+  .meta({ id: "StoredMessage", description: "A single stored message in a Mirror conversation (store.ts)." });
 
 /**
  * Mirrors StoredConversation from store.ts (which extends
@@ -293,21 +293,21 @@ const StoredMessage = z
  */
 const StoredConversation = z
   .object({
-    id: z.string().openapi({ description: "The Mirror-local conversation id (UUID when auto-generated, or a caller-supplied slug via metadata.conversation_id)." }),
+    id: z.string().meta({ description: "The Mirror-local conversation id (UUID when auto-generated, or a caller-supplied slug via metadata.conversation_id)." }),
     accountId: z.string(),
     title: z.string(),
-    init: z.record(z.unknown()).nullable().openapi({ description: "Raw backend-api f/conversation/init response, once this conversation has been initialized." }),
-    createdAt: z.string().datetime().openapi({ description: "ISO 8601 timestamp." }),
-    updatedAt: z.string().datetime().openapi({ description: "ISO 8601 timestamp." }),
-    isBranch: z.boolean().openapi({ description: "True if this conversation was created via POST /api/conversations/{id}/branch." }),
-    conversationId: z.string().nullable().openapi({ description: "The real upstream backend-api conversation id, or null until the first turn is sent." }),
-    currentNodeId: z.string().openapi({ description: "The assistant node that becomes parent_message_id on the next turn." }),
+    init: z.record(z.string(), z.unknown()).nullable().meta({ description: "Raw backend-api f/conversation/init response, once this conversation has been initialized." }),
+    createdAt: z.string().datetime().meta({ description: "ISO 8601 timestamp." }),
+    updatedAt: z.string().datetime().meta({ description: "ISO 8601 timestamp." }),
+    isBranch: z.boolean().meta({ description: "True if this conversation was created via POST /api/conversations/{id}/branch." }),
+    conversationId: z.string().nullable().meta({ description: "The real upstream backend-api conversation id, or null until the first turn is sent." }),
+    currentNodeId: z.string().meta({ description: "The assistant node that becomes parent_message_id on the next turn." }),
     model: z.string(),
-    gizmoId: z.string().nullable().optional().openapi({ description: "Set when this conversation is pinned to a Custom GPT or Project." }),
+    gizmoId: z.string().nullable().optional().meta({ description: "Set when this conversation is pinned to a Custom GPT or Project." }),
     initialized: z.boolean().optional(),
-    private: z.boolean().optional().openapi({ description: "Temporary/incognito chat: excluded from chatgpt.com history and model training." }),
+    private: z.boolean().optional().meta({ description: "Temporary/incognito chat: excluded from chatgpt.com history and model training." }),
   })
-  .openapi({ ref: "StoredConversation", description: "A Mirror-local conversation record (store.ts)." });
+  .meta({ id: "StoredConversation", description: "A Mirror-local conversation record (store.ts)." });
 
 /** Mirrors ModelDescriptor from @mirror/protocol, minus the `raw` field GET /api/models strips before returning it. */
 const PublicModelDescriptor = z
@@ -319,23 +319,23 @@ const PublicModelDescriptor = z
     capabilities: z.unknown().optional(),
     enabledTools: z.unknown().optional(),
   })
-  .openapi({
-    ref: "PublicModelDescriptor",
+  .meta({
+    id: "PublicModelDescriptor",
     description: "Mirror's native model shape (normalizeModels() in @mirror/protocol), with the raw upstream payload stripped.",
   });
 
 /** Mirrors GizmoSummary from @mirror/protocol, minus the `raw` field GET /api/gpts strips before returning it. */
 const PublicGizmoSummary = z
   .object({
-    id: z.string().openapi({ description: "g-<hex> for a Custom GPT, g-p-<hex> for a Project." }),
+    id: z.string().meta({ description: "g-<hex> for a Custom GPT, g-p-<hex> for a Project." }),
     shortUrl: z.string().optional(),
     name: z.string(),
     description: z.string().optional(),
     iconUrl: z.string().optional(),
     filesCount: z.number().optional(),
   })
-  .openapi({
-    ref: "PublicGizmoSummary",
+  .meta({
+    id: "PublicGizmoSummary",
     description: "Mirror's native Custom GPT / Project shape (normalizeGizmos() in @mirror/protocol), with the raw upstream payload stripped.",
   });
 
@@ -348,12 +348,12 @@ const EgressStatus = z
     checkedAt: z.string().datetime().nullable(),
     error: z.string().nullable(),
   })
-  .openapi({ ref: "EgressStatus", description: "Outbound request routing status for this deployment." });
+  .meta({ id: "EgressStatus", description: "Outbound request routing status for this deployment." });
 
 /** The shape stored/returned by store.ts's getInstructions(). */
 const InstructionMessage = z
   .object({ role: z.string(), content: z.string() })
-  .openapi({ ref: "InstructionMessage" });
+  .meta({ id: "InstructionMessage" });
 
 const nativeApiPaths: ZodOpenApiPathsObject = {
   "/api/health": {
@@ -366,9 +366,9 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
           content: {
             "application/json": {
               schema: z.object({
-                ok: z.boolean().openapi({ description: "True when Mirror's storage is healthy." }),
+                ok: z.boolean().meta({ description: "True when Mirror's storage is healthy." }),
                 storage: z.literal("sqlite"),
-                configured: z.boolean().openapi({ description: "Whether a ChatGPT session has been connected." }),
+                configured: z.boolean().meta({ description: "Whether a ChatGPT session has been connected." }),
                 egress: EgressStatus,
               }),
             },
@@ -388,8 +388,8 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
             "application/json": {
               schema: z.object({
                 configured: z.boolean(),
-                savedAt: z.string().datetime().nullable().openapi({ description: "ISO timestamp the session was last saved, or null if none is configured." }),
-                hasTurnstileToken: z.boolean().openapi({ description: "Whether one pending single-use challenge token is staged." }),
+                savedAt: z.string().datetime().nullable().meta({ description: "ISO timestamp the session was last saved, or null if none is configured." }),
+                hasTurnstileToken: z.boolean().meta({ description: "Whether one pending single-use challenge token is staged." }),
               }),
             },
           },
@@ -406,8 +406,8 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
             "application/json": {
               schema: z.object({
                 ok: z.literal(true),
-                accountId: z.string().optional().openapi({ description: "The ChatGPT account id, when the upstream account lookup succeeded." }),
-                email: z.string().nullable().openapi({ description: "The account's email, when ChatGPT's /me endpoint returned one." }),
+                accountId: z.string().optional().meta({ description: "The ChatGPT account id, when the upstream account lookup succeeded." }),
+                email: z.string().nullable().meta({ description: "The account's email, when ChatGPT's /me endpoint returned one." }),
               }),
             },
           },
@@ -460,7 +460,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
             "application/json": {
               schema: z.object({
                 items: z.array(StoredConversation),
-                total: z.number().int().openapi({ description: "Total conversation count for this account, independent of limit/offset." }),
+                total: z.number().int().meta({ description: "Total conversation count for this account, independent of limit/offset." }),
                 hasMore: z.boolean(),
               }),
             },
@@ -490,7 +490,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
               schema: z.object({
                 conversation: StoredConversation,
                 messages: z.array(StoredMessage),
-                instructions: z.array(InstructionMessage).openapi({
+                instructions: z.array(InstructionMessage).meta({
                   description: "System and developer instructions retained with this local API conversation.",
                 }),
               }),
@@ -527,7 +527,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
           description: "OK",
           content: {
             "application/json": {
-              schema: z.object({ ok: z.boolean().openapi({ description: "False if no generation was in flight for this conversation." }) }),
+              schema: z.object({ ok: z.boolean().meta({ description: "False if no generation was in flight for this conversation." }) }),
             },
           },
         },
@@ -574,14 +574,14 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
       summary: "Download one to four challenge kits as a tar.gz archive",
       description: "Each kit contains the encoded artifact, matching prompt, optional format guide, and instructions. No answer key is included.",
       tags: ["Mirror"], requestBody: { content: { "application/json": { schema: ChallengeKitBody } } },
-      responses: { "200": { description: "Gzip-compressed tar archive", content: { "application/gzip": { schema: z.string().openapi({ format: "binary" }) } } }, "400": { description: "Invalid challenge IDs" }, "404": { description: "An included challenge expired or is unavailable" } },
+      responses: { "200": { description: "Gzip-compressed tar archive", content: { "application/gzip": { schema: z.string().meta({ format: "binary" }) } } }, "400": { description: "Invalid challenge IDs" }, "404": { description: "An included challenge expired or is unavailable" } },
     },
   },
   "/api/decoder-challenges/{id}/artifact": {
     get: {
       summary: "Download the original encoded challenge artifact",
       tags: ["Mirror"], requestParams: { path: ChallengeParams },
-      responses: { "200": { description: "LoaF text, PNG, or GIF attachment", content: { "application/octet-stream": { schema: z.string().openapi({ format: "binary" }) } } }, "404": { description: "Expired or unavailable challenge" } },
+      responses: { "200": { description: "LoaF text, PNG, or GIF attachment", content: { "application/octet-stream": { schema: z.string().meta({ format: "binary" }) } } }, "404": { description: "Expired or unavailable challenge" } },
     },
   },
   "/api/decoder-challenges/{id}/verify": {
@@ -604,13 +604,13 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
           "multipart/form-data": {
             schema: z
               .object({
-                file: z.string().openapi({
+                file: z.string().meta({
                   type: "string",
                   format: "binary",
                   description: "A single file field, handled by @fastify/multipart. Exactly one file per request.",
                 }),
               })
-              .openapi({ description: "A single-file multipart/form-data upload." }),
+              .meta({ description: "A single-file multipart/form-data upload." }),
           },
         },
       },
@@ -628,7 +628,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
       tags: ["Mirror"],
       requestParams: { query: z.object({ ticket: z.string(), download: z.literal("1").optional() }) },
       responses: {
-        "200": { description: "File bytes with the original content type and a filename in Content-Disposition.", content: { "application/octet-stream": { schema: z.string().openapi({ format: "binary" }) } } },
+        "200": { description: "File bytes with the original content type and a filename in Content-Disposition.", content: { "application/octet-stream": { schema: z.string().meta({ format: "binary" }) } } },
         "404": { description: "Expired, invalid, or disconnected-session file link." },
         "502": { description: "The upstream file could not be retrieved." },
       },
@@ -679,7 +679,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
       tags: ["Mirror"],
       requestParams: {
         query: z.object({
-          format: z.enum(["json", "yaml"]).default("json").openapi({
+          format: z.enum(["json", "yaml"]).default("json").meta({
             description: "?format=yaml returns YAML instead of the default JSON.",
           }),
         }),
@@ -688,8 +688,8 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
         "200": {
           description: "OK",
           content: {
-            "application/json": { schema: z.object({}).passthrough().openapi({ description: "This same OpenAPI 3.1 document, as JSON." }) },
-            "application/yaml": { schema: z.string().openapi({ description: "This same OpenAPI 3.1 document, as YAML." }) },
+            "application/json": { schema: z.object({}).passthrough().meta({ description: "This same OpenAPI 3.1 document, as JSON." }) },
+            "application/yaml": { schema: z.string().meta({ description: "This same OpenAPI 3.1 document, as YAML." }) },
           },
         },
       },
@@ -709,7 +709,7 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
  * in after the fact, mapping each `kind` value to the named component ref
  * that variant was given above (AssistantTextEvent, ToolEvent, ...).
  */
-function withDiscriminators(doc: oas31.OpenAPIObject): oas31.OpenAPIObject {
+function withDiscriminators(doc: ReturnType<typeof createDocument>): ReturnType<typeof createDocument> {
   const target = doc.components?.schemas?.NormalizedConversationEvent as
     | (oas31.SchemaObject & { oneOf?: oas31.ReferenceObject[] })
     | undefined;
@@ -735,7 +735,7 @@ function withDiscriminators(doc: oas31.OpenAPIObject): oas31.OpenAPIObject {
   return doc;
 }
 
-export function buildOpenApiDocument(): oas31.OpenAPIObject {
+export function buildOpenApiDocument(): ReturnType<typeof createDocument> {
   return withDiscriminators(createDocument({
     openapi: "3.1.0",
     info: {
@@ -790,7 +790,7 @@ export function buildOpenApiDocument(): oas31.OpenAPIObject {
           requestBody: { content: { "application/json": { schema: ResponsesBody } } },
           responses: {
             "200": { description: "Response object with assistant output_text parts, or named Responses SSE events ending in response.completed (response.failed on failure). usage is null.",
-              content: { "application/json": { schema: z.object({ id: z.string(), object: z.literal("response"), status: z.literal("completed"), output: z.array(z.object({ type: z.literal("message"), role: z.literal("assistant"), content: z.array(z.object({ type: z.literal("output_text"), text: z.string() }).passthrough()) }).passthrough()), metadata: z.record(z.string()), usage: z.null() }).passthrough() }, "text/event-stream": { schema: z.string() } } },
+              content: { "application/json": { schema: z.object({ id: z.string(), object: z.literal("response"), status: z.literal("completed"), output: z.array(z.object({ type: z.literal("message"), role: z.literal("assistant"), content: z.array(z.object({ type: z.literal("output_text"), text: z.string() }).passthrough()) }).passthrough()), metadata: z.record(z.string(), z.string()), usage: z.null() }).passthrough() }, "text/event-stream": { schema: z.string() } } },
             "400": { description: "Invalid or unsupported input", content: { "application/json": { schema: ErrorResponse } } },
             "401": { description: "Missing/invalid Mirror API key", content: { "application/json": { schema: ErrorResponse } } },
           },
