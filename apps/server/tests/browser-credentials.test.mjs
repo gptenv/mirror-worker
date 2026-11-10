@@ -5,7 +5,7 @@ import { JSDOM } from 'jsdom';
 import { EARLY_PATCH } from '../dist/browser-patch.js';
 import { injectionJs } from '../dist/mirror-controls.js';
 
-const script = html => html.match(/<script>([\s\S]*)<\/script>/)[1];
+const script = html => html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/i)[1];
 function deferred() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
