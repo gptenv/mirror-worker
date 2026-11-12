@@ -792,7 +792,7 @@ test("the not-found handler 404s unmatched /v1/ paths and proxies everything els
       // produces elsewhere (see openai-routes.test.mjs's error tests).
       const v1Body = JSON.parse(v1.body);
       assert.equal(v1Body.error.code, "not_found");
-      assert.equal(v1Body.error.type, "invalid_request_error");
+      assert.equal(v1Body.error.type, "not_found_error");
       assert.equal(v1Body.error.message, "The requested resource was not found.");
       assert.equal(v1Body.error.request_id, v1.headers["x-request-id"]);
 
