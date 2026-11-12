@@ -98,8 +98,38 @@ test.describe('web / client-auth', () => {
   });
 
   test('storeAccessToken sets a secure asset cookie on https', () => {
-    Object.defineProperty(location, 'protocol', { value: 'https:', configurable: true });
-    storeAccessToken('secure-access');
-    assert.match(document.cookie, /Secure/);
+    const originalLocationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    const realLocation = location;
+    Object.defineProperty(globalThis, 'location', {
+      get() {
+        return new Proxy(realLocation, {
+          get(target, prop, receiver) {
+            if (prop === 'protocol') return 'https:';
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+      },
+      configurable: true,
+    });
+    let capturedCookie = '';
+    const originalCookieDescriptor = Object.getOwnPropertyDescriptor(document, 'cookie');
+    Object.defineProperty(document, 'cookie', {
+      set(value: string) { capturedCookie = String(value); },
+      get() { return capturedCookie; },
+      configurable: true,
+    });
+    try {
+      storeAccessToken('secure-access');
+      assert.match(capturedCookie, /mirror_asset_session=/);
+      assert.match(capturedCookie, /Secure/);
+      assert.match(capturedCookie, /SameSite=Strict/);
+    } finally {
+      if (originalCookieDescriptor) {
+        Object.defineProperty(document, 'cookie', originalCookieDescriptor);
+      }
+      if (originalLocationDescriptor) {
+        Object.defineProperty(globalThis, 'location', originalLocationDescriptor);
+      }
+    }
   });
 });
