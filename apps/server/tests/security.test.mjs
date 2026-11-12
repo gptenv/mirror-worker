@@ -66,6 +66,18 @@ test("with no request host to compare against, only the configured development o
   assert.equal(isAllowedOrigin("https://attacker.example", undefined), false);
 });
 
+test("MIRROR_WEB_ORIGIN allows the configured development web origin", () => {
+  const previous = process.env.MIRROR_WEB_ORIGIN;
+  process.env.MIRROR_WEB_ORIGIN = "https://web.example.test";
+  try {
+    assert.equal(isAllowedOrigin("https://web.example.test", undefined), true);
+    assert.equal(isAllowedOrigin("https://other.example.test", undefined), false);
+  } finally {
+    if (previous === undefined) delete process.env.MIRROR_WEB_ORIGIN;
+    else process.env.MIRROR_WEB_ORIGIN = previous;
+  }
+});
+
 test("parses and compares bearer credentials", () => {
   assert.equal(bearerToken("Bearer secret"), "secret");
   assert.equal(tokenMatches("secret", ["other", "secret"]), true);
