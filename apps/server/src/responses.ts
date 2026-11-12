@@ -4,11 +4,16 @@ import { z } from "zod";
 const InputMessage = z.object({
   type: z.literal("message").optional(),
   role: z.enum(["system", "developer", "user", "assistant"]),
-  content: z.union([z.string(), z.array(z.object({
-    type: z.enum(["input_text", "output_text"]), text: z.string(),
+  content: z.union([z.string(), z.array(z.union([z.object({
+    type: z.literal("input_text"), text: z.string(),
+  }).strict(), z.object({
+    type: z.literal("output_text"), text: z.string(),
     annotations: z.array(z.unknown()).optional(),
     logprobs: z.array(z.unknown()).optional(),
-  }).strict()).min(1)]),
+  }).strict(), z.object({
+    type: z.literal("input_image"), image_url: z.string(),
+    detail: z.enum(["auto", "low", "high"]).optional(),
+  }).strict()])).min(1)]),
   id: z.string().optional(),
   status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
 }).strict();
@@ -30,7 +35,9 @@ export function responsesToCompletion(body: ResponsesRequest) {
   const messages = typeof body.input === "string"
     ? [{ role: "user" as const, content: body.input }]
     : body.input.map(item => ({ role: item.role, content: typeof item.content === "string"
-      ? item.content : item.content.map(part => part.text).join("") }));
+      ? item.content : item.content.map(part => part.type === "input_image"
+        ? { type: "image_url" as const, image_url: { url: part.image_url, ...(part.detail ? { detail: part.detail } : {}) } }
+        : { type: "text" as const, text: part.text }) }));
   return { model: body.model, stream: body.stream, store: body.store, metadata: body.metadata,
     messages: [...(body.instructions === undefined ? [] : [{ role: "system" as const, content: body.instructions }]), ...messages] };
 }

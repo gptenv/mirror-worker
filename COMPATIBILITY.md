@@ -86,13 +86,13 @@ Given the above, "fully OpenAI-compatible" isn't a reachable end state for this 
 
 `POST /v1/responses` adapts text generation to the Responses request/output format. It shares the Chat Completions engine, persistence, account checks, immutable assistant history, cancellation, and deadlines.
 
-- `input`: a string or message array with `system`, `developer`, `user`, or `assistant` roles. Content can be a string or `input_text`/`output_text` parts. Returned assistant message items can be included in subsequent input history.
+- `input`: a string or message array with `system`, `developer`, `user`, or `assistant` roles. Content can be a string, `input_text`/`output_text` parts, or documented `input_image` parts with an `image_url` string and optional `detail`. Images are resolved and uploaded through the same path as Chat Completions; file IDs and other image representations are unsupported. Returned assistant message items can be included in subsequent input history.
 - `instructions`: optional system instructions. `model`, `stream`, `store`, and Mirror `metadata` routing fields are supported. `max_output_tokens` is accepted but ignored so answers remain complete.
 - JSON returns a `response` object with a completed assistant message in `output` and `output_text` content parts. Token `usage` is null.
 - Streaming emits named `response.created`, `response.in_progress`, output-item/content-part lifecycle events, `response.output_text.delta`, and `response.completed`. Failures emit `response.failed`; truncated streams must not be treated as success. Empty text deltas keep silent connections active every ten seconds. There is no Chat Completions `[DONE]` marker.
 - Continue with the returned `metadata.conversation_id` (also a JSON response header) or resend full input history. Response IDs identify individual results; they are not conversation IDs. `previous_response_id` and GET/retrieve/delete response endpoints are not implemented.
 - Mirror's `store:false` means a non-resumable one-shot, as in Chat mode. It omits the continuation ID. This differs from OpenAI's response-object storage semantics; Mirror does not store retrievable response objects.
-- Tools/function calls, images/files/audio, structured output, background mode, and other unsupported request fields are rejected with HTTP 400 rather than silently ignored.
+- Tools/function calls, file/audio input, structured output, background mode, and other unsupported request fields are rejected with HTTP 400 rather than silently ignored.
 
 ```json
 {
