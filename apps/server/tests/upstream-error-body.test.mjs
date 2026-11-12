@@ -11,17 +11,22 @@ const { upstreamErrorMessage } = await import('../dist/api-errors.js');
 test.describe('server / upstream-error-body', () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
   const body = '{\n  "error": {"message":"upstream denied", "detail":"more context", "code":"account_denied"}\n}\n';
-  test('preserves complete JSON, HTML, plain text and empty upstream bodies', () => {
-    for (const value of [body, '<html>denied</html>\n', 'denied\n', '']) assert.equal(upstreamErrorMessage(value), value);
+  test('does not expose upstream response bodies in public error messages', () => {
+    for (const value of [body, '<html>denied</html>\n', 'denied\n', '']) {
+      const message = upstreamErrorMessage(value);
+      assert.equal(message, 'The upstream request failed.');
+      assert.doesNotMatch(message, /account_denied|more context|denied/);
+    }
   });
-  for (const stream of [false, true]) test(`${stream ? 'streaming' : 'JSON'} completions reject failed authentication before streaming and preserve the upstream envelope`, async () => {
+  for (const stream of [false, true]) test(`${stream ? 'streaming' : 'JSON'} completions reject failed authentication without exposing upstream details`, async () => {
     const app = await buildApp({ worker: true });
     test.mock.method(globalThis, 'fetch', async () => new Response(body, { status: 403, headers: { 'content-type': 'application/json' } }));
     try {
       const response = await app.inject({ method: 'POST', url: '/v1/chat/completions', headers: { authorization: 'Bearer test-access' },
         payload: { messages: [{ role: 'user', content: 'hello' }], store: false, stream } });
       const envelope = response.json();
-      assert.equal(envelope.error.message, body);
+      assert.equal(envelope.error.message, 'The upstream request failed.');
+      assert.doesNotMatch(response.body, /account_denied|more context|upstream denied/);
       assert.equal(envelope.error.type, 'permission_error');
       assert.equal(envelope.error.code, 'request_forbidden');
       assert.ok(envelope.error.request_id);
