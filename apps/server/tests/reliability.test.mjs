@@ -40,7 +40,7 @@ test("control routes require credentials and false query flags don't contact ups
   assert.equal(list.statusCode,200,list.body);
   assert.equal((await app.inject({method:"GET",url:"/api/conversations?sync=garbage",headers})).statusCode,400);
   assert.equal((await app.inject({method:"GET",url:"/api/session",headers:{...headers,origin:"http://localhost:9999"}})).statusCode,403);
-  assert.equal((await app.inject({method:"POST",url:"/v1/chat/completions",headers,payload:{model:"model-wm",messages:[{role:"user",content:"hello"}],stream:true}})).statusCode,400);
+  assert.equal((await app.inject({method:"POST",url:"/v1/chat/completions",headers,payload:{model:"synthetic-fixture-wm",messages:[{role:"user",content:"hello"}],stream:true}})).statusCode,400);
  } finally {await app.close();}
 });
 test("browser session and complete origins gate control access", () => {

@@ -114,14 +114,14 @@ async function withFetch(handler, fn) {
 // GET /v1/models
 // ---------------------------------------------------------------------------
 
-test("GET /v1/models merges models, GPTs, and Projects, marks -wm models unsupported, and dedupes by id", async () => {
+test("GET /v1/models marks a synthetic -wm catalog label unsupported and dedupes by id", async () => {
   useSession("account-models");
   await withFetch(
     stubBackend("account-models", {
       modelsBody: {
         models: [
           { slug: "gpt-4o", title: "GPT-4o" },
-          { slug: "gpt-5-work-wm", title: "GPT-5 (Work Mode)" },
+          { slug: "synthetic-fixture-wm", title: "Synthetic Work-labeled fixture" },
         ],
       },
       sidebarBody: { items: [{ id: "g-p-1", gizmo: { gizmo: { id: "g-p-1", display: { name: "My Project" } } } }] },
@@ -139,8 +139,8 @@ test("GET /v1/models merges models, GPTs, and Projects, marks -wm models unsuppo
       const byId = Object.fromEntries(body.data.map((m) => [m.id, m]));
       assert.equal(byId["gpt-4o"].mirror.supported, true);
       assert.equal(byId["gpt-4o"].mirror.execution_mode, "interactive");
-      assert.equal(byId["gpt-5-work-wm"].mirror.supported, false);
-      assert.equal(byId["gpt-5-work-wm"].mirror.execution_mode, "unsupported_work");
+      assert.equal(byId["synthetic-fixture-wm"].mirror.supported, false);
+      assert.equal(byId["synthetic-fixture-wm"].mirror.execution_mode, "unsupported_work");
       assert.equal(byId["g-p-1"].owned_by, "chatgpt-project");
       assert.equal(byId["g-1"].owned_by, "chatgpt-gizmo");
       assert.equal(byId["g-1"].name, "Helper GPT");
@@ -187,7 +187,7 @@ test("a Work Mode (-wm) model is rejected before any upstream call", async () =>
   const res = await app.inject({
     method: "POST",
     url: "/v1/chat/completions",
-    payload: { stream: false, model: "gpt-5-wm", messages: [{ role: "user", content: "hi" }] },
+    payload: { stream: false, model: "synthetic-fixture-wm", messages: [{ role: "user", content: "hi" }] },
   });
   assert.equal(res.statusCode, 400);
   assert.match(res.json().error.message, /Work Mode/);
@@ -200,7 +200,7 @@ test("a Work Mode model reached via metadata.mirror_model is also rejected", asy
     url: "/v1/chat/completions",
     payload: { stream: false,
       model: "g-1",
-      metadata: { mirror_model: "gpt-5-wm" },
+      metadata: { mirror_model: "synthetic-fixture-wm" },
       messages: [{ role: "user", content: "hi" }],
     },
   });

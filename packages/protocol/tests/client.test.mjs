@@ -446,7 +446,7 @@ const HAPPY_STREAM = () =>
 test("sendMessage rejects Work Mode aliases without any network call", async () => {
   const client = new ChatGptBackendClient(fakeCreds());
   await assert.rejects(
-    client.sendMessage({ prompt: "hi", model: "gpt-5-wm" }),
+    client.sendMessage({ prompt: "hi", model: "synthetic-fixture-wm" }),
     (error) => {
       assert.ok(error instanceof BackendApiError);
       assert.equal(error.status, 400);

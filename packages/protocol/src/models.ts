@@ -1,5 +1,13 @@
 import type { GizmoSummary, ModelDescriptor } from "./types.js";
 
+/**
+ * Conservative compatibility heuristic for observed Work-labeled catalog
+ * entries. This suffix check does not establish that a value is a public model ID.
+ */
+export function hasWorkModeSuffix(value: string): boolean {
+  return value.endsWith("-wm");
+}
+
 /** Normalize the evolving gizmo/sidebar payload without depending on one response envelope. */
 export function normalizeGizmos(raw: Record<string, unknown>): GizmoSummary[] {
   const candidates: Record<string, unknown>[] = [];

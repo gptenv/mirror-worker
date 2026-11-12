@@ -25,6 +25,7 @@ import {
 } from "./types.js";
 import { resolveTurnstileToken, type TurnstileChallenge } from "./turnstile.js";
 import { isAccessDeniedResponse, mintAccessTokenShared } from "./session.js";
+import { hasWorkModeSuffix } from "./models.js";
 
 const ORIGIN = "https://chatgpt.com";
 const BASE_URL = `${ORIGIN}/backend-api`;
@@ -755,7 +756,7 @@ export class ChatGptBackendClient {
     const timezoneOffsetMin = opts.timezoneOffsetMin ?? 0;
     // Work Mode itself is an asynchronous task protocol, not conversation SSE.
     // Reject unsupported aliases; never silently substitute another model.
-    if (opts.model.endsWith("-wm")) throw new BackendApiError("Work Mode is not supported by this transport", 400);
+    if (hasWorkModeSuffix(opts.model)) throw new BackendApiError("Work Mode is not supported by this transport", 400);
     const interactiveModel = opts.model;
     const firstTurn = !opts.conversationId;
     const parentMessageId = firstTurn

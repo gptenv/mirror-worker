@@ -4,6 +4,14 @@ Mirror's `/v1/chat/completions` and `/v1/models` speak OpenAI's wire format, but
 
 See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics referenced throughout. For a machine-readable version of the `/v1` request/response shapes described here, `GET /mirror/openapi` (add `?format=yaml` for YAML) serves an OpenAPI 3.1 document generated straight from the same Zod schemas the server validates against - see `apps/server/src/openapi-document.ts` - and `/mirror/api-docs` serves a Swagger UI for browsing and trying it live.
 
+## Work-labeled catalog entries and `-wm`
+
+Mirror currently treats a catalog slug ending in `-wm` as an unsupported Work-labeled entry and rejects a requested model string with that suffix. This is a conservative syntactic transport heuristic; it does not verify the identity or public status of a model. The fixture strings used in tests are synthetic examples, not observed production IDs.
+
+OpenAI's public documentation describes Work as a ChatGPT experience and lists models available in Work and Codex, but does not define a `-wm` model-ID suffix or publish exact `-wm` identifiers. Mirror has therefore not verified any public model ID ending in `-wm`. Model names documented for product selection do not establish their mapping to ChatGPT's private backend slugs. See [ChatGPT Work and Codex](https://help.openai.com/en/articles/20001275-chatgpt-work-and-codex).
+
+The heuristic can conservatively reject an unrelated identifier that happens to end in `-wm`. It is not a public model-ID registry and must not be used to infer or construct model IDs.
+
 ## Part 1: Official OpenAI API features Mirror can't (fully) offer
 
 ### Structurally impossible — no equivalent exists in backend-api
