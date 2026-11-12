@@ -167,6 +167,30 @@ test("GET /v1/models tolerates catalog outages", async () => {
   );
 });
 
+test("GET /v1/models aborts upstream catalog requests at its configured deadline", async () => {
+  useSession("account-models-timeout");
+  const previousTimeout = process.env.MIRROR_CATALOG_TIMEOUT_MS;
+  process.env.MIRROR_CATALOG_TIMEOUT_MS = "10";
+  let observedAbort = false;
+  try {
+    await withFetch((_url, init = {}) => new Promise((_resolve, reject) => {
+      const abort = () => {
+        observedAbort = true;
+        reject(init.signal.reason);
+      };
+      if (init.signal.aborted) abort();
+      else init.signal.addEventListener("abort", abort, { once: true });
+    }), async () => {
+      const res = await app.inject({ method: "GET", url: "/v1/models" });
+      assert.equal(res.statusCode, 504, res.body);
+      assert.equal(observedAbort, true);
+    });
+  } finally {
+    if (previousTimeout === undefined) delete process.env.MIRROR_CATALOG_TIMEOUT_MS;
+    else process.env.MIRROR_CATALOG_TIMEOUT_MS = previousTimeout;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // POST /v1/chat/completions - request validation (before touching upstream)
 // ---------------------------------------------------------------------------
