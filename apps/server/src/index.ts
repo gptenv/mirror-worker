@@ -219,7 +219,7 @@ app.addHook("onRequest", async (req, reply) => {
         return reply.code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error" } });
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+      return reply.code(Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
     }
   }
   if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
@@ -231,7 +231,7 @@ app.addHook("onRequest", async (req, reply) => {
       await new ChatGptBackendClient(credentials).fetchMe();
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
+      return reply.code(Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 401)).send(
         sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
       );
     }
@@ -278,17 +278,6 @@ app.addHook("onRequest", async (req, reply) => {
     return;
   }
   if (req.url === "/api/health" || req.url.startsWith("/mirror/assets/")) return;
-  if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && bearer && !isConfiguredApiKey && !upstreamAuthenticates) {
-    try {
-      const credentials = await getValidCredentials();
-      await new ChatGptBackendClient(credentials).fetchMe();
-      sessionBearerAuthenticated = true;
-    } catch (error) {
-      return reply.code(Number((error as { statusCode?: number }).statusCode ?? 401)).send(
-        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
-      );
-    }
-  }
   if (!sessionBearerAuthenticated && !authorizedLocalRequest(req.headers) && !(upstreamAuthenticates && requestSessionToken)) {
     return reply.code(401).send({ error: { message: "Open Mirror in your browser or supply a ChatGPT accessToken or sessionToken as the Bearer credential", type: "authentication_error" } });
   }

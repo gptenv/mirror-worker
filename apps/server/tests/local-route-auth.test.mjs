@@ -56,7 +56,16 @@ test.describe('server / local-route-auth',()=>{
       const missing=await app.inject({method:'GET',url:'/api/conversations',headers:{authorization:'Bearer owner-token'}});
       assert.equal(missing.statusCode,403);
       const unavailable=await app.inject({method:'GET',url:'/api/conversations',headers:{authorization:'Bearer owner-token'}});
-      assert.notEqual(unavailable.statusCode,200);
+      assert.equal(unavailable.statusCode,503);
+    }finally{await app.close();}
+  });
+  test('local identity failures preserve upstream status and fail closed',async()=>{
+    const app=await buildApp({worker:true});
+    test.mock.method(globalThis,'fetch',async()=>new Response('temporarily unavailable',{status:503}));
+    try{
+      const response=await app.inject({method:'GET',url:'/api/settings/hotkeys',headers:{authorization:'Bearer unconfigured'}});
+      assert.equal(response.statusCode,503);
+      assert.match(response.body,/temporarily unavailable/);
     }finally{await app.close();}
   });
   test('settings, diagnostics, history and model routes use access Bearer and session cookie upstream',async()=>{
