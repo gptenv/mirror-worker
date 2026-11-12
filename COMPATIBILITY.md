@@ -12,6 +12,30 @@ OpenAI's public documentation describes Work as a ChatGPT experience and lists m
 
 The heuristic can conservatively reject an unrelated identifier that happens to end in `-wm`. It is not a public model-ID registry and must not be used to infer or construct model IDs.
 
+## Versioning and compatibility policy
+
+Mirror's `/v1` paths identify its OpenAI-shaped routes. They do not mean that
+Mirror implements every OpenAI API feature, shares OpenAI's release schedule,
+or carries the public API's compatibility guarantees. The current Mirror
+request and response contract is the behavior documented here and in the
+instance's generated `GET /mirror/openapi` document; its request schemas are
+the runtime validators, and its response schemas describe the route output
+shapes. Mirror publishes the `/v1` routes, with no parallel version
+namespaces or version-negotiation mechanism, and does not publish a separate
+versioned compatibility guarantee for them.
+
+Clients should send only fields documented as supported here, handle errors
+for unsupported fields, and tolerate additional response properties or
+stream event types. OpenAI likewise documents additive response properties
+and streaming event types as backward-compatible changes, but that policy
+applies to OpenAI's API, not automatically to Mirror. See the official
+[OpenAI API backwards-compatibility policy](https://developers.openai.com/api/reference/overview#backwards-compatibility).
+
+The feature comparison below is a snapshot and can change as either API or
+Mirror changes. For the contract of a particular deployment, use that
+deployment's generated OpenAPI document rather than inferring support from
+the `/v1` prefix or from another OpenAI API version.
+
 ## Part 1: Official OpenAI API features Mirror can't (fully) offer
 
 ### Structurally impossible — no equivalent exists in backend-api
