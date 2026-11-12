@@ -753,9 +753,9 @@ export class ChatGptBackendClient {
   async sendMessage(opts: SendMessageOptions): Promise<SendMessageResult> {
     const timezone = opts.timezone ?? "UTC";
     const timezoneOffsetMin = opts.timezoneOffsetMin ?? 0;
-    // Work Mode itself is an asynchronous task protocol, not conversation SSE.
-    // Reject unsupported aliases; never silently substitute another model.
-    if (opts.model.endsWith("-wm")) throw new BackendApiError("Work Mode is not supported by this transport", 400);
+    // Model IDs with this private-catalog suffix have no verified compatibility
+    // contract for this conversation transport. Never silently substitute.
+    if (opts.model.endsWith("-wm")) throw new BackendApiError("Model IDs ending in -wm are unsupported by this transport because their meaning and compatibility are unverified", 400);
     const interactiveModel = opts.model;
     const firstTurn = !opts.conversationId;
     const parentMessageId = firstTurn

@@ -47,6 +47,30 @@ test.describe('server / upstream-errors-audit', () => {
       assert.equal(response.statusCode,200,response.body);
     } finally {await app.close();}
   });
+  for (const endpoint of ['/api/gpts', '/v1/models']) for (const status of [401, 403]) test(`${endpoint} keeps optional catalog HTTP ${status} authorization failures visible`, async () => {
+    const app = await buildApp({worker:true});
+    const backend = stubBackend('catalog-auth');
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoSidebar', async () => {
+      throw Object.assign(new Error('catalog authorization failure'), { status });
+    });
+    test.mock.method(globalThis, 'fetch', backend);
+    try {
+      const response = await app.inject({ method:'GET', url:endpoint, headers:{ authorization:'Bearer access' } });
+      assert.equal(response.statusCode, status, response.body);
+    } finally { await app.close(); }
+  });
+  for (const endpoint of ['/api/gpts', '/v1/models']) test(`${endpoint} classifies optional catalog errors that expose only statusCode`, async () => {
+    const app = await buildApp({worker:true});
+    const backend = stubBackend('catalog-status-code');
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoSidebar', async () => {
+      throw Object.assign(new Error('catalog unavailable'), { statusCode:503 });
+    });
+    test.mock.method(globalThis, 'fetch', backend);
+    try {
+      const response = await app.inject({ method:'GET', url:endpoint, headers:{ authorization:'Bearer access' } });
+      assert.equal(response.statusCode, 200, response.body);
+    } finally { await app.close(); }
+  });
   test('typed and plain JSON stream errors preserve the full response', async () => {
     for (const payload of [{type:'error',error:{message:'details',extra:'retained'}},{error:{message:'details'}},{error_code:'plain_error'}]) {
       const body = `data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`;
