@@ -82,17 +82,17 @@ Optional renderer verification: with dependencies installed in a ChatGPTBox chec
 Given the above, "fully OpenAI-compatible" isn't a reachable end state for this specific pairing — some gaps in Part 1 are permanent by construction (there is no dial upstream to turn), and some gaps in Part 2 are ChatGPT product features that the OpenAI API format has no slot for, no matter how much of backend-api gets reverse-engineered. The realistic target is: match the official request/response *shape* as closely as backend-api's actual capabilities allow, reject unsupported fields loudly and immediately rather than silently ignoring them (this is already Mirror's policy — see the strict Zod schemas in `apps/server/src/openai.ts`), and keep this document current as more of backend-api gets mapped or as OpenAI's own API surface changes.
 
 
-## Responses API text subset
+## Responses API text and image/file input subset
 
 `POST /v1/responses` adapts text generation to the Responses request/output format. It shares the Chat Completions engine, persistence, account checks, immutable assistant history, cancellation, and deadlines.
 
-- `input`: a string or message array with `system`, `developer`, `user`, or `assistant` roles. Content can be a string or `input_text`/`output_text` parts. Returned assistant message items can be included in subsequent input history.
+- `input`: a string or message array with `system`, `developer`, `user`, or `assistant` roles. Content can be a string, `input_text`/`output_text` parts, `input_image` parts with an `image_url` string, or `input_file` parts with `file_data` or `file_url` and an optional filename. Image and file URLs or inline data are resolved and uploaded through the same path as Chat Completions. The `detail` image field is accepted for shape compatibility but has no upstream setting. File IDs are unsupported because Mirror does not provide an OpenAI Files API for resolving them. Returned assistant message items can be included in subsequent input history.
 - `instructions`: optional system instructions. `model`, `stream`, `store`, and Mirror `metadata` routing fields are supported. `max_output_tokens` is accepted but ignored so answers remain complete.
 - JSON returns a `response` object with a completed assistant message in `output` and `output_text` content parts. Token `usage` is null.
 - Streaming emits named `response.created`, `response.in_progress`, output-item/content-part lifecycle events, `response.output_text.delta`, and `response.completed`. Failures emit `response.failed`; truncated streams must not be treated as success. Empty text deltas keep silent connections active every ten seconds. There is no Chat Completions `[DONE]` marker.
 - Continue with the returned `metadata.conversation_id` (also a JSON response header) or resend full input history. Response IDs identify individual results; they are not conversation IDs. `previous_response_id` and GET/retrieve/delete response endpoints are not implemented.
 - Mirror's `store:false` means a non-resumable one-shot, as in Chat mode. It omits the continuation ID. This differs from OpenAI's response-object storage semantics; Mirror does not store retrievable response objects.
-- Tools/function calls, images/files/audio, structured output, background mode, and other unsupported request fields are rejected with HTTP 400 rather than silently ignored.
+- Tools/function calls, audio, structured output, background mode, and other unsupported request fields are rejected with HTTP 400 rather than silently ignored.
 
 ```json
 {
