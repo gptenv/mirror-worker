@@ -114,14 +114,14 @@ async function withFetch(handler, fn) {
 // GET /v1/models
 // ---------------------------------------------------------------------------
 
-test("GET /v1/models merges models, GPTs, and Projects, marks -wm models unsupported, and dedupes by id", async () => {
+test("GET /v1/models merges models, GPTs, and Projects, reports unverified -wm IDs as unsupported, and dedupes by id", async () => {
   useSession("account-models");
   await withFetch(
     stubBackend("account-models", {
       modelsBody: {
         models: [
           { slug: "gpt-4o", title: "GPT-4o" },
-          { slug: "gpt-5-work-wm", title: "GPT-5 (Work Mode)" },
+          { slug: "gpt-5-work-wm", title: "Private catalog variant" },
         ],
       },
       sidebarBody: { items: [{ id: "g-p-1", gizmo: { gizmo: { id: "g-p-1", display: { name: "My Project" } } } }] },
@@ -140,7 +140,8 @@ test("GET /v1/models merges models, GPTs, and Projects, marks -wm models unsuppo
       assert.equal(byId["gpt-4o"].mirror.supported, true);
       assert.equal(byId["gpt-4o"].mirror.execution_mode, "interactive");
       assert.equal(byId["gpt-5-work-wm"].mirror.supported, false);
-      assert.equal(byId["gpt-5-work-wm"].mirror.execution_mode, "unsupported_work");
+      assert.equal(byId["gpt-5-work-wm"].mirror.execution_mode, "unknown");
+      assert.equal(byId["gpt-5-work-wm"].mirror.support_reason, "unverified_model_suffix");
       assert.equal(byId["g-p-1"].owned_by, "chatgpt-project");
       assert.equal(byId["g-1"].owned_by, "chatgpt-gizmo");
       assert.equal(byId["g-1"].name, "Helper GPT");
@@ -182,7 +183,7 @@ test("an unparsable body is rejected with 400 and the schema's own message", asy
   assert.match(res.json().error.message, /(?:at least 1 element|>=1 items)/i);
 });
 
-test("a Work Mode (-wm) model is rejected before any upstream call", async () => {
+test("an unverified -wm model ID is rejected before any upstream call", async () => {
   useSession("account-validate-2");
   const res = await app.inject({
     method: "POST",
@@ -190,10 +191,10 @@ test("a Work Mode (-wm) model is rejected before any upstream call", async () =>
     payload: { stream: false, model: "gpt-5-wm", messages: [{ role: "user", content: "hi" }] },
   });
   assert.equal(res.statusCode, 400);
-  assert.match(res.json().error.message, /Work Mode/);
+  assert.match(res.json().error.message, /meaning and backend compatibility are unverified/);
 });
 
-test("a Work Mode model reached via metadata.mirror_model is also rejected", async () => {
+test("an unverified -wm model ID reached via metadata.mirror_model is also rejected", async () => {
   useSession("account-validate-2b");
   const res = await app.inject({
     method: "POST",
@@ -205,7 +206,7 @@ test("a Work Mode model reached via metadata.mirror_model is also rejected", asy
     },
   });
   assert.equal(res.statusCode, 400);
-  assert.match(res.json().error.message, /Work Mode/);
+  assert.match(res.json().error.message, /meaning and backend compatibility are unverified/);
 });
 
 test("a tool-role message is accepted as input for the next turn", async () => {

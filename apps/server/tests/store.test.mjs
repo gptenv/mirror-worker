@@ -12,6 +12,9 @@ test("account metadata is encrypted and conversation continuity persists", async
   try {
     store.saveVerifiedSession("account-1", "device-1");
     assert.equal(store.getSession().accountId, "account-1");
+    const verifiedSession = store.getSession();
+    store.updateMintedToken("synthetic-access", Date.now() + 60_000, "rotated-session");
+    assert.deepEqual(store.getSession(), verifiedSession, "request-scoped token updates must not persist credentials");
     assert.equal(readFileSync(path.join(dir, "mirror.db")).includes(Buffer.from("account-1")), false);
 
     const conversation = store.createConversation({

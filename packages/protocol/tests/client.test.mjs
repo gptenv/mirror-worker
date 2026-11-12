@@ -421,7 +421,7 @@ test("resolveAssetDownload throws when metadata has no download_url", () =>
     },
   ));
 
-// --- sendMessage: Work Mode rejection, prepareFollowup, sentinelHandshake -------------
+// --- sendMessage: unverified model rejection, prepareFollowup, sentinelHandshake ------
 
 function sseBody(payloads) {
   return new Response(payloads.map((p) => `data: ${p}\n\n`).join(""), {
@@ -443,7 +443,7 @@ const HAPPY_STREAM = () =>
     "[DONE]",
   ]);
 
-test("sendMessage rejects Work Mode aliases without any network call", async () => {
+test("sendMessage rejects an unverified -wm model ID without any network call", async () => {
   const client = new ChatGptBackendClient(fakeCreds());
   await assert.rejects(
     client.sendMessage({ prompt: "hi", model: "gpt-5-wm" }),

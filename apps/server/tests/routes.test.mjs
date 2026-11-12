@@ -1017,10 +1017,14 @@ test("Worker owner authentication handles cookie-only and non-Error failures saf
 test("upstream error handler preserves raw diagnostics when length metadata is absent", async () => {
   const fixture = await buildApp();
   fixture.get('/api/fixture-error', async () => { throw Object.assign(new Error('upstream failed'), { statusCode: 502, upstreamResponseText: 'synthetic upstream detail' }); });
+  fixture.get('/api/fixture-error-with-token-lengths', async () => { throw Object.assign(new Error('upstream failed'), { statusCode: 502, upstreamResponseText: 'synthetic upstream detail', tokenLengths: { accessToken: 7 } }); });
   try {
     const response = await fixture.inject({ url: '/api/fixture-error', headers: AUTH });
     assert.equal(response.statusCode, 502, response.body);
     assert.deepEqual(response.json().error, { message: 'synthetic upstream detail', upstream_response_text: 'synthetic upstream detail' });
+    const withTokenLengths = await fixture.inject({ url: '/api/fixture-error-with-token-lengths', headers: AUTH });
+    assert.equal(withTokenLengths.statusCode, 502, withTokenLengths.body);
+    assert.deepEqual(withTokenLengths.json().error, { message: 'synthetic upstream detail', upstream_response_text: 'synthetic upstream detail', token_lengths: { accessToken: 7 } });
   } finally { await fixture.close(); }
 });
 
