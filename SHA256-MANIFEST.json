@@ -106,7 +106,7 @@
   "apps/server/tests/responses.test.mjs": "bb0fdc68b7e8e71a0c7a7c1ee315928fd1df2ca8959b986746c26ead72d30124",
   "apps/server/tests/rich-output-routes.test.mjs": "047fb9bdb0bc60c40820260413e051261517f596e0a045294db3b7c355ab43ca",
   "apps/server/tests/rich-output.test.mjs": "c1324a8e9f254ae9cef40984108873b1c6322a1d4357622d5ef67fab8baaea8c",
-  "apps/server/tests/routes.test.mjs": "8d428979e7748a1f2567b2fef68c1b4e71dd76d8f8190f537a6b6ba7e72ed1d9",
+  "apps/server/tests/routes.test.mjs": "3fe2f8f0107f1629d9d4d2456def8942c394d78f3bb46d0ae52d2b0a79635a83",
   "apps/server/tests/schema.test.mjs": "03883f9691702471220929e703900523633e0898c29a1445a66ac530ed4af784",
   "apps/server/tests/security.test.mjs": "a255acfe27f5e4c494bc99e9686de86d10d2123eef17b68ec631798bee6674a8",
   "apps/server/tests/session-delivery.test.mjs": "5e32ee3a056672912a21a0fdfa9883639d30f41eb5f3030aefc234e4180b9815",
