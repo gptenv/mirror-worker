@@ -2,7 +2,7 @@
 
 Mirror's `/v1/chat/completions` and `/v1/models` speak OpenAI's wire format, but underneath they run on `chatgpt.com/backend-api` — the private protocol behind the ChatGPT web app, not the officially documented OpenAI API. Those two APIs were built for different purposes (one is a product backend for a specific first-party client, the other is a general-purpose developer API), so some gaps aren't bugs to fix — they're places where the two surfaces fundamentally don't line up. This document enumerates every point of divergence found so far, in both directions, and says which ones are permanent versus which are just not implemented yet.
 
-See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics referenced throughout. For a machine-readable version of the `/v1` request/response shapes described here, `GET /mirror/openapi` (add `?format=yaml` for YAML) serves an OpenAPI 3.1 document generated straight from the same Zod schemas the server validates against - see `apps/server/src/openapi-document.ts` - and `/mirror/api-docs` serves a Swagger UI for browsing and trying it live.
+See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics referenced throughout. For a machine-readable version of the `/v1` request/response shapes described here, `GET /mirror/openapi` (add `?format=yaml` for YAML) serves an OpenAPI 3.1 document generated from Zod schemas: request schemas are also used for runtime validation, while response schemas describe the shapes produced by route handlers. See `apps/server/src/openapi-document.ts`; `/mirror/api-docs` serves a Swagger UI for browsing and trying it live.
 
 ## Work-labeled catalog entries and `-wm`
 
