@@ -34,6 +34,15 @@ test("Responses image and file input maps to the existing attachment pipeline", 
   ]);
   assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [{ type: "input_image", file_id: "file_123" }] }] })), /file_id is unsupported/);
   assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [{ type: "input_file", file_id: "file_123" }] }] })), /file_id is unsupported/);
+  assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [
+    { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AAAA" }] },
+    { role: "assistant", content: "previous answer" },
+    { role: "user", content: "latest question" },
+  ] })), /final user message/);
+  assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [
+    { role: "user", content: "latest question" },
+    { role: "assistant", content: [{ type: "input_file", file_data: "data:text/plain;base64,SGk=" }] },
+  ] })), /final user message/);
 });
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {

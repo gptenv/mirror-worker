@@ -28,6 +28,16 @@ export const ResponsesBody = z.object({
 export type ResponsesRequest = z.infer<typeof ResponsesBody>;
 
 export function responsesToCompletion(body: ResponsesRequest) {
+  if (Array.isArray(body.input)) {
+    const lastIndex = body.input.length - 1;
+    body.input.forEach((item, index) => {
+      if (typeof item.content === "string") return;
+      if (item.content.some(part => part.type === "input_image" || part.type === "input_file") &&
+          (index !== lastIndex || item.role !== "user")) {
+        throw new Error("Responses image and file inputs are supported only in the final user message");
+      }
+    });
+  }
   const messages = typeof body.input === "string"
     ? [{ role: "user" as const, content: body.input }]
     : body.input.map(item => ({ role: item.role, content: typeof item.content === "string"
