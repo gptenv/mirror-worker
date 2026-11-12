@@ -45,6 +45,7 @@ for (const minimal of [true, false]) test(`Responses three turns, mixed transpor
       assert.ok(!wire.includes("chat.completion"));
       const events = wire.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
       assert.equal(events[0].type, "response.created");
+      assert.equal("completed_at" in events[0].response, false);
       assert.equal(events.at(-1).type, "response.completed");
       assert.deepEqual(events.map(e => e.sequence_number), events.map((_, i) => i));
       body = events.at(-1).response;
@@ -52,6 +53,7 @@ for (const minimal of [true, false]) test(`Responses three turns, mixed transpor
       assert.ok(wire.includes("event: response.completed\n"));
     } else body = await res.json();
     assert.equal(body.object, "response"); assert.equal(body.status, "completed");
+    assert.ok(Number.isInteger(body.completed_at));
     assert.match(body.id, /^resp_/); assert.equal(body.usage, null);
     id ??= body.metadata.conversation_id;
     assert.equal(body.metadata.conversation_id, id);
@@ -81,6 +83,8 @@ test("upstream errors produce response.failed without successful completion", as
   setup("failure"); globalThis.fetch = async () => { throw new Error("Synthetic upstream failure"); };
   const res = await post({ input: "Hello", stream: true });
   const wire = await res.text(); assert.ok(wire.includes("event: response.failed")); assert.ok(!wire.includes("event: response.completed"));
+  const failed = wire.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6))).at(-1);
+  assert.equal(failed.type, "response.failed"); assert.equal("completed_at" in failed.response, false);
 });
 test("Chat and Responses share history and reject assistant edits", async () => {
   const sent = []; setup("cross-mode", { sent });
