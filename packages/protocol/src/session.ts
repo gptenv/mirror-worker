@@ -24,7 +24,7 @@ const activeMints = new Map<string, Promise<MintedAccessToken>>();
 
 /** RFC 6265 cookie-octet: reject separators/control/non-ASCII before header interpolation. */
 function assertCookieValue(token: string): void {
-  if (!token || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z:<>?@\[\]{}]+$/.test(token)) {
+  if (!token || !/^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/.test(token)) {
     throw new TypeError("Session token contains characters that cannot be sent in a Cookie header.");
   }
 }
