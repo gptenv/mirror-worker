@@ -191,6 +191,43 @@ test("GET /v1/models aborts upstream catalog requests at its configured deadline
   }
 });
 
+test("GET /v1/models preserves caller cancellation and aborts its upstream request on disconnect", async () => {
+  useSession("account-models-disconnect");
+  const { request } = await import("node:http");
+  const previousTimeout = process.env.MIRROR_CATALOG_TIMEOUT_MS;
+  process.env.MIRROR_CATALOG_TIMEOUT_MS = "1000";
+  const started = Promise.withResolvers();
+  const aborted = Promise.withResolvers();
+  const realFetch = globalThis.fetch;
+  const { default: Fastify } = await import("fastify");
+  const server = Fastify();
+  await openai.registerOpenAiRoutes(server);
+  globalThis.fetch = async (_url, init = {}) => {
+    started.resolve();
+    return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => {
+      aborted.resolve(init.signal.reason);
+      reject(init.signal.reason);
+    }, { once: true }));
+  };
+  try {
+    const address = await server.listen({ host: "127.0.0.1", port: 0 });
+    const req = request(`${address}/v1/models`);
+    req.on("error", () => {});
+    req.end();
+    await started.promise;
+    req.destroy();
+    const reason = await aborted.promise;
+    assert.equal(reason?.name, "AbortError");
+    await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal(reason?.statusCode, undefined, "caller cancellation must not become a deadline response");
+  } finally {
+    await server.close();
+    globalThis.fetch = realFetch;
+    if (previousTimeout === undefined) delete process.env.MIRROR_CATALOG_TIMEOUT_MS;
+    else process.env.MIRROR_CATALOG_TIMEOUT_MS = previousTimeout;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // POST /v1/chat/completions - request validation (before touching upstream)
 // ---------------------------------------------------------------------------
