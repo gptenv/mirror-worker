@@ -2,7 +2,7 @@
 
 Mirror's `/v1/chat/completions` and `/v1/models` speak OpenAI's wire format, but underneath they run on `chatgpt.com/backend-api` — the private protocol behind the ChatGPT web app, not the officially documented OpenAI API. Those two APIs were built for different purposes (one is a product backend for a specific first-party client, the other is a general-purpose developer API), so some gaps aren't bugs to fix — they're places where the two surfaces fundamentally don't line up. This document enumerates every point of divergence found so far, in both directions, and says which ones are permanent versus which are just not implemented yet.
 
-See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics referenced throughout. For a machine-readable version of the `/v1` request/response shapes described here, `GET /mirror/openapi` (add `?format=yaml` for YAML) serves an OpenAPI 3.1 document generated straight from the same Zod schemas the server validates against - see `apps/server/src/openapi-document.ts` - and `/mirror/api-docs` serves a Swagger UI for browsing and trying it live.
+See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics referenced throughout. For a machine-readable version of the `/v1` request/response shapes described here, `GET /mirror/openapi` (add `?format=yaml` for YAML) serves an OpenAPI 3.1 document generated from Zod schemas: request schemas are also used for runtime validation, while response schemas describe the shapes produced by route handlers. See `apps/server/src/openapi-document.ts`; `/mirror/api-docs` serves a Swagger UI for browsing and trying it live.
 
 ## Versioning and compatibility policy
 
@@ -10,8 +10,9 @@ Mirror's `/v1` paths identify its OpenAI-shaped routes. They do not mean that
 Mirror implements every OpenAI API feature, shares OpenAI's release schedule,
 or carries the public API's compatibility guarantees. The current Mirror
 request and response contract is the behavior documented here and in the
-instance's generated `GET /mirror/openapi` document; that document is built
-from the schemas enforced by the running server. This project does not
+instance's generated `GET /mirror/openapi` document; its request schemas are
+the runtime validators, and its response schemas describe the route output
+shapes. This project does not
 currently expose a selectable API version or publish a separate versioned
 compatibility guarantee for these routes.
 
