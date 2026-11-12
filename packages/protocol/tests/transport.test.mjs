@@ -9,7 +9,11 @@ test.describe("request-scoped upstream routing", () => {
     let calls = 0;
     await runWithUpstreamFetch(async () => { calls++; return Response.json({ accessToken: "unused" }); }, async () => {
       for (const token of ["bad; Secure", "bad\r\nX-Injected: yes", "bad\\value", "bad value", "é"]) {
-        await assert.rejects(mintAccessToken(token), TypeError);
+        await assert.rejects(mintAccessToken(token), (error) => {
+          assert.ok(error instanceof TypeError);
+          assert.equal(error.message.includes(token), false);
+          return true;
+        });
       }
     });
     assert.equal(calls, 0);
