@@ -167,6 +167,44 @@ test("GET /v1/models tolerates catalog outages", async () => {
   );
 });
 
+test("GET /v1/models reports a primary catalog outage instead of returning a fabricated catalog", async () => {
+  useSession("account-models-primary-outage");
+  const backend = stubBackend("account-models-primary-outage", {});
+  await withFetch(async (url, init) => {
+    if (new URL(String(url)).pathname.endsWith("/models"))
+      return new Response("catalog temporarily unavailable", { status: 503 });
+    return backend(url, init);
+  }, async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/models" });
+    assert.equal(res.statusCode, 503, res.body);
+    assert.ok(res.json().error);
+    assert.equal(res.json().data, undefined);
+  });
+});
+
+test("an unknown model is sent upstream and its rejection is returned without substituting a listed model", async () => {
+  useSession("account-unknown-model");
+  const sent = [];
+  const backend = stubBackend("account-unknown-model", { sent });
+  await withFetch(async (url, init) => {
+    if (new URL(String(url)).pathname.endsWith("/conversation/init")) {
+      const body = JSON.parse(init.body);
+      assert.equal(body.requested_default_model, "unverified-model-id");
+      return Response.json({ error: "Unknown model" }, { status: 400 });
+    }
+    return backend(url, init);
+  }, async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: { model: "unverified-model-id", stream: false, messages: [{ role: "user", content: "hello" }] },
+    });
+    assert.equal(res.statusCode, 400, res.body);
+    assert.match(res.json().error.message, /Unknown model/);
+    assert.equal(sent.some((item) => item.pathname.endsWith("/f/conversation")), false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // POST /v1/chat/completions - request validation (before touching upstream)
 // ---------------------------------------------------------------------------

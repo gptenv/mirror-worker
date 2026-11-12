@@ -91,7 +91,7 @@
   "apps/server/tests/local-route-auth.test.mjs": "a62af89b4f4be46adec0619891d41a02f3b85bfb58bc4d156fa3de743891e7f5",
   "apps/server/tests/native-credentials.test.mjs": "0d9a5c1ae9bdaecd7ca860ec3f9c9515062ce3c5d08d231dc669a6b2f801011a",
   "apps/server/tests/openai-edit-history.test.mjs": "2daadede6a7d6dd13ebe2d1eadd6487746eb1521a33d6b51979eb116f1da48c6",
-  "apps/server/tests/openai-routes.test.mjs": "d2636fc5c94b8e9034340b8f4d6131ce844620e15151edbf820e98b23d0c7b7e",
+  "apps/server/tests/openai-routes.test.mjs": "b07ceb050375ef2a16e048e05b0359211ab04c093bfdfede01d0d4b377f406f2",
   "apps/server/tests/openai-stream-lifecycle.test.mjs": "997eaf33d452f68b8a11c86424379bb3b37cd2ccb64d550549fd3149763ae02d",
   "apps/server/tests/openai-tool-calls.test.mjs": "1a9d518d4f98d2770004d004aacb75d50cd480ecb64329d54d0cc90b9093da9f",
   "apps/server/tests/openapi-contract.test.mjs": "6cf749dc98e49f075d4dec2d3456d0153f94d8b19ff5079bf86683a865fa6294",
