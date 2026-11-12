@@ -4,6 +4,29 @@ Mirror's `/v1/chat/completions` and `/v1/models` speak OpenAI's wire format, but
 
 See [PROTOCOL.md](./PROTOCOL.md) for the underlying backend-api mechanics referenced throughout. For a machine-readable version of the `/v1` request/response shapes described here, `GET /mirror/openapi` (add `?format=yaml` for YAML) serves an OpenAPI 3.1 document generated straight from the same Zod schemas the server validates against - see `apps/server/src/openapi-document.ts` - and `/mirror/api-docs` serves a Swagger UI for browsing and trying it live.
 
+## Versioning and compatibility policy
+
+Mirror's `/v1` paths identify its OpenAI-shaped routes. They do not mean that
+Mirror implements every OpenAI API feature, shares OpenAI's release schedule,
+or carries the public API's compatibility guarantees. The current Mirror
+request and response contract is the behavior documented here and in the
+instance's generated `GET /mirror/openapi` document; that document is built
+from the schemas enforced by the running server. This project does not
+currently expose a selectable API version or publish a separate versioned
+compatibility guarantee for these routes.
+
+Clients should send only fields documented as supported here, handle errors
+for unsupported fields, and tolerate additional response properties or
+stream event types. OpenAI likewise documents additive response properties
+and streaming event types as backward-compatible changes, but that policy
+applies to OpenAI's API, not automatically to Mirror. See the official
+[OpenAI API backwards-compatibility policy](https://developers.openai.com/api/reference/overview#backwards-compatibility).
+
+The feature comparison below is a snapshot and can change as either API or
+Mirror changes. For the contract of a particular deployment, use that
+deployment's generated OpenAPI document rather than inferring support from
+the `/v1` prefix or from another OpenAI API version.
+
 ## Part 1: Official OpenAI API features Mirror can't (fully) offer
 
 ### Structurally impossible — no equivalent exists in backend-api
