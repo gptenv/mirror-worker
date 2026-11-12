@@ -110,9 +110,9 @@ const CompletionResponse = z
       z.object({
         index: z.number().int(),
         message: ChatMessageResponse,
-        finish_reason: z.literal("stop").meta({
+        finish_reason: z.enum(["stop", "tool_calls"]).meta({
           description:
-            "Mirror reports stop on successful completion and never truncates responses based on token limits or stop strings.",
+            "Mirror emits stop for ordinary completions and tool_calls when it returns client tool calls. These are the successful finish reasons currently emitted by Mirror.",
         }),
       }),
     ),
@@ -342,7 +342,7 @@ const PublicGizmoSummary = z
 /** Mirrors EgressStatus from egress.ts. */
 const EgressStatus = z
   .object({
-    mode: z.literal("direct"),
+    mode: z.enum(["direct", "worker"]),
     required: z.literal(false),
     verified: z.boolean(),
     checkedAt: z.string().datetime().nullable(),
@@ -350,12 +350,45 @@ const EgressStatus = z
   })
   .meta({ id: "EgressStatus", description: "Outbound request routing status for this deployment." });
 
+const DiagnosticResponse = z
+  .object({
+    schemaVersion: z.literal(1),
+    build: z.object({ version: z.string(), revision: z.string() }),
+    api: z.object({ reachable: z.literal(true), keyConfigured: z.boolean() }),
+    storage: z.object({ engine: z.literal("sqlite"), healthy: z.boolean(), schemaVersion: z.number().int().nullable() }),
+    egress: z.object({
+      required: z.literal(false),
+      verified: z.literal(false),
+      mode: z.enum(["direct", "worker"]),
+      checkedAt: z.null(),
+    }),
+    session: z.object({ saved: z.boolean(), generationVerified: z.literal(false) }),
+    recentFailures: z.array(z.object({
+      at: z.string().datetime(),
+      code: z.string(),
+      requestId: z.string(),
+      protocolCategory: z.string().nullable(),
+    })),
+    nextAction: z.string(),
+  })
+  .meta({ id: "DiagnosticResponse", description: "Local diagnostic state; egress and generation are not verified by this endpoint." });
+
 /** The shape stored/returned by store.ts's getInstructions(). */
 const InstructionMessage = z
   .object({ role: z.string(), content: z.string() })
   .meta({ id: "InstructionMessage" });
 
 const nativeApiPaths: ZodOpenApiPathsObject = {
+  "/api/diagnostics": {
+    get: {
+      summary: "Read local Worker diagnostics",
+      description: "Reports local storage, configuration, recent failures, and runtime egress mode. It does not verify upstream connectivity or generation. On Workers this route requires owner authentication when MIRROR_OWNER_ACCOUNT_ID is configured.",
+      tags: ["Mirror"],
+      responses: {
+        "200": { description: "Local diagnostic state", content: { "application/json": { schema: DiagnosticResponse } } },
+      },
+    },
+  },
   "/api/health": {
     get: {
       summary: "Health check",
