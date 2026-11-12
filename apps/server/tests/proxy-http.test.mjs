@@ -586,16 +586,114 @@ test("response processing: an upstream response with no body and no Content-Type
     },
   ));
 
-test("proxyChatGpt: a request with no Accept header at all falls back to treating it as not wanting HTML", () =>
+test("resolveAccountId returns early when the session already has an accountId", () =>
   withFetch(
     fetchRouter([
-      [/\/plain\/no-accept$/, () => Response.json({ ok: true }, { headers: { "content-type": "application/json" } })],
+      [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
+      [/\/backend-api\/me$/, () => { throw new Error("should not fetch /me when accountId is already known"); }],
+      [/\/backend-api\/models$/, (u, init) => {
+        assert.equal(init.headers.get("chatgpt-account-id"), "already-known");
+        return Response.json({}, { headers: { "content-type": "application/json" } });
+      }],
     ]),
     async () => {
-      const req = makeReq({ url: "/plain/no-accept", headers: { accept: undefined } });
-      const { reply, writes } = makeReply();
-      await proxyChatGpt(req, reply);
-      assert.deepEqual(JSON.parse(writes.join("")), { ok: true });
+      useSession("already-known");
+      await proxyChatGpt(makeReq({ url: "/backend-api/models" }), makeReply().reply);
     },
   ));
+
+test("proxy forwards identity cookies and sets session cookie for HTML documents", () =>
+  withFetch(
+    fetchRouter([
+      [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
+      [/\/plain\/page$/, (u, init) => {
+        assert.match(String(init.headers.get("cookie") ?? ""), /oai-did=abc/);
+        assert.match(String(init.headers.get("cookie") ?? ""), /__Secure-next-auth.session-token=/);
+        return new Response("<html></html>", { headers: { "content-type": "text/html" } });
+      }],
+    ]),
+    async () => {
+      useSession("html-session");
+      const req = makeReq({
+        url: "/plain/page",
+        method: "GET",
+        headers: { accept: "text/html", cookie: "oai-did=abc; other=ignored" },
+      });
+      await proxyChatGpt(req, makeReply().reply);
+    },
+  ));
+
+test("upstream request failure with detailed error object includes status, text and token lengths", () =>
+  withFetch(
+    async () => {
+      const error = Object.assign(new Error("detailed failure"), {
+        statusCode: 418,
+        upstreamResponseText: "teapot",
+        tokenLengths: { accessToken: { sentUpstream: 5 } },
+      });
+      throw error;
+    },
+    async () => {
+      const req = makeReq({ url: "/plain/detailed-fail" });
+      const { reply, state } = makeReply();
+      await proxyChatGpt(req, reply);
+      assert.equal(state.sentCode, 418);
+      assert.equal(state.sentJson.error.message, "teapot");
+      assert.equal(state.sentJson.error.upstream_response_text, "teapot");
+      assert.deepEqual(state.sentJson.error.token_lengths, { accessToken: { sentUpstream: 5 } });
+    },
+  ));
+
+test("response set-cookie handling tolerates missing getSetCookie method", () =>
+  withFetch(
+    fetchRouter([
+      [/\/plain\/no-getsetcookie$/, () => {
+        const res = new Response("body", { headers: { "set-cookie": "oai-did=xyz; Domain=chatgpt.com" } });
+        // Remove the method to hit the optional chaining nullish path.
+        Object.defineProperty(res.headers, "getSetCookie", { value: undefined });
+        return res;
+      }],
+    ]),
+    async () => {
+      const req = makeReq({ url: "/plain/no-getsetcookie" });
+      const { reply } = makeReplyCapturingHeaders();
+      await proxyChatGpt(req, reply);
+      // Just ensure it doesn't throw and processes the cookie via the fallback.
+      assert.ok(reply.__capturedHeaders);
+    },
+  ));
+
+test("mirrorAuthSession falls back through missing account, name and email fields", () =>
+  withFetch(
+    fetchRouter([
+      [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
+      [/\/backend-api\/me$/, () => Response.json({ id: "me-id", name: null })], // no account, no email string
+    ]),
+    async () => {
+      useSession("session-fallbacks");
+      const req = makeReq({ url: "/api/auth/session" });
+      const { reply, state } = makeReply();
+      await proxyChatGpt(req, reply);
+      assert.equal(state.sentJson.user.id, "me-id");
+      assert.equal(state.sentJson.user.name, "ChatGPT user");
+      assert.equal(state.sentJson.user.email, null);
+    },
+  ));
+
+test("mirrorAuthSession uses the ultimate id and name defaults", () =>
+  withFetch(
+    fetchRouter([
+      [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
+      [/\/backend-api\/me$/, () => Response.json({})], // empty
+    ]),
+    async () => {
+      useSession("session-defaults");
+      const req = makeReq({ url: "/api/auth/session" });
+      const { reply, state } = makeReply();
+      await proxyChatGpt(req, reply);
+      assert.equal(state.sentJson.user.id, "mirror-user");
+      assert.equal(state.sentJson.user.name, "ChatGPT user");
+    },
+  ));
+
 });

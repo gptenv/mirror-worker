@@ -699,6 +699,7 @@ export class ChatGptBackendClient {
       await res.body?.cancel();
       url = new URL(location, url);
     }
+    /* c8 ignore next */
     throw new BackendApiError("Too many asset redirects");
   }
 

@@ -328,7 +328,16 @@ test("without suppressFirstTurnToolNarration, browsing status cards behave exact
 
 // --- applyOp branches -----------------------------------------------------------------
 
-test("a single add carries conversation_id and error_code together", () => {
+test("error field is captured as string or stringified object, and typed error events set upstream_error", () => {
+  const reducer = new ConversationStreamReducer();
+  reducer.feed(JSON.stringify({ error: "plain-error" }));
+  assert.equal(reducer.error, "plain-error");
+  reducer.feed(JSON.stringify({ error: { code: 42 } }));
+  assert.equal(reducer.error, JSON.stringify({ code: 42 }));
+  reducer.feed(JSON.stringify({ type: "error" }));
+  assert.equal(reducer.error, "upstream_error");
+});
+
   const reducer = new ConversationStreamReducer();
   reducer.feed(JSON.stringify({ p: "", o: "add", v: { conversation_id: "conv-9", error_code: "rate_limited" } }));
   assert.equal(reducer.conversationIdValue, "conv-9");
@@ -603,5 +612,4 @@ test("first-turn asset-pointer image parts remain visible", () => {
   } } }));
   const message = reducer.drainEvents().find(event => event.kind === "message");
   assert.equal(message.displayHidden, undefined);
-});
 });

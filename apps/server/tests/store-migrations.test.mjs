@@ -168,6 +168,42 @@ test("a malformed legacy store.json is left in place and never migrated", async 
   }
 });
 
+test("legacy store.json is deleted without migration when a session already exists at startup", async () => {
+  const dir = freshDir("migrate-early-session");
+  process.env.MIRROR_DATA_DIR = dir;
+  delete process.env.MIRROR_STORE_KEY;
+  try {
+    // First load creates the key and a session.
+    const first = await import(`../dist/store.js?store-early-a=${Date.now()}`);
+    first.saveVerifiedSession("already-there", "device");
+    writeFileSync(path.join(dir, "store.json"), JSON.stringify({ session: { sessionToken: "ignored" } }));
+    // Second load sees the existing session and the legacy file -> unlink without importing.
+    const second = await import(`../dist/store.js?store-early-b=${Date.now()}`);
+    assert.equal(existsSync(path.join(dir, "store.json")), false);
+    assert.equal(second.getSession().accountId, "already-there");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("removeStoredSessionCredentials deletes a corrupted session on startup", async () => {
+  const dir = freshDir("corrupted-on-start");
+  process.env.MIRROR_DATA_DIR = dir;
+  delete process.env.MIRROR_STORE_KEY;
+  try {
+    const first = await import(`../dist/store.js?store-corrupt-start-a=${Date.now()}`);
+    first.saveVerifiedSession("will-be-corrupted", "device");
+    const raw = new DatabaseSync(path.join(dir, "mirror.db"));
+    raw.prepare("UPDATE settings SET value = ? WHERE key = 'session'").run("not-v1-encrypted");
+    raw.close();
+    // Fresh import runs removeStoredSessionCredentials, which catches the decrypt failure and deletes the row.
+    const second = await import(`../dist/store.js?store-corrupt-start-b=${Date.now()}`);
+    assert.equal(second.getSession(), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("legacy store.json migration is skipped once a real session already exists", async () => {
   const dir = freshDir("migrate-skip");
   process.env.MIRROR_DATA_DIR = dir;

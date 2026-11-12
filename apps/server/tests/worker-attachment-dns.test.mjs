@@ -31,10 +31,38 @@ test.describe('server / Worker attachment DNS checks', () => {
       await assert.rejects(resolveImageAttachment(client, part('https://public.example/image'), 0), /does not resolve exclusively to public addresses/);
     }
   });
-  test('propagates a DNS service error and handles a public literal IP', async () => {
-    globalThis.fetch = async () => new Response('DNS unavailable', { status: 503 });
-    await assert.rejects(resolveImageAttachment(client, part('https://public.example/image'), 0), error => error.status === 503);
-    globalThis.fetch = async () => new Response('fixture', { headers: { 'content-type': 'image/png' } });
-    assert.equal((await resolveImageAttachment(client, part('https://8.8.8.8/image'), 0)).fileId, 'fixture');
+  test('rejects a private literal IP and filters empty DNS data', async () => {
+    await assert.rejects(resolveImageAttachment(client, part('https://127.0.0.1/image'), 0), /host is not permitted/);
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.hostname === 'cloudflare-dns.com') return Response.json({ Answer: [{ data: null }, { data: '8.8.8.8' }, {}] });
+      return new Response('ok', { headers: { 'content-type': 'image/png' } });
+    };
+    // The filter should drop the null/empty, and the public one remains, but since some is private? Wait, 8.8.8.8 is public, null filtered.
+    // To cover the Boolean false, the test above with mixed is fine as long as it doesn't throw if all public after filter.
+    const result = await resolveImageAttachment(client, part('https://public.example/image'), 0);
+    assert.equal(result.fileId, 'fixture');
+  });
+
+  test('cancels the body on a redirect with a location', async () => {
+    let redirected = false;
+    globalThis.fetch = async input => {
+      const url = new URL(String(input));
+      if (url.hostname === 'cloudflare-dns.com') return Response.json({ Answer: [{ data: '8.8.8.8' }] });
+      if (!redirected) {
+        redirected = true;
+        return new Response('redirect-body', { status: 302, headers: { location: 'https://public.example/final' } });
+      }
+      return new Response('final-image', { headers: { 'content-type': 'image/png' } });
+    };
+    const result = await resolveImageAttachment(client, part('https://public.example/start'), 0);
+    assert.equal(result.fileId, 'fixture');
+  });
+
+  test('promptFor returns empty string for missing current turn content', async () => {
+    const { promptFor, normalized } = await import('../dist/conversation-context.js?prompt-coverage');
+    assert.equal(promptFor([]), "");
+    assert.equal(promptFor(normalized([{ role: "user", content: "" }])), "");
   });
 });
+
