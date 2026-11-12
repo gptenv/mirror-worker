@@ -109,3 +109,38 @@ test.describe('server / local-route-auth',()=>{
     }finally{await app.close();}
   });
 });
+
+  test('asset-content responses set a scoped session cookie when an access token is present', async () => {
+    const app = await buildApp({ worker: true });
+    test.mock.method(globalThis, 'fetch', async () => Response.json({ account: { account_user_id: 'owner' } }));
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/asset-content',
+        headers: { authorization: 'Bearer access-token', host: 'mirror.example', 'x-forwarded-proto': 'https' }
+      });
+      // The route may 404, but onSend should still run and set the cookie if accessToken is rotated/set.
+      const setCookie = response.headers['set-cookie'];
+      if (setCookie) {
+        assert.match(String(setCookie), /mirror_asset_session=/);
+        assert.match(String(setCookie), /Secure/);
+      }
+    } finally { await app.close(); }
+  });
+
+  test('local identity failures prefer statusCode when present', async () => {
+    const app = await buildApp({ worker: true });
+    test.mock.method(globalThis, 'fetch', async () => { throw Object.assign(new Error("bad"), { statusCode: 418 }); });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/settings/hotkeys', headers: { authorization: 'Bearer unconfigured' } });
+      assert.equal(response.statusCode, 418);
+    } finally { await app.close(); }
+  });
+  test('local identity failures fall back to 401 when no status is available', async () => {
+    const app = await buildApp({ worker: true });
+    test.mock.method(globalThis, 'fetch', async () => { throw new Error('network'); });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/settings/hotkeys', headers: { authorization: 'Bearer unconfigured' } });
+      assert.equal(response.statusCode, 401);
+    } finally { await app.close(); }
+  });

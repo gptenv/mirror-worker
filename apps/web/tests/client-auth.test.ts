@@ -97,3 +97,9 @@ test.describe('web / client-auth', () => {
     assert.equal((await mirrorFetch('/api/health')).status, 200);
   });
 });
+
+  test('storeAccessToken sets a secure asset cookie on https', () => {
+    Object.defineProperty(location, 'protocol', { value: 'https:', configurable: true });
+    storeAccessToken('secure-access');
+    assert.match(document.cookie, /Secure/);
+  });
