@@ -11,7 +11,7 @@ process.env.MIRROR_API_KEY = 'synthetic-access-fixture';
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
 const { registerOpenAiRoutes } = await import("../dist/openai.js");
-const { ResponsesBody } = await import("../dist/responses.js");
+const { ResponsesBody, responsesToCompletion } = await import("../dist/responses.js");
 const app = Fastify();
 await registerOpenAiRoutes(app);
 const address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -71,9 +71,24 @@ test("one-shot, instructions and input_text", async () => {
   assert.equal(res.headers.get("x-mirror-conversation-id"), null);
   assert.equal(store.countConversations("one-shot"), 0);
 });
+test("Responses input_image maps to the shared image attachment format", () => {
+  const body = ResponsesBody.parse({ input: [{ role: "user", content: [
+    { type: "input_text", text: "What is in this picture?" },
+    { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=", detail: "high" },
+  ] }] });
+  assert.deepEqual(responsesToCompletion(body).messages, [{ role: "user", content: [
+    { type: "text", text: "What is in this picture?" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "high" } },
+  ] }]);
+  assert.deepEqual(responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
+    { type: "input_image", image_url: "https://example.com/image.png" },
+  ] }] })).messages[0].content, [
+    { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+  ]);
+});
 test("unsupported features fail before upstream access", async () => {
   setup("invalid"); globalThis.fetch = async () => { throw new Error("Must not call upstream"); };
-  for (const extra of [{ tools: [] }, { previous_response_id: "resp_123" }, { background: true }, { input: "" }, { input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.com/x" }] }] }]) {
+  for (const extra of [{ tools: [] }, { previous_response_id: "resp_123" }, { background: true }, { input: "" }, { input: [{ role: "user", content: [{ type: "input_image", image_url: { url: "https://example.com/x" } }] }] }]) {
     const res = await post({ input: "Hello", ...extra }); assert.equal(res.status, 400); assert.ok((await res.json()).error);
   }
 });
