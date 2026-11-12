@@ -1,7 +1,7 @@
 import { needsRichOutput, renderRichOutput, type RichOutput } from "./rich-output.js";
 import { createAssetLinks } from "./asset-content.js";
 import { ResponsesBody, responsesToCompletion, createResponseWriter } from "./responses.js";
-import { abortable, turnDeadline } from "./deadlines.js";
+import { abortable, deadlineMs, turnDeadline } from "./deadlines.js";
 import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
 import "./zod-openapi-init.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -489,8 +489,18 @@ export async function registerOpenAiRoutes(
   app: FastifyInstance,
   prepareStream?: (reply: FastifyReply) => Promise<void>,
 ): Promise<void> {
-  app.get("/v1/models", async () => {
-    const creds = await getValidCredentials();
+  app.get("/v1/models", async (req, reply) => {
+    const controller = new AbortController();
+    const abortClient = () => controller.abort(new DOMException("Client disconnected", "AbortError"));
+    const abortReply = () => { if (!reply.raw.writableEnded) abortClient(); };
+    const timeout = setTimeout(() => controller.abort(Object.assign(
+      new Error("Model catalog deadline exceeded"), { statusCode: 504 },
+    )), deadlineMs(process.env.MIRROR_CATALOG_TIMEOUT_MS, 60_000));
+    req.raw.once("aborted", abortClient);
+    reply.raw.once("close", abortReply);
+    try {
+    const signal = controller.signal;
+    const creds = await abortable(getValidCredentials(), signal);
     const client = new ChatGptBackendClient(creds);
     const optionalGizmos = (request: Promise<Record<string, unknown>>) => request.catch((error: unknown) => {
       const status = (error as { status?: number; statusCode?: number } | null)?.status
@@ -501,15 +511,15 @@ export async function registerOpenAiRoutes(
       return {};
     });
     const [modelsRaw, projectsRaw, gptsRaw] = await Promise.all([
-      client.fetchModels(),
-      optionalGizmos(client
-        .fetchGizmoSidebar({
-          ownedOnly: false,
-          limit: 50,
-          conversationsPerGizmo: 0,
-        })),
-      optionalGizmos(client.fetchGizmoBootstrap({ limit: 20 })),
+      client.fetchModels(signal),
+      optionalGizmos(client.fetchGizmoSidebar({
+        ownedOnly: false,
+        limit: 50,
+        conversationsPerGizmo: 0,
+      }, signal)),
+      optionalGizmos(client.fetchGizmoBootstrap({ limit: 20 }, signal)),
     ]);
+    signal.throwIfAborted();
     const models = normalizeModels(modelsRaw);
     const seen = new Set<string>();
     const gizmos = [
@@ -541,6 +551,11 @@ export async function registerOpenAiRoutes(
         })),
       ],
     };
+    } finally {
+      clearTimeout(timeout);
+      req.raw.off("aborted", abortClient);
+      reply.raw.off("close", abortReply);
+    }
   });
 
   const handleCompletion = async (req: FastifyRequest, reply: FastifyReply) => {
