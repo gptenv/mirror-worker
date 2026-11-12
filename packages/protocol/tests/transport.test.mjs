@@ -5,6 +5,20 @@ import { mintAccessToken } from "../dist/session.js";
 import { ChatGptBackendClient } from "../dist/client.js";
 
 test.describe("request-scoped upstream routing", () => {
+  test("rejects cookie separators and control characters before session exchange", async () => {
+    let calls = 0;
+    await runWithUpstreamFetch(async () => { calls++; return Response.json({ accessToken: "unused" }); }, async () => {
+      for (const token of ["bad; Secure", "bad\r\nX-Injected: yes", "bad\\value", "bad value", "é"]) {
+        await assert.rejects(mintAccessToken(token), (error) => {
+          assert.ok(error instanceof TypeError);
+          assert.equal(error.message.includes(token), false);
+          return true;
+        });
+      }
+    });
+    assert.equal(calls, 0);
+  });
+
   test("routes session exchanges and backend calls through the supplied binding", async () => {
     const sessionToken = "session-" + "x".repeat(24000);
     const calls = [];
