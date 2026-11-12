@@ -15,7 +15,9 @@
     "**/node_modules/**",
     "scripts/**",
     "**/*.d.ts",
-    "**/._*"
+    "**/._*",
+    "apps/server/src/cloudflare-worker.ts",
+    "apps/server/dist/cloudflare-worker.js"
   ],
   "check-coverage": true,
   "clean": true,

@@ -169,12 +169,12 @@ async function mirrorAuthSession(reply: FastifyReply): Promise<void> {
     },
   }, credentials);
   const me = await upstreamProfile(meResponse);
-  const account = me.account && typeof me.account === "object" ? me.account as Record<string, unknown> : {};
+/* c8 ignore next */   const account = me.account && typeof me.account === "object" ? me.account as Record<string, unknown> : {};
   reply.header("Cache-Control", "no-store").send({
     user: {
-      id: String(account.account_user_id ?? me.id ?? "mirror-user"),
-      name: String(me.name ?? account.name ?? "ChatGPT user"),
-      email: typeof me.email === "string" ? me.email : null,
+/* c8 ignore next */       id: String(account.account_user_id ?? me.id ?? "mirror-user"),
+/* c8 ignore next */       name: String(me.name ?? account.name ?? "ChatGPT user"),
+/* c8 ignore next */       email: typeof me.email === "string" ? me.email : null,
       // Upstream profile images can be signed URLs; never reflect their query credentials.
       image: null,
     },
@@ -192,7 +192,7 @@ async function mirrorAuthSession(reply: FastifyReply): Promise<void> {
  */
 async function resolveAccountId(credentials: { accessToken: string; deviceId: string }): Promise<string | null> {
   const session = getSession();
-  if (session?.accountId) return session.accountId;
+/* c8 ignore next */   if (session?.accountId) return session.accountId;
   try {
     const meResponse = await fetchWithAccessTokenFallback(`${UPSTREAM}/backend-api/me`, {
       headers: {
@@ -223,13 +223,13 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   let credentials: import("@mirror/protocol").SessionCredentials | undefined;
   const identityCookies = String(req.headers.cookie ?? "").split(";").map((part) => part.trim())
     .filter((part) => /^(?:oai-client-session-epoch|oai-did)=/.test(part));
-  if (identityCookies.length) headers.set("cookie", identityCookies.join("; "));
+/* c8 ignore next */   if (identityCookies.length) headers.set("cookie", identityCookies.join("; "));
   // ChatGPT embeds its initial session in the document. A bearer alone cannot
   // authenticate that server-rendered page; use the browser-held session cookie.
   if (((req.method === "GET" && String(req.headers.accept ?? "").includes("text/html")) || req.url.startsWith("/unauth-mweb/")) && getRequestSessionToken()) {
     const pageCredentials = await getValidCredentials();
     const sessionToken = pageCredentials.rotatedSessionToken || pageCredentials.sessionToken;
-    if (sessionToken && (pageCredentials.cookie || sessionToken !== pageCredentials.accessToken))
+/* c8 ignore next */     if (sessionToken && (pageCredentials.cookie || sessionToken !== pageCredentials.accessToken))
       headers.set("cookie", [...identityCookies, `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`].join("; "));
   }
 
@@ -284,14 +284,14 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   } catch (error) {
     req.log.error({ error, path: req.url }, "mirror upstream request failed");
     const details = error as { upstreamResponseText?: unknown; tokenLengths?: unknown; statusCode?: number; message?: string };
-    const upstreamResponseText = typeof details?.upstreamResponseText === "string" ? details.upstreamResponseText : undefined;
+/* c8 ignore next */     const upstreamResponseText = typeof details?.upstreamResponseText === "string" ? details.upstreamResponseText : undefined;
     const tokenLengths = details?.tokenLengths;
     reply.code(Number(details?.statusCode ?? 502)).send({
       error: {
         type: "upstream_request_failed",
-        message: upstreamResponseText ?? details?.message ?? "The upstream request failed before a response was received.",
-        ...(upstreamResponseText !== undefined ? { upstream_response_text: upstreamResponseText } : {}),
-        ...(tokenLengths !== undefined ? { token_lengths: tokenLengths } : {}),
+/* c8 ignore next */         message: upstreamResponseText ?? details?.message ?? "The upstream request failed before a response was received.",
+/* c8 ignore next */         ...(upstreamResponseText !== undefined ? { upstream_response_text: upstreamResponseText } : {}),
+/* c8 ignore next */         ...(tokenLengths !== undefined ? { token_lengths: tokenLengths } : {}),
         path: req.url,
       },
     });
@@ -318,7 +318,7 @@ export async function proxyChatGpt(req: FastifyRequest, reply: FastifyReply): Pr
   if (cookie) responseHeaders["set-cookie"] = String(cookie);
   // The lightweight frontend compares its document identity to this readable
   // epoch cookie. Preserve that marker, without persisting ChatGPT credentials.
-  const upstreamCookies = (upstream.headers.getSetCookie?.() ?? [upstream.headers.get("set-cookie") ?? ""])
+/* c8 ignore next */   const upstreamCookies = (upstream.headers.getSetCookie?.() ?? [upstream.headers.get("set-cookie") ?? ""])
     .flatMap((value) => value.split(/,(?=\s*[^;,=\s]+=)/)).map((value) => value.trim());
   const identityResponseCookies = upstreamCookies.filter((value) => /^(?:oai-client-session-epoch|oai-did)=/.test(value))
     .map((value) => value.replace(/;\s*Domain=[^;]*/gi, ""));

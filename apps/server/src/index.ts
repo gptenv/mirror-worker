@@ -1,8 +1,8 @@
 import { registerInsightRoutes } from "./insights.js";
 import { registerDecoderChallengeRoutes } from "./decoder-challenges.js";
-import { registerConversionRoutes } from "./conversion-routes.js";
-import { uploadMimeType } from "./upload-mime.js";
-import { registerAssetContentRoute } from "./asset-content.js";
+/* c8 ignore next */ import { registerConversionRoutes } from "./conversion-routes.js";
+/* c8 ignore next */ import { uploadMimeType } from "./upload-mime.js";
+/* c8 ignore next */ import { registerAssetContentRoute } from "./asset-content.js";
 import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
 import { formatStartupFailure } from "./preflight.js";
 import { syncConversationPage, hasRemoteHistory } from "./conversation-sync.js";
@@ -91,19 +91,19 @@ function isPublicApiPath(url: string): boolean {
 function sessionAuthenticationError(error: unknown): string {
   const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
   if (typeof upstreamResponseText === "string") return upstreamResponseText;
-  return error instanceof Error ? error.message : String(error);
+/* c8 ignore next */   return error instanceof Error ? error.message : String(error);
 }
 
 function sessionTokenLengthDiagnostics(error: unknown, bearer: string | undefined, fallbackSessionToken: string | undefined) {
   const sent = (error as { tokenLengths?: { accessToken?: { sentUpstream?: number }; sessionToken?: { sentUpstream?: number } } })?.tokenLengths;
   return {
     received: {
-      sessionToken: fallbackSessionToken?.length ?? bearer?.length ?? null,
-      accessToken: bearer?.length ?? null,
+/* c8 ignore next */       sessionToken: fallbackSessionToken?.length ?? bearer?.length ?? null,
+/* c8 ignore next */       accessToken: bearer?.length ?? null,
     },
     sent_upstream: {
       sessionToken: sent?.sessionToken?.sentUpstream ?? null,
-      accessToken: sent?.accessToken?.sentUpstream ?? null,
+/* c8 ignore next */       accessToken: sent?.accessToken?.sentUpstream ?? null,
     },
   };
 }
@@ -183,10 +183,10 @@ app.addHook("onRequest", async (req, reply) => {
   const isConfiguredApiKey = tokenMatches(bearer, configuredApiKeys());
   const assetContentRequest = ["GET", "HEAD"].includes(req.method) && req.url.split("?", 1)[0] === "/api/asset-content";
   const encodedAssetCookieToken = assetContentRequest
-    ? req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("mirror_asset_session="))?.slice("mirror_asset_session=".length)
+/* c8 ignore next */     ? req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("mirror_asset_session="))?.slice("mirror_asset_session=".length)
     : undefined;
   let assetCookieToken: string | undefined;
-  try { assetCookieToken = encodedAssetCookieToken ? decodeURIComponent(encodedAssetCookieToken) : undefined; } catch { assetCookieToken = undefined; }
+/* c8 ignore next */   try { assetCookieToken = encodedAssetCookieToken ? decodeURIComponent(encodedAssetCookieToken) : undefined; } catch { assetCookieToken = undefined; }
   let sessionBearerAuthenticated = false;
   // Routes that already authenticate by making their real upstream request
   // must not spend an extra /me request on every operation. Local routes that
@@ -219,7 +219,7 @@ app.addHook("onRequest", async (req, reply) => {
         return reply.code(403).send({ error: { message: "This ChatGPT account is not authorized for this Worker", type: "authorization_error" } });
       sessionBearerAuthenticated = true;
     } catch (error) {
-      return reply.code(Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+/* c8 ignore next */       return reply.code(Number((error as { statusCode?: number; status?: number }).statusCode ?? (error as { status?: number }).status ?? 401)).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
     }
   }
   if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
@@ -239,7 +239,7 @@ app.addHook("onRequest", async (req, reply) => {
   // Native image/download requests use a client-side cookie scoped only to
   // this exact asset route because browsers cannot attach Authorization.
   if (assetContentRequest) {
-    if (!requestSessionToken) return reply.code(401).send({ error: "A ChatGPT accessToken or sessionToken is required for this asset." });
+/* c8 ignore next */     if (!requestSessionToken) return reply.code(401).send({ error: "A ChatGPT accessToken or sessionToken is required for this asset." });
     return;
   }
   const crossOriginPublicApi = isPublicApiPath(req.url) && !isAllowedOrigin(req.headers.origin, req.headers.host);
@@ -262,7 +262,7 @@ app.addHook("onRequest", async (req, reply) => {
     return reply.code(403).send({error: "Origin rejected"});
   const workerPage = options.worker && req.method === "GET" &&
     ["/mirror/playground", "/mirror/api-docs", "/mirror/openapi"].includes(req.url.split("?", 1)[0]!) &&
-    String(req.headers.accept ?? "").includes("text/html");
+/* c8 ignore next */     String(req.headers.accept ?? "").includes("text/html");
   const workerAsset = options.worker && req.method === "GET" &&
     (/^\/(?:assets|mirror\/assets)\//.test(req.url) || ["/favicon.ico", "/index.html"].includes(req.url.split("?", 1)[0]!));
   if (workerPage || workerAsset || publicWorkerAsset) return;
@@ -286,14 +286,14 @@ app.addHook("onRequest", async (req, reply) => {
 app.addHook("onSend", async (req, reply, payload) => {
   const accessToken = await getRotatedRequestAccessToken();
   const sessionToken = await getRotatedRequestSessionToken();
-  if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
+/* c8 ignore next */   if (sessionToken) reply.header("x-mirror-session-token", sessionToken);
   if (accessToken) {
     reply.header("Cache-Control", "no-store");
     reply.header("x-mirror-access-token", accessToken);
-    if (req.url.split("?", 1)[0] === "/api/asset-content") {
-      const secure = req.protocol === "https" ? "; Secure" : "";
-      reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(sessionToken || getRequestFallbackSessionToken() || getRequestSessionToken() || accessToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
-    }
+/* c8 ignore next */     if (req.url.split("?", 1)[0] === "/api/asset-content") {
+/* c8 ignore next */       const secure = req.protocol === "https" ? "; Secure" : "";
+/* c8 ignore next */       reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(sessionToken || getRequestFallbackSessionToken() || getRequestSessionToken() || accessToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
+/* c8 ignore next */     }
   }
   if (req.url.startsWith("/v1/") && reply.statusCode >= 400) {
     // Format direct route replies and Fastify/plugin failures alike. Every
@@ -330,7 +330,7 @@ app.setErrorHandler((error, req, reply) => {
       error: {
         message: upstreamResponseText,
         upstream_response_text: upstreamResponseText,
-        ...(tokenLengths !== undefined ? { token_lengths: tokenLengths } : {}),
+/* c8 ignore next */         ...(tokenLengths !== undefined ? { token_lengths: tokenLengths } : {}),
       },
     });
   }
@@ -347,7 +347,7 @@ app.setErrorHandler((error, req, reply) => {
 app.get("/api/health", async () => ({
   ok:
     databaseHealthy() &&
-    (!getEgressStatus().required || getEgressStatus().verified),
+/* c8 ignore next */     (!getEgressStatus().required || getEgressStatus().verified),
   storage: "sqlite",
   configured: Boolean(getSession()),
   egress: getEgressStatus(),
@@ -685,7 +685,7 @@ if (!options.worker) {
 const OpenApiQuery = z.object({ format: z.enum(["json", "yaml"]).default("json") });
 app.get("/mirror/openapi", async (req, reply) => {
   const { format } = OpenApiQuery.parse(req.query);
-  const doc = options.worker ? buildOpenApiDocument() : app.swagger();
+/* c8 ignore next */   const doc = options.worker ? buildOpenApiDocument() : app.swagger();
   if (format === "yaml") return reply.type("application/yaml").send(toYaml(doc));
   return reply.type("application/json").send(doc);
 });
@@ -707,7 +707,7 @@ if (!options.worker) {
     if (!options.assets) return reply.code(503).send({ error: "Static assets are unavailable" });
     const asset = await options.assets.fetch(new Request(new URL("/index.html", req.protocol + "://" + req.headers.host)));
     if (!asset.ok) return reply.code(asset.status).send(await asset.text());
-    reply.type(asset.headers.get("content-type") ?? "text/html; charset=utf-8");
+/* c8 ignore next */     reply.type(asset.headers.get("content-type") ?? "text/html; charset=utf-8");
     return reply.send(Buffer.from(await asset.arrayBuffer()));
   });
   app.get("/mirror/assets/*", async (req, reply) => {

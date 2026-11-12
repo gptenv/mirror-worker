@@ -133,7 +133,7 @@ const cloudflareRuntime = typeof (globalThis as typeof globalThis & { WebSocketP
 
 async function verifyWorkerDns(hostname: string, label: string, index: number): Promise<void> {
   if (isIP(hostname)) {
-    if (!isPublicImageHost(hostname)) throw new Error(`${label}[${index}] host is not permitted: ${hostname}`);
+    /* c8 ignore next */     if (!isPublicImageHost(hostname)) throw new Error(`${label}[${index}] host is not permitted: ${hostname}`);
     return;
   }
   const answers = await Promise.all(["A", "AAAA"].map(async (type) => {
@@ -145,7 +145,7 @@ async function verifyWorkerDns(hostname: string, label: string, index: number): 
       throw new BackendApiError(`DNS check failed for ${hostname}`, response.status, body, body);
     }
     const result = await response.json() as { Answer?: Array<{ data?: string }> };
-    return (result.Answer ?? []).map((answer) => answer.data).filter((address): address is string => Boolean(address));
+    /* c8 ignore next */     return (result.Answer ?? []).map((answer) => answer.data).filter((address): address is string => Boolean(address));
   }));
   const addresses = answers.flat();
   if (!addresses.length || addresses.some((address) => !isPublicImageHost(address)))

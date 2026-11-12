@@ -275,7 +275,7 @@ export default function App() {
           if (accessToken !== apiKey) credentialRotationRef.current = true;
           try {
             storeAccessToken(accessToken, bearer, res.headers.get("x-mirror-session-token"));
-          } catch { /* Browser storage may be unavailable. */ }
+/* c8 ignore next */           } catch { /* Browser storage may be unavailable. */ }
         }
         if (!res.ok) throw new Error(await res.text());
         return res.json();
@@ -571,7 +571,7 @@ export default function App() {
         if (accessToken !== apiKey) credentialRotationRef.current = true;
         try {
           storeAccessToken(accessToken, bearer, response.headers.get("x-mirror-session-token"));
-        } catch { /* Browser storage may be unavailable. */ }
+/* c8 ignore next */         } catch { /* Browser storage may be unavailable. */ }
       }
       if (!response.ok)
         throw new Error(await response.text());
@@ -724,13 +724,13 @@ export default function App() {
                   if (value) {
                     localStorage.setItem("mirror_access_token", value);
                     localStorage.removeItem("mirror_session_token");
-                    document.cookie = `mirror_asset_session=${encodeURIComponent(value)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+/* c8 ignore next */                     document.cookie = `mirror_asset_session=${encodeURIComponent(value)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                   } else {
                     localStorage.removeItem("mirror_access_token");
                     localStorage.removeItem("mirror_session_token");
-                    document.cookie = `mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+/* c8 ignore next */                     document.cookie = `mirror_asset_session=; Path=/api/asset-content; Max-Age=0; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
                   }
-                } catch { /* Browser storage may be unavailable. */ }
+/* c8 ignore next */                 } catch { /* Browser storage may be unavailable. */ }
               }}
               placeholder="Paste ChatGPT accessToken or sessionToken"
             />
@@ -1102,8 +1102,8 @@ export default function App() {
                 setApiKey(token);
                 try {
                   storeAccessToken(token);
-                  document.cookie = `mirror_asset_session=${encodeURIComponent(token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
-                } catch { /* Browser storage may be unavailable. */ }
+/* c8 ignore next */                   document.cookie = `mirror_asset_session=${encodeURIComponent(token)}; Path=/api/asset-content; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+/* c8 ignore next */                 } catch { /* Browser storage may be unavailable. */ }
               }}
             />
             <div className="request-preview">

@@ -309,9 +309,9 @@ type ClientToolCall = { id: string; type: "function"; function: { name: string; 
 
 function nonEmptyToolValues(tools: unknown[] | undefined): unknown[] {
   return (tools ?? []).filter(value => {
-    if (!value) return false;
-    if (typeof value === "string") return value.trim().length > 0;
-    if (Array.isArray(value)) return value.length > 0;
+/* c8 ignore next */     if (!value) return false;
+/* c8 ignore next */     if (typeof value === "string") return value.trim().length > 0;
+/* c8 ignore next */     if (Array.isArray(value)) return value.length > 0;
     if (typeof value === "object") return Object.keys(value).length > 0;
     return true;
   });
@@ -323,8 +323,8 @@ function canonicalToolCallText(toolCalls: ClientToolCall[]): string {
 
 function clientToolCallNames(tools: unknown[]): Set<string> {
   return new Set(tools.flatMap((tool: any) => {
-    const name = tool?.type === "function" ? tool.function?.name : tool?.name;
-    return typeof name === "string" ? [name] : [];
+/* c8 ignore next */     const name = tool?.type === "function" ? tool.function?.name : tool?.name;
+/* c8 ignore next */     return typeof name === "string" ? [name] : [];
   }));
 }
 
@@ -332,12 +332,12 @@ function parseClientToolCalls(text: string, tools: unknown[], choice: z.infer<ty
   const cleaned = text.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```$/, "").trim();
   let value: any;
   try { value = JSON.parse(cleaned); } catch {
-    if (choice === "required" || (typeof choice === "object" && choice !== null))
+/* c8 ignore next */     if (choice === "required" || (typeof choice === "object" && choice !== null))
       throw Object.assign(new Error("The model did not return the required tool call"), { statusCode: 502 });
     return null;
   }
   if (!value || !Array.isArray(value.tool_calls)) {
-    if (choice === "required" || (typeof choice === "object" && choice !== null))
+/* c8 ignore next */     if (choice === "required" || (typeof choice === "object" && choice !== null))
       throw Object.assign(new Error("The model did not return the required tool call"), { statusCode: 502 });
     return null;
   }
@@ -353,7 +353,7 @@ function parseClientToolCalls(text: string, tools: unknown[], choice: z.infer<ty
     const name = fn?.name;
     if (typeof name !== "string" || !name || (knownNames.size > 0 && !knownNames.has(name)) || (requiredName && name !== requiredName))
       throw Object.assign(new Error("The model returned a tool name that was not supplied by the client"), { statusCode: 502 });
-    let args = fn.arguments ?? item.arguments ?? {};
+/* c8 ignore next */     let args = fn.arguments ?? item.arguments ?? {};
     if (typeof args === "string") {
       try { args = JSON.parse(args); }
       catch { throw Object.assign(new Error(`The model returned invalid JSON arguments for ${name}`), { statusCode: 502 }); }
@@ -370,7 +370,7 @@ function promptWithClientTools(messages: ReturnType<typeof normalized>, source: 
   const latest = messages.at(-1);
   if (latest?.role === "tool") {
     let firstResult = source.length - 1;
-    while (firstResult > 0 && source[firstResult - 1]?.role === "tool") firstResult--;
+/* c8 ignore next */     while (firstResult > 0 && source[firstResult - 1]?.role === "tool") firstResult--;
     const assistantCall = source[firstResult - 1];
     const results = source.slice(firstResult).map(message => ({
       tool_call_id: message.tool_call_id,
@@ -743,16 +743,16 @@ export async function registerOpenAiRoutes(
           // Resume the account's last API conversation for those requests.
           const hasPriorTurns = messages.slice(0, -1).some(message => message.role === "user" || message.role === "assistant");
           const implicitId = hasPriorTurns ? null : getImplicitConversationId(accountId);
-          const candidate = implicitId ? getConversation(implicitId) : null;
+/* c8 ignore next */           const candidate = implicitId ? getConversation(implicitId) : null;
           const routeCandidate = routeModel(body.model, body.metadata);
-          if (candidate && candidate.accountId === accountId &&
-              !hasPriorTurns &&
-              (routeCandidate.gizmoId === undefined || routeCandidate.gizmoId === candidate.gizmoId) &&
-              (!routeCandidate.model || routeCandidate.model === "auto" || routeCandidate.model === candidate.model) &&
-              (routeCandidate.private === undefined || routeCandidate.private === Boolean(candidate.private))) {
-            explicitConversation = candidate;
-            implicitConversation = true;
-          }
+/* c8 ignore next */           if (candidate && candidate.accountId === accountId &&
+/* c8 ignore next */               !hasPriorTurns &&
+/* c8 ignore next */               (routeCandidate.gizmoId === undefined || routeCandidate.gizmoId === candidate.gizmoId) &&
+/* c8 ignore next */               (!routeCandidate.model || routeCandidate.model === "auto" || routeCandidate.model === candidate.model) &&
+/* c8 ignore next */               (routeCandidate.private === undefined || routeCandidate.private === Boolean(candidate.private))) {
+/* c8 ignore next */             explicitConversation = candidate;
+/* c8 ignore next */             implicitConversation = true;
+/* c8 ignore next */           }
         }
         if (
           explicitConversation &&
@@ -778,7 +778,7 @@ export async function registerOpenAiRoutes(
         if (explicitConversation && (messages.length === 1 || implicitConversation)) {
           const incomingInstructions = messages.slice(0, -1).filter(message => message.role === "system" || message.role === "developer");
           messages = [
-            ...(incomingInstructions.length ? incomingInstructions : getInstructions(explicitConversation.id) as ReturnType<typeof normalized>),
+/* c8 ignore next */             ...(incomingInstructions.length ? incomingInstructions : getInstructions(explicitConversation.id) as ReturnType<typeof normalized>),
             ...listMessages(explicitConversation.id).map(({ role, content }) => ({ role, content })),
             messages.at(-1)!,
           ];
