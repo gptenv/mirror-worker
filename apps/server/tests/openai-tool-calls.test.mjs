@@ -89,4 +89,8 @@ test.describe('server / client tool calls', () => {
     assert.match(response.body, /"finish_reason":"tool_calls"/);
     assert.match(response.body, /\[DONE\]/);
   });
+  test("accepts non-object tool values in the tools array", async () => {
+    const response = await request("ok", { tools: [1, true, { type: "function" }] });
+    assert.equal(response.statusCode, 200, response.body);
+  });
 });

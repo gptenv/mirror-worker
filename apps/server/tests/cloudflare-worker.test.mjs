@@ -17,7 +17,7 @@ mock.module('../dist/index.js', { exports: { buildApp: async (options) => {
   if (shouldFail) { shouldFail = false; throw new Error('fixture startup failure'); }
   return { ready: async () => {}, server: { fetch: async request => Response.json({ owner: options.ownerAccountId, authorization: request.headers.get('authorization') }) } };
 } } });
-mock.module('../dist/store.js', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device' } });
+mock.module('../dist/store.js', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device', getSession: () => ({}), setSessionAccountId: () => {}, clearSession: () => {} } });
 const { MirrorStorage, default: worker } = await import('../dist/cloudflare-worker.js');
 const env = { MIRROR_OWNER_ACCOUNT_ID: ' owner ', MIRROR_STORE_KEY: 'fixture', WARP: { fetch: async () => new Response() }, ASSETS: {} };
 
