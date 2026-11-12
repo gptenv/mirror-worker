@@ -19,6 +19,27 @@ test.describe('server / upstream-errors-audit', () => {
   test('local errors are not substituted with fabricated diagnostics', () => {
     assert.equal(apiError(502, 'storage.transactionSync is not a function', 'r').error.message, 'storage.transactionSync is not a function');
   });
+  test('documented public HTTP failures receive stable OpenAI-shaped error classes', () => {
+    const expected = new Map([
+      [400, ['invalid_request_error', 'invalid_request']],
+      [401, ['authentication_error', 'authentication_required']],
+      [403, ['permission_error', 'request_forbidden']],
+      [404, ['not_found_error', 'not_found']],
+      [408, ['timeout_error', 'request_timeout']],
+      [413, ['invalid_request_error', 'request_too_large']],
+      [422, ['invalid_request_error', 'invalid_request']],
+      [429, ['rate_limit_error', 'rate_limit_exceeded']],
+      [500, ['server_error', 'internal_error']],
+      [502, ['server_error', 'upstream_failure']],
+      [503, ['service_unavailable_error', 'service_unavailable']],
+      [504, ['timeout_error', 'deadline_exceeded']],
+    ]);
+    for (const [status, [type, code]] of expected) {
+      const error = apiError(status, 'message', 'request').error;
+      assert.equal(error.type, type, `HTTP ${status}`);
+      assert.equal(error.code, code, `HTTP ${status}`);
+    }
+  });
   for (const status of [400,401,403,404,409,422,429,500,502,503,504]) test(`protocol HTTP ${status} preserves the complete body`, async () => {
     test.mock.method(globalThis, 'fetch', async () => new Response(json,{status}));
     await assert.rejects(new ChatGptBackendClient({accessToken:'access',deviceId:'device'}).fetchMe(), error => error.upstreamResponseText === json && error.status === status);
@@ -27,7 +48,7 @@ test.describe('server / upstream-errors-audit', () => {
     test.mock.method(globalThis, 'fetch', async () => new Response(json,{status:403}));
     await assert.rejects(mintAccessToken('session'), error => error.upstreamResponseText === json);
   });
-  for (const endpoint of ["/v1/chat/completions", "/v1/responses"]) for (const stream of [false,true]) test(`${endpoint} ${stream ? 'SSE' : 'JSON'} preserves the entire upstream error stream`, async () => {
+  for (const endpoint of ["/v1/chat/completions", "/v1/responses"]) for (const stream of [false,true]) test(`${endpoint} ${stream ? 'SSE' : 'JSON'} maps upstream failure without exposing its body`, async () => {
     const app = await buildApp({worker:true});
     const backend = stubBackend('audit');
     test.mock.method(globalThis, 'fetch', async (input, init) => new URL(String(input)).pathname.endsWith('/f/conversation') ? new Response(streamBody,{headers:{'content-type':'text/event-stream'}}) : backend(input,init));
@@ -35,7 +56,8 @@ test.describe('server / upstream-errors-audit', () => {
       const response = await app.inject({method:'POST',url:endpoint,headers:{authorization:'Bearer access'},payload:{model:'auto', ...(endpoint.endsWith('/responses') ? {input:'hello'} : {messages:[{role:'user',content:'hello'}]}),store:false,stream}});
       const error = stream ? response.body.split('\n').filter(line => line.startsWith('data: {')).map(line=>JSON.parse(line.slice(6))).find(chunk=>chunk.error || chunk.type === 'error' || chunk.response?.error) : response.json();
       const message = error.error?.message ?? error.response?.error?.message ?? error.message; 
-      assert.equal(message,streamBody);
+      assert.equal(message,'The upstream request failed.');
+      assert.doesNotMatch(response.body,/upstream_denied|keep this/);
     } finally { await app.close(); }
   });
   for (const endpoint of ['/api/gpts', '/v1/models']) test(`${endpoint} tolerates optional GPT lookup failures`, async () => {
