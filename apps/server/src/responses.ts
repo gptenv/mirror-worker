@@ -4,11 +4,12 @@ import { z } from "zod";
 const InputMessage = z.object({
   type: z.literal("message").optional(),
   role: z.enum(["system", "developer", "user", "assistant"]),
-  content: z.union([z.string(), z.array(z.object({
-    type: z.enum(["input_text", "output_text"]), text: z.string(),
-    annotations: z.array(z.unknown()).optional(),
-    logprobs: z.array(z.unknown()).optional(),
-  }).strict()).min(1)]),
+  content: z.union([z.string(), z.array(z.union([
+    z.object({ type: z.literal("input_text"), text: z.string(), annotations: z.array(z.unknown()).optional(), logprobs: z.array(z.unknown()).optional() }).strict(),
+    z.object({ type: z.literal("output_text"), text: z.string(), annotations: z.array(z.unknown()).optional(), logprobs: z.array(z.unknown()).optional() }).strict(),
+    z.object({ type: z.literal("input_image"), image_url: z.string().optional(), file_id: z.string().optional(), detail: z.enum(["auto", "low", "high"]).optional() }).strict().refine(part => Boolean(part.image_url || part.file_id), "input_image requires image_url or file_id"),
+    z.object({ type: z.literal("input_file"), file_data: z.string().optional(), file_url: z.string().optional(), file_id: z.string().optional(), filename: z.string().optional() }).strict().refine(part => Boolean(part.file_data || part.file_url || part.file_id), "input_file requires file_data, file_url, or file_id"),
+  ])).min(1)]),
   id: z.string().optional(),
   status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
 }).strict();
@@ -27,10 +28,28 @@ export const ResponsesBody = z.object({
 export type ResponsesRequest = z.infer<typeof ResponsesBody>;
 
 export function responsesToCompletion(body: ResponsesRequest) {
+  if (Array.isArray(body.input)) {
+    const lastIndex = body.input.length - 1;
+    body.input.forEach((item, index) => {
+      if (typeof item.content === "string") return;
+      if (item.content.some(part => part.type === "input_image" || part.type === "input_file") &&
+          (index !== lastIndex || item.role !== "user")) {
+        throw new Error("Responses image and file inputs are supported only in the final user message");
+      }
+    });
+  }
   const messages = typeof body.input === "string"
     ? [{ role: "user" as const, content: body.input }]
     : body.input.map(item => ({ role: item.role, content: typeof item.content === "string"
-      ? item.content : item.content.map(part => part.text).join("") }));
+      ? item.content : item.content.map(part => {
+        if (part.type === "input_text" || part.type === "output_text") return { type: "text" as const, text: part.text };
+        if (part.type === "input_image") {
+          if (!part.image_url) throw new Error("Responses input_image file_id is unsupported; provide image_url");
+          return { type: "image_url" as const, image_url: { url: part.image_url, ...(part.detail ? { detail: part.detail } : {}) } };
+        }
+        if (!part.file_data && !part.file_url) throw new Error("Responses input_file file_id is unsupported; provide file_data or file_url");
+        return { type: "file" as const, file: { file_data: part.file_data ?? part.file_url!, ...(part.filename ? { filename: part.filename } : {}) } };
+      }) }));
   return { model: body.model, stream: body.stream, store: body.store, metadata: body.metadata,
     messages: [...(body.instructions === undefined ? [] : [{ role: "system" as const, content: body.instructions }]), ...messages] };
 }

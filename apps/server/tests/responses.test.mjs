@@ -11,7 +11,7 @@ process.env.MIRROR_API_KEY = 'synthetic-access-fixture';
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
 const { registerOpenAiRoutes } = await import("../dist/openai.js");
-const { ResponsesBody } = await import("../dist/responses.js");
+const { ResponsesBody, responsesToCompletion } = await import("../dist/responses.js");
 const app = Fastify();
 await registerOpenAiRoutes(app);
 const address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -20,6 +20,29 @@ test.describe("server / responses", () => {
 test("Responses stream by default and honors explicit opt-out", () => {
   assert.equal(ResponsesBody.parse({ input: "Hello" }).stream, true);
   assert.equal(ResponsesBody.parse({ input: "Hello", stream: false }).stream, false);
+});
+test("Responses image and file input maps to the existing attachment pipeline", () => {
+  const mapped = responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
+    { type: "input_text", text: "Read these" },
+    { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" },
+    { type: "input_file", file_data: "data:application/pdf;base64,JVBERi0=", filename: "report.pdf" },
+  ] }] }));
+  assert.deepEqual(mapped.messages[0].content, [
+    { type: "text", text: "Read these" },
+    { type: "image_url", image_url: { url: "data:image/png;base64,AAAA", detail: "high" } },
+    { type: "file", file: { file_data: "data:application/pdf;base64,JVBERi0=", filename: "report.pdf" } },
+  ]);
+  assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [{ type: "input_image", file_id: "file_123" }] }] })), /file_id is unsupported/);
+  assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [{ type: "input_file", file_id: "file_123" }] }] })), /file_id is unsupported/);
+  assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [
+    { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AAAA" }] },
+    { role: "assistant", content: "previous answer" },
+    { role: "user", content: "latest question" },
+  ] })), /final user message/);
+  assert.throws(() => responsesToCompletion(ResponsesBody.parse({ input: [
+    { role: "user", content: "latest question" },
+    { role: "assistant", content: [{ type: "input_file", file_data: "data:text/plain;base64,SGk=" }] },
+  ] })), /final user message/);
 });
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {
@@ -73,7 +96,7 @@ test("one-shot, instructions and input_text", async () => {
 });
 test("unsupported features fail before upstream access", async () => {
   setup("invalid"); globalThis.fetch = async () => { throw new Error("Must not call upstream"); };
-  for (const extra of [{ tools: [] }, { previous_response_id: "resp_123" }, { background: true }, { input: "" }, { input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.com/x" }] }] }]) {
+  for (const extra of [{ tools: [] }, { previous_response_id: "resp_123" }, { background: true }, { input: "" }, { input: [{ role: "user", content: [{ type: "input_audio", audio: "x" }] }] }]) {
     const res = await post({ input: "Hello", ...extra }); assert.equal(res.status, 400); assert.ok((await res.json()).error);
   }
 });
