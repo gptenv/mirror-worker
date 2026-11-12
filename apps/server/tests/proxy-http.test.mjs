@@ -536,6 +536,22 @@ test("resolveAccountId forwards a non-ok upstream profile response", () =>
     },
   ));
 
+
+test("resolveAccountId rejects an invalid profile response body", () =>
+  withFetch(
+    fetchRouter([
+      [/\/api\/auth\/session$/, () => Response.json({ accessToken: jwtWithExp(3600) })],
+      [/\/backend-api\/me$/, () => new Response("not-json", { status: 200 })],
+      [/\/backend-api\/models$/, (u, init) => {
+        assert.equal(init.headers.get("chatgpt-account-id"), null);
+        return Response.json({}, { headers: { "content-type": "application/json" } });
+      }],
+    ]),
+    async () => {
+      useSession("me-invalid", { withAccountId: false });
+      await assert.rejects(proxyChatGpt(makeReq({ url: "/backend-api/models" }), makeReply().reply), error => error.status === 502);
+    },
+  ));
 test("resolveAccountId propagates a profile network failure", () =>
   withFetch(
     fetchRouter([
