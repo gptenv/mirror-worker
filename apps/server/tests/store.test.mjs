@@ -184,6 +184,7 @@ test("a hotkeys setting that isn't a JSON object (corrupted or hand-edited) is t
 });
 });
 
+test.describe("server / store compatibility", () => {
 test("updateMintedToken is retained as a no-op for compatibility", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "mirror-store-noop-"));
   process.env.MIRROR_DATA_DIR = dir;
@@ -196,4 +197,5 @@ test("updateMintedToken is retained as a no-op for compatibility", async () => {
     rmSync(dir, { recursive: true, force: true });
     delete process.env.MIRROR_DATA_DIR;
   }
+});
 });

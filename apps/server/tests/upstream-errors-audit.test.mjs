@@ -94,8 +94,6 @@ test.describe('server / upstream-errors-audit', () => {
     test.mock.method(client,'fetchAssetContent',async()=>new Response(json,{status:403}));
     await assert.rejects(createAssetLinks(client,'https://mirror.example','file-service://file',null,null,undefined,true),error=>error.upstreamResponseText===json);
   });
-});
-
   test('optional GPT catalog lookups propagate authentication failures', async () => {
     for (const endpoint of ['/api/gpts', '/v1/models']) {
       const app = await buildApp({worker: true});
@@ -185,3 +183,4 @@ test.describe('server / upstream-errors-audit', () => {
       await app.close();
     }
   });
+});
