@@ -20,6 +20,7 @@ const [{ default: Fastify }, store, openai, context] = await Promise.all([
   import("../dist/openai.js"),
   import("../dist/conversation-context.js"),
 ]);
+const { registerWorkerRequestSignal } = await import("../dist/worker-request-signals.js");
 // Match index.ts's buildApp() bodyLimit so a large-but-under-the-app-limit
 // payload reaches openai.ts's own MAX_IMAGE_BYTES check rather than being
 // rejected by Fastify's (much smaller) default first.
@@ -256,6 +257,49 @@ test("GET /v1/models aborts sibling catalog requests when a required catalog cal
     assert.equal(sidebarSignal?.aborted, true);
     assert.equal(bootstrapSignal?.aborted, true);
   });
+});
+
+test("GET /v1/models handles an already-aborted Worker request signal", async () => {
+  useSession("account-models-worker-already-aborted");
+  // A Worker signal may be aborted without exposing a reason; the adapter must
+  // supply a safe default AbortError for its local controller in that case.
+  const workerSignal = {
+    aborted: true,
+    reason: undefined,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const requestId = "worker-request-already-aborted";
+  const unregister = registerWorkerRequestSignal(requestId, workerSignal);
+  try {
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/models",
+      headers: { "x-mirror-worker-request-id": requestId },
+    });
+    assert.notEqual(res.statusCode, 200, res.body);
+  } finally {
+    unregister();
+  }
+});
+
+test("GET /v1/models removes its listener from a live Worker request signal", async () => {
+  useSession("account-models-worker-signal");
+  const controller = new AbortController();
+  const requestId = "worker-request-live";
+  const unregister = registerWorkerRequestSignal(requestId, controller.signal);
+  try {
+    await withFetch(stubBackend("account-models-worker-signal"), async () => {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: { "x-mirror-worker-request-id": requestId },
+      });
+      assert.equal(res.statusCode, 200, res.body);
+    });
+  } finally {
+    unregister();
+  }
 });
 
 test("GET /v1/models preserves caller cancellation and aborts its upstream request on disconnect", async () => {
