@@ -36,6 +36,7 @@ for (const minimal of [true, false]) test(`Responses three turns, mixed transpor
   for (let turn = 1; turn <= 3; turn++) {
     input.push({ role: "user", content: `Question ${turn}` });
     const stream = turn !== 2;
+    const requestStartedAt = Math.floor(Date.now() / 1000);
     const res = await post({ model: "auto", input: minimal ? `Question ${turn}` : input, stream, max_output_tokens: 1,
       ...(id ? { metadata: { conversation_id: id } } : {}) });
     assert.equal(res.status, 200);
@@ -52,8 +53,11 @@ for (const minimal of [true, false]) test(`Responses three turns, mixed transpor
       assert.equal(events.filter(e => e.type === "response.output_text.delta").map(e => e.delta).join(""), body.output[0].content[0].text);
       assert.ok(wire.includes("event: response.completed\n"));
     } else body = await res.json();
+    const requestFinishedAt = Math.floor(Date.now() / 1000);
     assert.equal(body.object, "response"); assert.equal(body.status, "completed");
     assert.ok(Number.isInteger(body.completed_at));
+    assert.ok(body.completed_at >= requestStartedAt && body.completed_at <= requestFinishedAt,
+      `completed_at ${body.completed_at} should be within ${requestStartedAt}..${requestFinishedAt} Unix seconds`);
     assert.match(body.id, /^resp_/); assert.equal(body.usage, null);
     id ??= body.metadata.conversation_id;
     assert.equal(body.metadata.conversation_id, id);
