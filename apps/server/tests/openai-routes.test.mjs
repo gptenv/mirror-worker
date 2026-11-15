@@ -20,6 +20,7 @@ const [{ default: Fastify }, store, openai, context] = await Promise.all([
   import("../dist/openai.js"),
   import("../dist/conversation-context.js"),
 ]);
+const { registerWorkerRequestSignal } = await import("../dist/worker-request-signals.js");
 // Match index.ts's buildApp() bodyLimit so a large-but-under-the-app-limit
 // payload reaches openai.ts's own MAX_IMAGE_BYTES check rather than being
 // rejected by Fastify's (much smaller) default first.
@@ -140,7 +141,8 @@ test("GET /v1/models marks a synthetic -wm catalog label unsupported and dedupes
       assert.equal(byId["gpt-4o"].mirror.supported, true);
       assert.equal(byId["gpt-4o"].mirror.execution_mode, "interactive");
       assert.equal(byId["synthetic-fixture-wm"].mirror.supported, false);
-      assert.equal(byId["synthetic-fixture-wm"].mirror.execution_mode, "unsupported_work");
+      assert.equal(byId["synthetic-fixture-wm"].mirror.execution_mode, "unknown");
+      assert.equal(byId["synthetic-fixture-wm"].mirror.support_reason, "unverified_model_suffix");
       assert.equal(byId["g-p-1"].owned_by, "chatgpt-project");
       assert.equal(byId["g-1"].owned_by, "chatgpt-gizmo");
       assert.equal(byId["g-1"].name, "Helper GPT");
@@ -257,6 +259,49 @@ test("GET /v1/models aborts sibling catalog requests when a required catalog cal
   });
 });
 
+test("GET /v1/models handles an already-aborted Worker request signal", async () => {
+  useSession("account-models-worker-already-aborted");
+  // A Worker signal may be aborted without exposing a reason; the adapter must
+  // supply a safe default AbortError for its local controller in that case.
+  const workerSignal = {
+    aborted: true,
+    reason: undefined,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const requestId = "worker-request-already-aborted";
+  const unregister = registerWorkerRequestSignal(requestId, workerSignal);
+  try {
+    const res = await app.inject({
+      method: "GET",
+      url: "/v1/models",
+      headers: { "x-mirror-worker-request-id": requestId },
+    });
+    assert.notEqual(res.statusCode, 200, res.body);
+  } finally {
+    unregister();
+  }
+});
+
+test("GET /v1/models removes its listener from a live Worker request signal", async () => {
+  useSession("account-models-worker-signal");
+  const controller = new AbortController();
+  const requestId = "worker-request-live";
+  const unregister = registerWorkerRequestSignal(requestId, controller.signal);
+  try {
+    await withFetch(stubBackend("account-models-worker-signal"), async () => {
+      const res = await app.inject({
+        method: "GET",
+        url: "/v1/models",
+        headers: { "x-mirror-worker-request-id": requestId },
+      });
+      assert.equal(res.statusCode, 200, res.body);
+    });
+  } finally {
+    unregister();
+  }
+});
+
 test("GET /v1/models preserves caller cancellation and aborts its upstream request on disconnect", async () => {
   useSession("account-models-disconnect");
   const { request } = await import("node:http");
@@ -309,7 +354,7 @@ test("an unparsable body is rejected with 400 and the schema's own message", asy
   assert.match(res.json().error.message, /(?:at least 1 element|>=1 items)/i);
 });
 
-test("a Work Mode (-wm) model is rejected before any upstream call", async () => {
+test("an unverified -wm model ID is rejected before any upstream call", async () => {
   useSession("account-validate-2");
   const res = await app.inject({
     method: "POST",
@@ -317,10 +362,10 @@ test("a Work Mode (-wm) model is rejected before any upstream call", async () =>
     payload: { stream: false, model: "synthetic-fixture-wm", messages: [{ role: "user", content: "hi" }] },
   });
   assert.equal(res.statusCode, 400);
-  assert.match(res.json().error.message, /Work Mode/);
+  assert.match(res.json().error.message, /meaning and backend compatibility are unverified/);
 });
 
-test("a Work Mode model reached via metadata.mirror_model is also rejected", async () => {
+test("an unverified -wm model ID reached via metadata.mirror_model is also rejected", async () => {
   useSession("account-validate-2b");
   const res = await app.inject({
     method: "POST",
@@ -332,7 +377,7 @@ test("a Work Mode model reached via metadata.mirror_model is also rejected", asy
     },
   });
   assert.equal(res.statusCode, 400);
-  assert.match(res.json().error.message, /Work Mode/);
+  assert.match(res.json().error.message, /meaning and backend compatibility are unverified/);
 });
 
 test("a tool-role message is accepted as input for the next turn", async () => {

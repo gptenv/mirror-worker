@@ -333,6 +333,8 @@ test("populates the model dropdown from /v1/models, labelling gizmos/projects an
   assert.ok(optionTexts.includes("Project: g-p-1"));
   const unsupportedOption = within(select).getByText("gpt-unsupported (unsupported)") as HTMLOptionElement;
   assert.equal(unsupportedOption.disabled, true);
+  fireEvent.change(select, { target: { value: "gpt-unsupported" } });
+  assert.match((await screen.findByLabelText("Model catalog status")).textContent ?? "", /Mirror marks this model as unsupported/);
 });
 
 test("a failed model-discovery fetch reports that availability and capabilities are unknown", async () => {
