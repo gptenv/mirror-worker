@@ -27,6 +27,46 @@ export const ResponsesBody = z.object({
 }).strict();
 export type ResponsesRequest = z.infer<typeof ResponsesBody>;
 
+type ResponsesMessageInput = Extract<ResponsesRequest["input"], unknown[]>[number];
+type ResponsesContentPartInput = Extract<ResponsesMessageInput["content"], unknown[]>[number];
+type MappedContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" | "original" } }
+  | { type: "file"; file: { file_data: string; filename?: string } };
+
+function mapResponsesContent(content: Exclude<ResponsesMessageInput["content"], string>): MappedContentPart[] {
+  const mapped: MappedContentPart[] = [];
+  let accumulatedText: Extract<MappedContentPart, { type: "text" }> | undefined;
+  for (const part of content) {
+    let next: MappedContentPart;
+    if (part.type === "input_text" || part.type === "output_text") {
+      next = { type: "text", text: part.text };
+    } else if (part.type === "input_image") {
+      if (part.file_id) throw new Error("Responses input_image file_id is unsupported; provide image_url");
+      next = { type: "image_url", image_url: { url: part.image_url!, ...(part.detail ? { detail: part.detail } : {}) } };
+    } else {
+      if (part.file_id) throw new Error("Responses input_file file_id is unsupported; provide file_data or file_url");
+      const filename = part.filename ?? (part.file_url ? filenameFromUrl(part.file_url) : undefined);
+      next = { type: "file", file: { file_data: part.file_data ?? part.file_url!, ...(filename ? { filename } : {}) } };
+    }
+
+    // The text-only Responses adapter concatenated adjacent text parts. Keep
+    // doing that even when images/files are present; the shared chat adapter
+    // otherwise inserts newlines between separate text parts.
+    if (next.type === "text") {
+      if (!accumulatedText) {
+        accumulatedText = next;
+        mapped.push(next);
+      } else {
+        accumulatedText.text += next.text;
+      }
+    } else {
+      mapped.push(next);
+    }
+  }
+  return mapped;
+}
+
 export function responsesToCompletion(body: ResponsesRequest) {
   if (Array.isArray(body.input)) {
     const lastIndex = body.input.length - 1;
@@ -41,18 +81,7 @@ export function responsesToCompletion(body: ResponsesRequest) {
   const messages = typeof body.input === "string"
     ? [{ role: "user" as const, content: body.input }]
     : body.input.map(item => ({ role: item.role, content: typeof item.content === "string"
-      ? item.content : item.content.map(part => {
-        if (part.type === "input_text" || part.type === "output_text") return { type: "text" as const, text: part.text };
-        if (part.type === "input_image") {
-          if (part.file_id) throw new Error("Responses input_image file_id is unsupported; provide image_url");
-          if (!part.image_url) throw new Error("Responses input_image file_id is unsupported; provide image_url");
-          return { type: "image_url" as const, image_url: { url: part.image_url, ...(part.detail ? { detail: part.detail } : {}) } };
-        }
-        if (part.file_id) throw new Error("Responses input_file file_id is unsupported; provide file_data or file_url");
-        if (!part.file_data && !part.file_url) throw new Error("Responses input_file requires file_data or file_url");
-        const filename = part.filename ?? (part.file_url ? filenameFromUrl(part.file_url) : undefined);
-        return { type: "file" as const, file: { file_data: part.file_data ?? part.file_url!, ...(filename ? { filename } : {}) } };
-      }) }));
+      ? item.content : mapResponsesContent(item.content as Exclude<ResponsesMessageInput["content"], string>) }));
   return { model: body.model, stream: body.stream, store: body.store, metadata: body.metadata,
     messages: [...(body.instructions === undefined ? [] : [{ role: "system" as const, content: body.instructions }]), ...messages] };
 }

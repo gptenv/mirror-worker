@@ -23,8 +23,9 @@ test("Responses stream by default and honors explicit opt-out", () => {
 });
 test("Responses image and file input maps to the existing attachment pipeline", () => {
   const mapped = responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
-    { type: "input_text", text: "Read these" },
+    { type: "input_text", text: "Read " },
     { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" },
+    { type: "input_text", text: "these" },
     { type: "input_file", file_data: "data:application/pdf;base64,JVBERi0=", filename: "report.pdf" },
   ] }] }));
   assert.deepEqual(mapped.messages[0].content, [
@@ -43,6 +44,12 @@ test("Responses image and file input maps to the existing attachment pipeline", 
     { role: "user", content: "latest question" },
     { role: "assistant", content: [{ type: "input_file", file_data: "data:text/plain;base64,SGk=" }] },
   ] })), /final user message/);
+  const noPathFilename = responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
+    { type: "input_file", file_url: "https://example.com/" },
+  ] }] }));
+  assert.deepEqual(noPathFilename.messages[0].content, [
+    { type: "file", file: { file_data: "https://example.com/" } },
+  ]);
 });
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {
@@ -136,13 +143,15 @@ test("Responses file IDs and attachments outside the final user message return 4
 });
 test("failed streamed attachment resolution returns a client error without a completed response event", async () => {
   setupWithUploads("multimodal-url-failure", { sourceFails: true });
-  const res = await post({ stream: true, input: [{ role: "user", content: [
-    { type: "input_file", file_url: "https://files.example/docs/report.pdf" },
-  ] }] });
-  const body = await res.text();
-  assert.equal(res.status, 400, body);
-  assert.match(body, /invalid_request_error/);
-  assert.doesNotMatch(body, /response\.completed/);
+  for (const fileUrl of ["https://files.example/docs/report.pdf", "not an absolute URL"]) {
+    const res = await post({ stream: true, input: [{ role: "user", content: [
+      { type: "input_file", file_url: fileUrl },
+    ] }] });
+    const body = await res.text();
+    assert.equal(res.status, 400, body);
+    assert.match(body, /invalid_request_error/);
+    assert.doesNotMatch(body, /response\.completed/);
+  }
 });
 for (const minimal of [true, false]) test(`Responses three turns, mixed transport, minimal=${minimal}`, async () => {
   const sent = []; setup(`responses-${minimal}`, { sent });
