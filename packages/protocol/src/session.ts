@@ -22,6 +22,13 @@ const USER_AGENT =
 const SESSION_COOKIE_NAME = "__Secure-next-auth.session-token";
 const activeMints = new Map<string, Promise<MintedAccessToken>>();
 
+/** RFC 6265 cookie-octet: reject separators/control/non-ASCII before header interpolation. */
+function assertCookieValue(token: string): void {
+  if (!token || !/^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/.test(token)) {
+    throw new TypeError("Session token contains characters that cannot be sent in a Cookie header.");
+  }
+}
+
 export interface MintedAccessToken {
   accessToken: string;
   /** Epoch ms when this accessToken should be treated as expired and re-minted. */
@@ -96,6 +103,7 @@ export async function isAccessDeniedResponse(response: Response): Promise<boolea
 
 /** Exchange a session token for a fresh accessToken. Throws SessionTokenInvalidError if the session token itself is no good. */
 export async function mintAccessToken(sessionToken: string): Promise<MintedAccessToken> {
+  assertCookieValue(sessionToken);
   const res = await upstreamFetch(SESSION_URL, {
     headers: {
       cookie: `${SESSION_COOKIE_NAME}=${sessionToken}`,
