@@ -6,6 +6,7 @@ import type { DurableSqlStorage } from "./worker-sql.js";
 import { runWithRequestSessionToken } from "./auth.js";
 import { runWithUpstreamFetch, type UpstreamFetch } from "@mirror/protocol";
 import { configuredApiKeys } from "./security.js";
+import { registerWorkerRequestSignal } from "./worker-request-signals.js";
 
 interface DurableObjectState {
   storage: DurableSqlStorage;
@@ -47,10 +48,15 @@ export class MirrorStorage extends DurableObject<WorkerEnvironment> {
     });
     const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
     const sessionToken = request.headers.get("x-mirror-session-token") ?? undefined;
+    const unregisterSignal = registerWorkerRequestSignal(request.headers.get("x-mirror-worker-request-id"), request.signal);
     const upstream = this.env.WARP?.fetch ? this.env.WARP.fetch.bind(this.env.WARP) : fetch;
-    return runWithUpstreamFetch(upstream, () =>
-      runWithRequestSessionToken(token, () => this.handlerPromise!.then((handler) => handler(request)), sessionToken,
-        configuredApiKeys({ MIRROR_API_KEY: this.env.MIRROR_API_KEY, MIRROR_API_KEYS: this.env.MIRROR_API_KEYS, OPENAI_API_KEY: this.env.OPENAI_API_KEY })));
+    try {
+      return await runWithUpstreamFetch(upstream, () =>
+        runWithRequestSessionToken(token, () => this.handlerPromise!.then((handler) => handler(request)), sessionToken,
+          configuredApiKeys({ MIRROR_API_KEY: this.env.MIRROR_API_KEY, MIRROR_API_KEYS: this.env.MIRROR_API_KEYS, OPENAI_API_KEY: this.env.OPENAI_API_KEY })));
+    } finally {
+      unregisterSignal();
+    }
   }
 
   private async startServer(): Promise<HttpServerHandler> {
@@ -75,7 +81,11 @@ export default {
     const clientIp = request.headers.get("cf-connecting-ip");
     if (clientIp) headers.set("x-forwarded-for", clientIp);
 
-    const internalRequest = new Request(request, { headers });
+    // Preserve the Worker's abort signal across this internal request. The
+    // Node HTTP bridge does not expose that signal on Fastify's request, so an
+    // internal ID lets Worker routes resolve it from a short lived registry.
+    headers.set("x-mirror-worker-request-id", crypto.randomUUID());
+    const internalRequest = new Request(request, { headers, signal: request.signal });
     const id = env.MIRROR.idFromName("mirror-single-account");
     return env.MIRROR.get(id).fetch(internalRequest);
   },
