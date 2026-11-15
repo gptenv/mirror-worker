@@ -335,11 +335,12 @@ test("populates the model dropdown from /v1/models, labelling gizmos/projects an
   assert.equal(unsupportedOption.disabled, true);
 });
 
-test("a failed model-discovery fetch is swallowed silently, leaving only the auto option", async () => {
+test("a failed model-discovery fetch reports that availability and capabilities are unknown", async () => {
   await renderApp([[/^\/v1\/models$/, () => { throw new Error("network down"); }]]);
   const select = screen.getByLabelText("Model") as HTMLSelectElement;
   assert.equal(select.options.length, 1);
   assert.equal(select.options[0].value, "auto");
+  assert.match((await screen.findByLabelText("Model catalog status")).textContent ?? "", /Could not verify.*Availability and capabilities are unknown/);
 });
 
 test("a non-ok model-discovery response is swallowed silently", async () => {
@@ -352,6 +353,62 @@ test("a model-discovery response whose data isn't an array is ignored", async ()
   await renderApp([[/^\/v1\/models$/, () => jsonResponse({ data: "not-an-array" })]]);
   const select = screen.getByLabelText("Model") as HTMLSelectElement;
   assert.equal(select.options.length, 1);
+  assert.match((await screen.findByLabelText("Model catalog status")).textContent ?? "", /Could not verify/);
+});
+
+test("reports endpoint-advertised models without inferring unknown capabilities", async () => {
+  await renderApp([[/^\/v1\/models$/, () => jsonResponse({ data: [{ id: "model-x", owned_by: "provider" }] })]]);
+  const status = await screen.findByLabelText("Model catalog status");
+  assert.match(status.textContent ?? "", /1 model advertised by this endpoint/);
+  assert.match(status.textContent ?? "", /Capabilities are unknown/);
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "typed-model" } });
+  assert.match(status.textContent ?? "", /selected model is not listed.*support is unverified/);
+});
+
+test("shows capabilities only as endpoint-reported metadata", async () => {
+  await renderApp([[/^\/v1\/models$/, () => jsonResponse({ data: [{ id: "model-x", mirror: { capabilities: { vision: true } } }] })]]);
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-x" } });
+  assert.match((await screen.findByLabelText("Model catalog status")).textContent ?? "", /Endpoint-reported capabilities: \{"vision":true\}/);
+});
+
+test("excludes null capability metadata from the endpoint-reported display", async () => {
+  await renderApp([[/^\/v1\/models$/, () => jsonResponse({ data: [{ id: "model-x", mirror: { capabilities: null } }] })]]);
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "model-x" } });
+  const status = await screen.findByLabelText("Model catalog status");
+  assert.match(status.textContent ?? "", /Capabilities are unknown/);
+  assert.doesNotMatch(status.textContent ?? "", /Endpoint-reported capabilities/);
+});
+
+test("credential rotation during model discovery triggers a fresh catalog request", async () => {
+  localStorage.setItem("mirror_access_token", "old-access");
+  const firstResponse = deferred<Response>();
+  let calls = 0;
+  await renderApp([[/^\/v1\/models$/, () => {
+    calls++;
+    return calls === 1
+      ? firstResponse.promise
+      : jsonResponse({ data: [{ id: "advertised-after-rotation" }] });
+  }]]);
+  assert.match(screen.getByLabelText("Model catalog status").textContent ?? "", /Checking models/);
+
+  await act(async () => {
+    firstResponse.resolve(jsonResponse(
+      { data: [{ id: "first-response-model" }] },
+      { headers: { "x-mirror-access-token": "rotated-access" } },
+    ));
+  });
+  await waitFor(() => assert.equal(calls, 2));
+  await screen.findByRole("option", { name: "advertised-after-rotation" });
+  assert.equal((screen.getByLabelText("Bearer credential") as HTMLInputElement).value, "rotated-access");
+  assert.match(screen.getByLabelText("Model catalog status").textContent ?? "", /1 model advertised by this endpoint/);
+});
+
+test("clears the prior endpoint's catalog when the server domain changes", async () => {
+  await renderApp([[/^\/v1\/models$/, () => jsonResponse({ data: [{ id: "old-endpoint-model" }] })]]);
+  await screen.findByRole("option", { name: "old-endpoint-model" });
+  fireEvent.change(screen.getByLabelText("Server domain"), { target: { value: "https://other.example" } });
+  await waitFor(() => assert.equal(screen.queryByRole("option", { name: "old-endpoint-model" }), null));
+  assert.match(screen.getByLabelText("Model catalog status").textContent ?? "", /Connect an endpoint/);
 });
 
 test("the bearer credential is sent as an authorization header on model discovery", async () => {
@@ -1295,7 +1352,9 @@ test("credential rotation from discovery, generation and diagnostics updates the
     [/^\/api\/diagnostics$/, () => jsonResponse({ ok: true })],
     [/^\/v1\/models$/, () => {
       modelCalls++;
-      return modelCalls > 2 ? jsonResponse({ data: [] }) : jsonResponse({ data: [] }, { headers: { "x-mirror-access-token": modelCalls === 1 ? "discovery-access" : "diagnostic-access" } });
+      if (modelCalls === 1) return jsonResponse({ data: [] }, { headers: { "x-mirror-access-token": "discovery-access" } });
+      if (modelCalls === 4) return jsonResponse({ data: [] }, { headers: { "x-mirror-access-token": "diagnostic-access" } });
+      return jsonResponse({ data: [] });
     }],
     [/^\/v1\/chat\/completions$/, () => jsonResponse({ choices: [{ message: { content: "done" } }] }, { headers: { "x-mirror-access-token": "generation-access" } })],
   ]);

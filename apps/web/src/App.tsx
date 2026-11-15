@@ -45,7 +45,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 interface ApiModel {
   id: string;
   owned_by?: string;
-  mirror?: {supported: boolean};
+  mirror?: {supported?: boolean; capabilities?: unknown};
   name?: string;
 }
 interface ConversationSummary {
@@ -141,8 +141,8 @@ export default function App() {
   const selectedOrigin = endpointOrigin(domain);
   const localEndpoint = selectedOrigin === location.origin;
   const selectedKey = localEndpoint ? apiKey : externalKeys[selectedOrigin ?? ""] ?? "";
-  const credentialRotationRef = useRef(false);
   const [models, setModels] = useState<ApiModel[]>([]);
+  const [modelCatalogState, setModelCatalogState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [model, setModel] = useState(() => loadSnapshot()?.model ?? "auto");
   const [modelFreeform, setModelFreeform] = useState(false);
   const [pickedModel, setPickedModel] = useState(() => loadSnapshot()?.pickedModel ?? "");
@@ -263,26 +263,33 @@ export default function App() {
   const canRun = runBlockedReason === null;
 
   useEffect(() => {
-    if (credentialRotationRef.current) {
-      credentialRotationRef.current = false;
+    setModels([]);
+    if (!selectedOrigin || (!localEndpoint && connectedOrigin !== selectedOrigin)) {
+      setModelCatalogState("idle");
       return;
     }
-    if (!selectedOrigin || (!localEndpoint && connectedOrigin !== selectedOrigin)) return;
+    let active = true;
     const headers = endpointHeaders(domain, selectedKey);
+    setModelCatalogState("loading");
     fetch(`${domain.replace(/\/$/, "")}/v1/models`, { headers })
       .then(async (res) => {
         const accessToken = res.headers.get("x-mirror-access-token");
         if (accessToken && localEndpoint && accessToken === readStoredBearer()) {
           setApiKey(accessToken);
-          if (accessToken !== apiKey) credentialRotationRef.current = true;
         }
         if (!res.ok) throw new Error(await res.text());
         return res.json();
       })
       .then((body) => {
-        if (Array.isArray(body.data)) setModels(body.data);
+        if (!Array.isArray(body.data)) throw new Error("Endpoint returned no model list");
+        if (active) {
+          setModels(body.data);
+          setModelCatalogState("loaded");
+        }
       })
-      .catch(() => undefined);
+      .catch(() => { if (active) { setModels([]); setModelCatalogState("error"); } })
+      .finally(() => undefined);
+    return () => { active = false; };
   }, [domain, apiKey, selectedKey, connectedOrigin]);
 
   // sync is always sent - the server only pulls however many more upstream
@@ -564,7 +571,6 @@ export default function App() {
       const accessToken = response.headers.get("x-mirror-access-token");
       if (accessToken && localEndpoint && accessToken === readStoredBearer()) {
         setApiKey(accessToken);
-        if (accessToken !== apiKey) credentialRotationRef.current = true;
       }
       if (!response.ok)
         throw new Error(await response.text());
@@ -945,6 +951,21 @@ export default function App() {
                 </button>
               </div>
             </label>
+            <small role="status" aria-label="Model catalog status">
+                {modelCatalogState === "loading" && "Checking models advertised by this endpoint…"}
+                {modelCatalogState === "idle" && "Connect an endpoint to check its advertised models."}
+                {modelCatalogState === "error" && "Could not verify this endpoint’s model list. Availability and capabilities are unknown."}
+                {modelCatalogState === "loaded" && (
+                  <>
+                    {models.length} model{models.length === 1 ? "" : "s"} advertised by this endpoint. Listing does not guarantee generation access; account permissions and availability may change. Capabilities are unknown unless reported below.
+                    {model !== "auto" && !models.some((item) => item.id === model) && " The selected model is not listed by this endpoint; support is unverified."}
+                    {models.find((item) => item.id === model)?.mirror?.capabilities != null && (
+                      <> Endpoint-reported capabilities: {JSON.stringify(models.find((item) => item.id === model)?.mirror?.capabilities)}</>
+                    )}
+                    {model !== "auto" && models.some((item) => item.id === model && item.mirror?.supported === false) && " Mirror marks this model as unsupported."}
+                  </>
+                )}
+            </small>
             {isGizmoModel && (
               <label>
                 <span>Picked model for this GPT/Project</span>
@@ -1097,7 +1118,6 @@ export default function App() {
               connectionAllowed={localEndpoint || connectedOrigin === selectedOrigin}
               generationSucceeded={status === "Completed"}
               onSessionToken={(token) => {
-                if (token !== apiKey) credentialRotationRef.current = true;
                 setApiKey(token);
               }}
             />
