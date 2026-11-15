@@ -222,14 +222,14 @@ test.describe('server / Worker owner boundary', () => {
     test.mock.method(ChatGptBackendClient.prototype, 'fetchAssetContent', async () => new Response('fixture-image', { headers: { 'content-type': 'image/png' } }));
     const app = await buildApp({ worker: true, ownerUserId: 'owner-account' });
     try {
-      const headers = mode === 'bearer-fallback' ? { authorization: `Bearer ${initial}` } : { cookie: `mirror_asset_session=${initial}` };
+      const headers = mode === 'bearer-fallback' ? { authorization: `Bearer ${initial}`, 'x-mirror-session-token': 'fixture-session' } : { cookie: `mirror_asset_session=${initial}` };
       if (mode === 'rotated-secure') headers['x-forwarded-proto'] = 'https';
       const response = await app.inject({ url: `/api/asset-content?ticket=${encodeURIComponent(ticket)}`, headers });
       assert.equal(response.statusCode, 200, response.body);
       assert.equal(response.headers['x-mirror-access-token'], freshAccess);
       assert.equal(response.headers['x-mirror-session-token'], mode === 'rotated-secure' ? 'rotated-session' : undefined);
       assert.equal(response.headers['cache-control'], 'no-store');
-      assert.equal(response.headers['set-cookie'], `mirror_asset_session=${mode === 'rotated-secure' ? 'rotated-session' : initial}; Path=/api/asset-content; SameSite=Strict${mode === 'rotated-secure' ? '; Secure' : ''}`);
+      assert.equal(response.headers['set-cookie'], `mirror_asset_session=${mode === 'rotated-secure' ? 'rotated-session' : mode === 'bearer-fallback' ? 'fixture-session' : initial}; Path=/api/asset-content; SameSite=Strict${mode === 'rotated-secure' ? '; Secure' : ''}`);
     } finally { await app.close(); }
   });
 });

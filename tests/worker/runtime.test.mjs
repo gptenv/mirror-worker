@@ -98,7 +98,8 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       ['/v1/responses', { input: 'fixture', stream: true }],
       ['/api/chat', { prompt: 'fixture' }],
     ]) {
-      const response = await request(pathname, { method: 'POST', headers: { authorization: 'Bearer expired-session', 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const sessionBearer = 'header.payload.expired-session.tag.iv';
+      const response = await request(pathname, { method: 'POST', headers: { authorization: `Bearer ${sessionBearer}`, 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       assert.equal(response.status, 200);
       assert.equal(response.headers.get('x-mirror-access-token'), 'fresh-owner');
       assert.equal(response.headers.get('x-mirror-session-token'), 'fresh-session');
@@ -106,7 +107,7 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
       assert.match(response.headers.get('cache-control'), /no-store/);
       assert.match(await response.text(), /reply-/);
     }
-    const wrong = await request('/api/diagnostics', { headers: { authorization: 'Bearer expired-other' } });
+    const wrong = await request('/api/diagnostics', { headers: { authorization: 'Bearer header.payload.expired-other.tag.iv' } });
     assert.equal(wrong.status, 403);
     assert.equal(wrong.headers.get('x-mirror-auth-status'), 'owner_mismatch');
     assert.equal(wrong.headers.get('x-mirror-access-token'), null);

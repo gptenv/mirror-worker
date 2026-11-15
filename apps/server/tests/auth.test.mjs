@@ -11,6 +11,14 @@ const auth = await import("../dist/auth.js");
 test.describe("server / auth", () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
+  test("asset cookie token selection prefers rotated session, session fallback, bearer, then access token", () => {
+    assert.equal(auth.resolveAssetCookieToken('rotated-session', 'fallback-session', 'bearer', 'access'), 'rotated-session');
+    assert.equal(auth.resolveAssetCookieToken(undefined, 'fallback-session', 'bearer', 'access'), 'fallback-session');
+    assert.equal(auth.resolveAssetCookieToken(undefined, undefined, 'bearer', 'access'), 'bearer');
+    assert.equal(auth.resolveAssetCookieToken(undefined, undefined, undefined, 'access'), 'access');
+    assert.equal(auth.resolveAssetCookieToken(undefined, undefined, undefined, undefined), undefined);
+  });
+
   test("anonymous scopes cannot inherit enclosing credentials or rotation", async () => {
     await auth.runWithRequestSessionToken("owner", async () => {
       const credentials = await auth.getValidCredentials();
@@ -73,10 +81,10 @@ test.describe("server / auth", () => {
       await assert.rejects(auth.fetchWithAccessTokenFallback('https://chatgpt.com/backend-api/me', { headers: { cookie: 'other=value; __Secure-next-auth.session-token=stale' } }, credentials), error => {
         assert.equal(error.statusCode, 401);
         assert.equal(error.tokenLengths.accessToken.received, 10);
-        assert.equal(error.tokenLengths.sessionToken.received, 10);
+        assert.equal(error.tokenLengths.sessionToken.received, "session-fallback".length);
         return true;
       });
-    });
+    }, "session-fallback");
   });
   test("a rotated session replaces only its cookie and is returned to the caller", async t => {
     let calls = 0;
@@ -211,6 +219,70 @@ test.describe("server / auth", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+  test("exchanges a session-token bearer before the first upstream API call", async () => {
+    const originalFetch = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (input, init = {}) => {
+      const url = new URL(String(input));
+      calls.push([url.pathname, new Headers(init.headers).get("authorization")]);
+      if (url.pathname === "/api/auth/session") {
+        assert.equal(new Headers(init.headers).get("cookie"), "__Secure-next-auth.session-token=header.payload.ciphertext.tag.iv");
+        return Response.json({
+        accessToken: `h.${Buffer.from(JSON.stringify({ exp: Date.now() / 1000 + 3600 })).toString("base64url")}.s`,
+        }, { headers: { "set-cookie": "__Secure-next-auth.session-token=rotated-session; Path=/" } });
+      }
+      assert.equal(url.pathname, "/backend-api/me");
+      assert.match(new Headers(init.headers).get("authorization"), /^Bearer h\./);
+      return Response.json({ id: "session-owner" });
+    };
+    try {
+      await auth.runWithRequestSessionToken("header.payload.ciphertext.tag.iv", async () => {
+        const credentials = await auth.getValidCredentials();
+        const response = await auth.fetchWithAccessTokenFallback("https://chatgpt.com/backend-api/me", {}, credentials);
+        assert.equal(response.status, 200);
+        assert.equal(await auth.getRotatedRequestAccessToken(), credentials.accessToken);
+        assert.equal(await auth.getRotatedRequestSessionToken(), "rotated-session");
+      });
+      assert.deepEqual(calls.map(([path]) => path), ["/api/auth/session", "/backend-api/me"]);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+  test("a failed preemptive session exchange reports actual sent-token lengths and skips the API call", async () => {
+    const originalFetch = globalThis.fetch;
+    const sessionToken = "header.payload.ciphertext.tag.iv";
+    const calls = [];
+    globalThis.fetch = async input => {
+      calls.push(new URL(String(input)).pathname);
+      return new Response("synthetic exchange unavailable", { status: 503 });
+    };
+    try {
+      await auth.runWithRequestSessionToken(sessionToken, async () => {
+        const credentials = await auth.getValidCredentials();
+        await assert.rejects(auth.fetchWithAccessTokenFallback("https://chatgpt.com/backend-api/me", {}, credentials), error => {
+          assert.equal(error.statusCode, 503);
+          assert.equal(error.tokenLengths.accessToken.received, sessionToken.length);
+          assert.equal(error.tokenLengths.accessToken.sentUpstream, null);
+          assert.equal(error.tokenLengths.sessionToken.sentUpstream, sessionToken.length);
+          return true;
+        });
+      });
+      assert.deepEqual(calls, ["/api/auth/session"]);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+  test("a rejected preemptive session credential is classified as 401", async t => {
+    t.mock.method(globalThis, "fetch", async input => {
+      assert.equal(new URL(String(input)).pathname, "/api/auth/session");
+      return new Response('{"error":"invalid session"}', { status: 401, headers: { "content-type": "application/json" } });
+    });
+    const token = "header.payload.ciphertext.tag.iv";
+    await auth.runWithRequestSessionToken(token, async () => {
+      const credentials = await auth.getValidCredentials();
+      await assert.rejects(auth.fetchWithAccessTokenFallback("https://chatgpt.com/backend-api/me", {}, credentials), error => {
+        assert.equal(error.statusCode, 401);
+        assert.equal(error.tokenLengths.sessionToken.sentUpstream, token.length);
+        return true;
+      });
+    });
   });
   test("sealed credentials never exchange or replay a denied proxy mutation", async t => {
     let calls = 0;

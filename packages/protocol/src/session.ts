@@ -41,6 +41,47 @@ export interface MintedAccessToken {
   rotatedSessionToken: string | null;
 }
 
+/** Mint before an access token expires when its client still holds the session
+ * token that can renew it. A session token supplied by itself is never sent to
+ * backend-api as though it were an access token. */
+export function shouldRefreshAccessToken(
+  accessToken: string,
+  sessionToken: string | null | undefined,
+  now = Date.now(),
+  refreshBeforeMs = 60_000,
+): boolean {
+  if (!sessionToken) return false;
+  if (accessToken === sessionToken) {
+    // With a single supplied bearer, only a NextAuth session cookie is
+    // renewable. Access tokens are three-part JWTs and must remain direct
+    // even when near expiry; session cookies use compact JWE (five segments).
+    return accessToken.split(".").length === 5;
+  }
+  const expSeconds = decodeJwtExpSeconds(accessToken);
+  if (expSeconds !== null) return expSeconds * 1000 <= now + refreshBeforeMs;
+  // A bearer without a JWT expiry is not renewable unless it was explicitly
+  // provided as a separate session token.
+  return false;
+}
+
+export function applyMintedAccessToken<T extends {
+  accessToken: string;
+  sessionToken?: string | null;
+  cookie?: string;
+  rotatedSessionToken?: string | null;
+}>(credentials: T, minted: MintedAccessToken): void {
+  credentials.accessToken = minted.accessToken;
+  if (minted.rotatedSessionToken) credentials.rotatedSessionToken = minted.rotatedSessionToken;
+  const sessionToken = minted.rotatedSessionToken || credentials.sessionToken;
+  if (sessionToken) credentials.sessionToken = sessionToken;
+  if (credentials.cookie && sessionToken) {
+    credentials.cookie = credentials.cookie.replace(
+      /__Secure-next-auth\.session-token=[^;]*/,
+      `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`,
+    );
+  }
+}
+
 /** Decode a JWT's `exp` claim (seconds since epoch) without verifying the signature — we don't hold the key, and we trust the origin because we're the ones who just fetched it over TLS from chatgpt.com. */
 function decodeJwtExpSeconds(jwt: string): number | null {
   try {

@@ -14,7 +14,7 @@ test.describe('server / browser-login', () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
 
   test('navigation loads credentials from browser storage and preserves rotation before rendering', async () => {
-    const storage = new Map([['mirror_access_token', 'session-' + 'x'.repeat(24000)]]);
+    const storage = new Map([['mirror_access_token', 'header.payload.' + 'x'.repeat(24000) + '.tag.iv']]);
     const elements = { connect: {}, credential: { value: '' }, submit: { disabled: false }, status: { textContent: '' } };
     let written;
     const context = {
@@ -51,7 +51,7 @@ test.describe('server / browser-login', () => {
   test('authenticated document uses the rotated session cookie and returns rotated credentials to the browser', async () => {
     const app = await buildApp({ worker: true });
     const calls = [];
-    const sessionToken = 'session-' + 'x'.repeat(24000);
+    const sessionToken = 'header.payload.' + 'x'.repeat(24000) + '.tag.iv';
     try {
       const fetchMock = test.mock.method(globalThis, 'fetch', async (input, init) => {
         const url = String(input); calls.push(url);

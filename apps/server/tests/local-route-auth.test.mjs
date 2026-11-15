@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createBrowserCredentials } from '@mirror/protocol';
+import { stubBackend } from './helpers/backend.mjs';
 const dir=mkdtempSync(path.join(tmpdir(),'mirror-local-route-auth-'));
 process.env.MIRROR_DATA_DIR=dir;
 const {buildApp}=await import('../dist/index.js');
@@ -108,6 +109,62 @@ test.describe('server / local-route-auth',()=>{
       assert.equal(response.statusCode,200,response.body);
       assert.equal(response.headers['x-mirror-access-token'],'fresh-access');
       assert.deepEqual(seen,['/backend-api/me','/api/auth/session','/backend-api/me']);
+    }finally{await app.close();}
+  });
+  test('same-origin mutating browser requests refresh only the access bearer paired with their browser session cookie',async()=>{
+    const values=[];
+    createBrowserCredentials(undefined,{read:()=>'',write:value=>{if(!value.includes('Max-Age=0'))values.push(value.split(';')[0]);}}).writeCookie(['expired-access','saved-session']);
+    let seen=[];
+    test.mock.method(globalThis,'fetch',async(input,init)=>{
+      const pathname=new URL(String(input)).pathname;
+      const headers=new Headers(init.headers);
+      seen.push({pathname,authorization:headers.get('authorization'),cookie:headers.get('cookie')});
+      if(pathname==='/api/auth/session')return Response.json({accessToken:'fresh-access'});
+      if(pathname==='/backend-api/me'&&headers.get('authorization')==='Bearer expired-access')return new Response('expired',{status:401});
+      if(pathname==='/backend-api/me')return Response.json({object:'user',id:'local-user'});
+      return assert.fail(`unexpected upstream URL: ${pathname}`);
+    });
+    for(const options of [{},{worker:true,ownerUserId:'local-user'}]){
+      const app=await buildApp(options);
+      seen=[];
+      try{
+        const response=await app.inject({method:'PUT',url:'/api/settings/hotkeys',payload:{hotkeys:{}},headers:{
+          host:'localhost',authorization:'Bearer expired-access',cookie:values.join('; '),'sec-fetch-site':'same-origin',origin:'http://localhost',
+        }});
+        assert.equal(response.statusCode,200,response.body);
+        assert.equal(response.headers['x-mirror-access-token'],'fresh-access');
+        assert.deepEqual(seen.map(value=>value.pathname),['/backend-api/me','/api/auth/session','/backend-api/me']);
+        assert.equal(seen[0].authorization,'Bearer expired-access');
+        assert.equal(seen[1].cookie,'__Secure-next-auth.session-token=saved-session');
+        assert.equal(seen[2].authorization,'Bearer fresh-access');
+      }finally{await app.close();}
+    }
+  });
+  test('same-origin API XHR refreshes an expired access bearer without sending the session token in the request header',async()=>{
+    const app=await buildApp();
+    const values=[];
+    createBrowserCredentials(undefined,{read:()=>'',write:value=>{if(!value.includes('Max-Age=0'))values.push(value.split(';')[0]);}}).writeCookie(['expired-access','saved-session']);
+    const seen=[];
+    const backend=stubBackend('local-user');
+    test.mock.method(globalThis,'fetch',async(input,init={})=>{
+      const pathname=new URL(String(input)).pathname;
+      const headers=new Headers(init.headers);
+      seen.push({pathname,authorization:headers.get('authorization'),cookie:headers.get('cookie'),mirrorSession:headers.get('x-mirror-session-token')});
+      if(pathname==='/api/auth/session')return Response.json({accessToken:'fresh-access'});
+      if(headers.get('authorization')==='Bearer expired-access')return new Response('expired',{status:401});
+      return backend(input,init);
+    });
+    try{
+      const response=await app.inject({method:'POST',url:'/v1/chat/completions',payload:{model:'gpt-4o-mini',messages:[{role:'user',content:'synthetic'}],stream:false},headers:{
+        host:'localhost',authorization:'Bearer expired-access',cookie:values.join('; '),'sec-fetch-site':'same-origin',origin:'http://localhost',
+      }});
+      assert.equal(response.statusCode,200,response.body);
+      assert.equal(response.headers['x-mirror-access-token'],'fresh-access');
+      assert.ok(seen.some(value=>value.pathname==='/api/auth/session'));
+      const calls=seen.filter(value=>value.pathname!=='/api/auth/session');
+      assert.ok(calls.some(value=>value.authorization==='Bearer expired-access'));
+      assert.ok(calls.some(value=>value.authorization==='Bearer fresh-access'));
+      assert.ok(seen.every(value=>value.mirrorSession===null));
     }finally{await app.close();}
   });
   test('native cookie reads preserve owner checks, explicit bearer precedence, and legacy-cookie CSRF boundaries', async () => {

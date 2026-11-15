@@ -24,7 +24,7 @@ import {
   type RemoteConversationSummary,
 } from "./types.js";
 import { resolveTurnstileToken, type TurnstileChallenge } from "./turnstile.js";
-import { isAccessDeniedResponse, mintAccessTokenShared } from "./session.js";
+import { applyMintedAccessToken, isAccessDeniedResponse, mintAccessTokenShared, shouldRefreshAccessToken } from "./session.js";
 import { hasWorkModeSuffix } from "./models.js";
 
 const ORIGIN = "https://chatgpt.com";
@@ -46,12 +46,18 @@ function safeJson(text: string): unknown {
   }
 }
 
-function attachTokenLengths(error: unknown, accessToken: string, sessionToken: string | null | undefined, sessionExchangeAttempted: boolean): void {
+function attachTokenLengths(
+  error: unknown,
+  accessToken: string,
+  sessionToken: string | null | undefined,
+  sessionExchangeAttempted: boolean,
+  accessTokenSentUpstream = true,
+): void {
   if (error === null || typeof error !== "object") return;
   const sessionTokenLength = sessionToken?.length ?? null;
   Object.assign(error, {
     tokenLengths: {
-      accessToken: { received: accessToken.length, sentUpstream: accessToken.length },
+      accessToken: { received: accessToken.length, sentUpstream: accessTokenSentUpstream ? accessToken.length : null },
       sessionToken: {
         received: sessionTokenLength,
         sentUpstream: sessionExchangeAttempted ? sessionTokenLength : null,
@@ -189,11 +195,23 @@ export class ChatGptBackendClient {
       ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
       signal: opts.signal,
     });
-    const firstAccessToken = this.creds.accessToken;
+    const receivedAccessToken = this.creds.accessToken;
+    const receivedSessionToken = this.creds.sessionToken;
     this.lastTokenLengths = {
-      accessToken: { received: firstAccessToken.length, sentUpstream: firstAccessToken.length },
-      sessionToken: { received: this.creds.sessionToken?.length ?? null, sentUpstream: null },
+      accessToken: { received: receivedAccessToken.length, sentUpstream: null },
+      sessionToken: { received: receivedSessionToken?.length ?? null, sentUpstream: null },
     };
+    if (this.creds.sessionRefreshAllowed !== false && receivedSessionToken && shouldRefreshAccessToken(receivedAccessToken, receivedSessionToken)) {
+      this.lastTokenLengths.sessionToken.sentUpstream = receivedSessionToken.length;
+      try {
+        applyMintedAccessToken(this.creds, await mintAccessTokenShared(receivedSessionToken));
+      } catch (error) {
+        attachTokenLengths(error, receivedAccessToken, receivedSessionToken, true, false);
+        throw error;
+      }
+    }
+    const firstAccessToken = this.creds.accessToken;
+    this.lastTokenLengths.accessToken.sentUpstream = firstAccessToken.length;
     let res: Response;
     try {
       res = await request();
@@ -215,12 +233,8 @@ export class ChatGptBackendClient {
       }
       // Keep the refreshed value only in this request's credentials object;
       // the server returns it to the browser, which owns persistent storage.
-      this.creds.accessToken = minted.accessToken;
+      applyMintedAccessToken(this.creds, minted);
       this.lastTokenLengths.accessToken.sentUpstream = minted.accessToken.length;
-      if (minted.rotatedSessionToken) this.creds.rotatedSessionToken = minted.rotatedSessionToken;
-      if (minted.rotatedSessionToken) this.creds.sessionToken = minted.rotatedSessionToken;
-      if (this.creds.cookie) this.creds.cookie = this.creds.cookie.replace(/__Secure-next-auth\.session-token=[^;]*/,
-        `__Secure-next-auth.session-token=${encodeURIComponent(minted.rotatedSessionToken || this.creds.sessionToken)}`);
       res = await request();
     }
     return res;

@@ -7,6 +7,9 @@ import {
   generateProofTokenInWorker,
   mintAccessToken,
   mintAccessTokenShared,
+  shouldRefreshAccessToken,
+  applyMintedAccessToken,
+  isAccessDeniedResponse,
   SessionExchangeError,
   SessionTokenInvalidError,
   BackendApiError,
@@ -42,6 +45,42 @@ test("concurrent exchanges share only an in-flight request", async t => {
   assert.equal((await first).accessToken, "fixture-access");
   await mintAccessTokenShared("fixture-session");
   assert.equal(calls, 2);
+});
+test("refresh policy distinguishes a session credential from direct access tokens and refreshes before expiry", () => {
+  const now = 2_000_000_000_000;
+  const jwt = exp => `header.${Buffer.from(JSON.stringify({ exp })).toString("base64url")}.signature`;
+  const session = "header.payload.ciphertext.tag.iv";
+  assert.equal(shouldRefreshAccessToken(session, session, now), true, "session-only input must be exchanged first");
+  assert.equal(shouldRefreshAccessToken(jwt((now + 5 * 60_000) / 1000), null, now), false, "access-only input is used directly");
+  assert.equal(shouldRefreshAccessToken(jwt((now + 30_000) / 1000), jwt((now + 30_000) / 1000), now), false, "an expiring access-only bearer is never treated as a session token");
+  assert.equal(shouldRefreshAccessToken(jwt((now + 5 * 60_000) / 1000), session, now), false, "a fresh access token is used directly");
+  assert.equal(shouldRefreshAccessToken(jwt((now + 30_000) / 1000), session, now), true, "an access token is refreshed inside the safety window");
+  assert.equal(shouldRefreshAccessToken(jwt((now - 1_000) / 1000), session, now), true, "an expired access token is refreshed before any upstream operation");
+});
+test("access denial detection distinguishes credentials from non-auth 403 responses", async () => {
+  assert.equal(await isAccessDeniedResponse(new Response("expired", { status: 401 })), true);
+  assert.equal(await isAccessDeniedResponse(new Response('{"error":"invalid token"}', { status: 403, headers: { "content-type": "application/json" } })), true);
+  assert.equal(await isAccessDeniedResponse(new Response('{"error":"quota"}', { status: 403, headers: { "content-type": "application/json" } })), false);
+  assert.equal(await isAccessDeniedResponse(new Response("forbidden", { status: 403, headers: { "content-type": "text/plain" } })), false);
+  assert.equal(await isAccessDeniedResponse({ status: 403, headers: new Headers({ "content-type": "application/json" }), clone: () => ({ text: () => Promise.reject(new Error("unreadable")) }) }), false);
+});
+test("applying a minted token preserves or rotates the client-held session cookie safely", () => {
+  const base = { accessToken: "old-access", sessionToken: "old-session", cookie: "other=value; __Secure-next-auth.session-token=old-session" };
+  applyMintedAccessToken(base, { accessToken: "fresh-access", expiresAt: 123, rotatedSessionToken: null });
+  assert.equal(base.accessToken, "fresh-access");
+  assert.equal(base.sessionToken, "old-session");
+  assert.equal(base.cookie, "other=value; __Secure-next-auth.session-token=old-session");
+
+  const rotated = { ...base };
+  applyMintedAccessToken(rotated, { accessToken: "new-access", expiresAt: 456, rotatedSessionToken: "next-session" });
+  assert.equal(rotated.sessionToken, "next-session");
+  assert.equal(rotated.rotatedSessionToken, "next-session");
+  assert.equal(rotated.cookie, "other=value; __Secure-next-auth.session-token=next-session");
+
+  const noCookie = { accessToken: "old", sessionToken: "session" };
+  applyMintedAccessToken(noCookie, { accessToken: "fresh", expiresAt: 789, rotatedSessionToken: null });
+  assert.equal(noCookie.accessToken, "fresh");
+  assert.equal(noCookie.sessionToken, "session");
 });
 test("unreadable exchange bodies are classified without hiding the status", async t => {
   for (const status of [200, 503]) {

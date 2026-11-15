@@ -34,12 +34,12 @@ test.describe('server / asset cookie optional-accessor fallback', () => {
     try {
       const response = await realAuth.runWithRequestSessionToken('fixture-expired', () => app.inject({
         url: '/api/asset-content',
-        headers: { authorization: 'Bearer fixture-expired', 'x-forwarded-proto': 'https' },
+        headers: { authorization: 'Bearer fixture-expired', 'x-mirror-session-token': 'fixture-session', 'x-forwarded-proto': 'https' },
       }), undefined, []);
       assert.equal(response.statusCode, 404, 'a missing ticket does not grant asset access');
       assert.equal(response.headers['x-mirror-access-token'], 'fixture-refreshed');
       assert.equal(response.headers['cache-control'], 'no-store');
-      assert.equal(response.headers['set-cookie'], 'mirror_asset_session=fixture-refreshed; Path=/api/asset-content; SameSite=Strict; Secure');
+      assert.equal(response.headers['set-cookie'], 'mirror_asset_session=fixture-session; Path=/api/asset-content; SameSite=Strict; Secure');
     } finally { await app.close(); }
   });
 });

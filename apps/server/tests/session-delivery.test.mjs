@@ -60,7 +60,7 @@ test.describe('server / session delivery', () => {
     try {
       for (identity of ['owner', 'other', 'owner']) {
         const response = await runWithRequestSessionToken('expired', () => app.inject({ url: '/mirror/playground',
-          headers: { authorization: 'Bearer expired', accept: 'text/html', 'x-mirror-document': '1' } }), undefined, []);
+          headers: { authorization: 'Bearer expired', 'x-mirror-session-token': 'old-session', accept: 'text/html', 'x-mirror-document': '1' } }), 'old-session', []);
         assert.equal(response.statusCode, identity === 'owner' ? 503 : 403);
         assert.equal(response.headers['x-mirror-auth-status'], identity === 'owner' ? 'owner_verified' : 'owner_mismatch');
         assert.equal(response.headers['x-mirror-access-token'], identity === 'owner' ? 'fresh' : undefined);
@@ -133,7 +133,7 @@ test.describe('server / session delivery', () => {
     const app = await buildApp({ worker: true, ownerUserId: 'owner' });
     try {
       for (refresh of [true, false]) {
-        const response = await runWithRequestSessionToken('fixture', () => app.inject({ url: '/', headers: { authorization: 'Bearer fixture', 'x-mirror-document': '1', accept: 'text/html' } }), undefined, []);
+        const response = await runWithRequestSessionToken('fixture', () => app.inject({ url: '/', headers: { authorization: 'Bearer fixture', 'x-mirror-session-token': 'fixture-session', 'x-mirror-document': '1', accept: 'text/html' } }), 'fixture-session', []);
         assert.equal(response.statusCode, 503);
         assert.equal(response.headers['x-mirror-auth-status'], 'owner_verified');
         assert.equal(response.headers['x-mirror-access-token'], refresh ? 'fresh' : undefined);

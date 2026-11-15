@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBrowserCredentials } from '@mirror/protocol';
-import { nativeReadCredentials, applyNativeCredentialCookies } from '../dist/native-credentials.js';
+import { nativeReadCredentials, nativeSessionFallback, applyNativeCredentialCookies } from '../dist/native-credentials.js';
 import { runWithRequestSessionToken, getValidCredentials } from '../dist/auth.js';
 function cookie(pair) { const values = []; createBrowserCredentials(undefined, { read: () => '', write: value => { if (!value.includes('Max-Age=0')) values.push(value.split(';')[0]); } }).writeCookie(pair); return values.join('; '); }
 function request(headers = {}, method = 'GET') { return { method, protocol: 'https', headers: { host: 'mirror.example', cookie: cookie(['old', 'session']), ...headers } }; }
@@ -16,6 +16,20 @@ test.describe('server / native read credential boundaries', () => {
       assert.deepEqual(nativeReadCredentials(request(headers, 'HEAD'), true), ['old', 'session']);
     }
     const noCookie = request(); delete noCookie.headers.cookie; assert.equal(nativeReadCredentials(noCookie, true), undefined);
+  });
+  test('explicit access bearers use the browser session fallback only when the saved pair matches', () => {
+    assert.equal(nativeSessionFallback(request({ 'sec-fetch-site': 'same-origin' }, 'POST'), 'old'), 'session');
+    assert.equal(nativeSessionFallback(request({ origin: 'https://mirror.example' }, 'PATCH'), 'old'), 'session');
+    assert.equal(nativeSessionFallback(request({ 'sec-fetch-site': 'same-origin' }), 'different-access'), undefined);
+    assert.equal(nativeSessionFallback(request({ 'sec-fetch-site': 'same-origin' }), ''), undefined);
+    assert.equal(nativeSessionFallback(request({ 'sec-fetch-site': 'cross-site' }), 'old'), undefined);
+    assert.equal(nativeSessionFallback(request({ 'sec-fetch-site': 'same-site' }), 'old'), undefined);
+    assert.equal(nativeSessionFallback(request({ 'sec-fetch-site': 'same-origin', origin: 'https://evil.example' }), 'old'), undefined);
+    assert.equal(nativeSessionFallback(request(), 'old'), undefined);
+    const noCookie = request(); delete noCookie.headers.cookie;
+    noCookie.headers['sec-fetch-site'] = 'same-origin';
+    assert.equal(nativeSessionFallback(noCookie, 'old'), undefined);
+    assert.equal(nativeSessionFallback(request({ cookie: cookie(['old', '']), 'sec-fetch-site': 'same-origin' }), 'old'), undefined);
   });
   test('only verified native reads receive rotations; rejection clears new and legacy cookies', async () => {
     await applyNativeCredentialCookies(reply(request(), 'owner_verified'));

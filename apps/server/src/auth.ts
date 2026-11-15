@@ -3,7 +3,9 @@ import { upstreamFetch } from "@mirror/protocol";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   isAccessDeniedResponse,
+  applyMintedAccessToken,
   mintAccessTokenShared,
+  shouldRefreshAccessToken,
   SessionTokenInvalidError,
   type SessionCredentials,
 } from "@mirror/protocol";
@@ -47,7 +49,16 @@ export function getRequestFallbackSessionToken(): string | undefined {
   return requestAuthentication.getStore()?.sessionToken;
 }
 
-/** Return the supplied bearer unchanged: it may already be an accessToken. */
+export function resolveAssetCookieToken(
+  rotatedSessionToken: string | undefined,
+  fallbackSessionToken: string | undefined,
+  bearerToken: string | undefined,
+  accessToken: string | undefined,
+): string | undefined {
+  return rotatedSessionToken || fallbackSessionToken || bearerToken || accessToken;
+}
+
+/** Preserve the supplied bearer and its optional session fallback per request. */
 export async function getValidCredentials(): Promise<SessionCredentials> {
   const request = requestAuthentication.getStore();
   const configuredTokens = request?.configuredTokens ?? configuredApiKeys();
@@ -62,11 +73,14 @@ export async function getValidCredentials(): Promise<SessionCredentials> {
     (err as any).statusCode = 401;
     throw err;
   }
-  const sessionToken = configuredToken || request?.sessionToken || accessToken;
+  const sessionToken = request?.sessionToken || (accessToken.split(".").length === 5 ? accessToken : undefined);
   const credentials = () => Promise.resolve({
     accessToken,
     sessionToken,
-    cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken)}`,
+    // Some upstream resources still require the session cookie alongside the
+    // direct bearer. For an access-only login, preserve the caller's value as
+    // the cookie without treating it as a refresh credential.
+    cookie: `__Secure-next-auth.session-token=${encodeURIComponent(sessionToken || accessToken)}`,
     deviceId: getOrCreateDeviceId(),
   });
   if (!request) return credentials();
@@ -90,13 +104,28 @@ export async function getRotatedRequestSessionToken(): Promise<string | undefine
   return credentials.rotatedSessionToken || undefined;
 }
 
-/** Use an accessToken first, then exchange the same original bearer after a clear auth denial. */
+/** Exchange session-only or near-expiry credentials before upstream use, then retry denied access with the session token. */
 export async function fetchWithAccessTokenFallback(
   input: string | URL | Request,
   init: RequestInit,
   credentials: SessionCredentials,
 ): Promise<Response> {
   const requestHeaders = new Headers(init.headers);
+  if (credentials.sessionRefreshAllowed !== false && credentials.sessionToken && shouldRefreshAccessToken(credentials.accessToken, credentials.sessionToken)) {
+    try {
+      applyMintedAccessToken(credentials, await mintAccessTokenShared(credentials.sessionToken));
+    } catch (error) {
+      if (error && typeof error === "object") {
+        Object.assign(error, { tokenLengths: {
+          accessToken: { received: credentials.accessToken.length, sentUpstream: null },
+          sessionToken: { received: credentials.sessionToken.length, sentUpstream: credentials.sessionToken.length },
+        } });
+      }
+      if (error instanceof SessionTokenInvalidError) (error as any).statusCode = 401;
+      throw error;
+    }
+  }
+  requestHeaders.set("authorization", `Bearer ${credentials.accessToken}`);
   if (credentials.cookie) {
     const otherCookies = (requestHeaders.get("cookie") ?? "").split(";").map(value => value.trim())
       .filter(value => value && !value.startsWith("__Secure-next-auth.session-token="));
