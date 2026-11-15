@@ -27,6 +27,10 @@ export const ResponsesBody = z.object({
 }).strict();
 export type ResponsesRequest = z.infer<typeof ResponsesBody>;
 
+export function responsesInputErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Invalid Responses input";
+}
+
 type ResponsesMessageInput = Extract<ResponsesRequest["input"], unknown[]>[number];
 type ResponsesContentPartInput = Extract<ResponsesMessageInput["content"], unknown[]>[number];
 type MappedContentPart =

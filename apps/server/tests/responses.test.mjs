@@ -11,7 +11,7 @@ process.env.MIRROR_API_KEY = 'synthetic-access-fixture';
 const { default: Fastify } = await import("fastify");
 const store = await import("../dist/store.js");
 const { registerOpenAiRoutes } = await import("../dist/openai.js");
-const { ResponsesBody, responsesToCompletion } = await import("../dist/responses.js");
+const { ResponsesBody, responsesToCompletion, responsesInputErrorMessage } = await import("../dist/responses.js");
 const app = Fastify();
 await registerOpenAiRoutes(app);
 const address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -20,6 +20,10 @@ test.describe("server / responses", () => {
 test("Responses stream by default and honors explicit opt-out", () => {
   assert.equal(ResponsesBody.parse({ input: "Hello" }).stream, true);
   assert.equal(ResponsesBody.parse({ input: "Hello", stream: false }).stream, false);
+});
+test("Responses input error messages handle Error and non-Error throws", () => {
+  assert.equal(responsesInputErrorMessage(new Error("unsupported input")), "unsupported input");
+  assert.equal(responsesInputErrorMessage("non-Error throw"), "Invalid Responses input");
 });
 test("Responses image and file input maps to the existing attachment pipeline", () => {
   const mapped = responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
@@ -50,6 +54,24 @@ test("Responses image and file input maps to the existing attachment pipeline", 
   assert.deepEqual(noPathFilename.messages[0].content, [
     { type: "file", file: { file_data: "https://example.com/" } },
   ]);
+  const fileDataWithoutFilename = responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
+    { type: "input_file", file_data: "data:text/plain;base64,SGk=" },
+  ] }] }));
+  assert.deepEqual(fileDataWithoutFilename.messages[0].content, [
+    { type: "file", file: { file_data: "data:text/plain;base64,SGk=" } },
+  ]);
+  const originalDecode = globalThis.decodeURIComponent;
+  try {
+    globalThis.decodeURIComponent = () => "";
+    const emptyDecodedFilename = responsesToCompletion(ResponsesBody.parse({ input: [{ role: "user", content: [
+      { type: "input_file", file_url: "https://example.com/report.pdf" },
+    ] }] }));
+    assert.deepEqual(emptyDecodedFilename.messages[0].content, [
+      { type: "file", file: { file_data: "https://example.com/report.pdf" } },
+    ]);
+  } finally {
+    globalThis.decodeURIComponent = originalDecode;
+  }
 });
 test.after(async () => { globalThis.fetch = localFetch; await app.close(); rmSync(dir, { recursive: true, force: true }); });
 function setup(account, options = {}) {

@@ -1,6 +1,6 @@
 import { needsRichOutput, renderRichOutput, type RichOutput } from "./rich-output.js";
 import { createAssetLinks } from "./asset-content.js";
-import { ResponsesBody, responsesToCompletion, createResponseWriter } from "./responses.js";
+import { ResponsesBody, responsesToCompletion, responsesInputErrorMessage, createResponseWriter } from "./responses.js";
 import { abortable, deadlineMs, turnDeadline } from "./deadlines.js";
 import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
 import "./zod-openapi-init.js";
@@ -593,7 +593,7 @@ export async function registerOpenAiRoutes(
         completionBody = responsesToCompletion(responsesParsed.data);
       } catch (error) {
         return reply.code(400).send({ error: {
-          message: error instanceof Error ? error.message : "Invalid Responses input",
+          message: responsesInputErrorMessage(error),
           type: "invalid_request_error",
         } });
       }
