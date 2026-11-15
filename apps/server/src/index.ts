@@ -38,7 +38,7 @@ import {
   normalizeModels,
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
-import { runWithRequestSessionToken, applyRotatedCredentialHeaders, getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, resolveAssetCookieToken, setRequestSessionToken } from "./auth.js";
+import { runWithRequestSessionToken, applyRotatedCredentialHeaders, getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, normalizeSessionFallbackToken, resolveAssetCookieToken, setRequestSessionToken } from "./auth.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -105,7 +105,7 @@ function sessionTokenLengthDiagnostics(error: unknown, bearer: string, fallbackS
   const sent = (error as { tokenLengths?: { accessToken?: { sentUpstream?: number }; sessionToken?: { sentUpstream?: number } } })?.tokenLengths;
   return {
     received: {
-      sessionToken: fallbackSessionToken?.length ?? bearer.length,
+      sessionToken: fallbackSessionToken?.length ?? (bearer.split(".").length === 5 ? bearer.length : 0),
       accessToken: bearer.length,
     },
     sent_upstream: {
@@ -225,7 +225,7 @@ app.addHook("onRequest", async (req, reply) => {
     assetContentRequest || (pathname === "/api/session" && req.method !== "DELETE");
   const nativePair = nativeReadCredentials(req, Boolean(options.worker && options.ownerUserId));
   const requestSessionToken = bearer || nativePair?.[0] || nativePair?.[1] || assetCookieToken || "";
-  const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
+  const fallbackSessionToken = normalizeSessionFallbackToken(typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined);
   const cookieSessionFallback = bearer
     ? nativeSessionFallback(req, bearer)
     : nativePair?.[1] || assetCookieToken;

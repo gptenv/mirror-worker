@@ -22,8 +22,14 @@ interface RequestAuthentication {
 
 const requestAuthentication = new AsyncLocalStorage<RequestAuthentication>();
 
+/** Access tokens are three-part JWTs; never accept one as a refresh cookie. */
+export function normalizeSessionFallbackToken(token: string | undefined): string | undefined {
+  return token && token.split(".").length !== 3 ? token : undefined;
+}
+
 /** Make the browser-provided bearer available only for this request. */
 export function setRequestSessionToken(token: string, sessionToken?: string): void {
+  sessionToken = normalizeSessionFallbackToken(sessionToken);
   const request = requestAuthentication.getStore();
   if (token && (request?.bearerToken !== token || request?.sessionToken !== sessionToken)) {
     // The HTTP adapter created this isolated request object before Fastify.
@@ -37,6 +43,7 @@ export function setRequestSessionToken(token: string, sessionToken?: string): vo
 export function runWithRequestSessionToken<T>(token: string | undefined, callback: () => T, sessionToken?: string, configuredTokens?: string[]): T {
   // Anonymous requests need a boundary too: never inherit an enclosing
   // request's bearer, configured credentials, or rotated token state.
+  sessionToken = normalizeSessionFallbackToken(sessionToken);
   return requestAuthentication.run({ bearerToken: token ?? "", sessionToken, configuredTokens }, callback);
 }
 
@@ -73,7 +80,7 @@ export async function getValidCredentials(): Promise<SessionCredentials> {
     (err as any).statusCode = 401;
     throw err;
   }
-  const sessionToken = request?.sessionToken || (accessToken.split(".").length === 5 ? accessToken : undefined);
+  const sessionToken = normalizeSessionFallbackToken(request?.sessionToken) || (accessToken.split(".").length === 5 ? accessToken : undefined);
   const credentials = () => Promise.resolve({
     accessToken,
     sessionToken,
