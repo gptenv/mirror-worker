@@ -228,7 +228,6 @@ test("GET /v1/models aborts upstream catalog requests at its configured deadline
     else process.env.MIRROR_CATALOG_TIMEOUT_MS = previousTimeout;
   }
 });
-});
 
 test("GET /v1/models aborts sibling catalog requests when a required catalog call fails", async () => {
   useSession("account-models-sibling-abort");
