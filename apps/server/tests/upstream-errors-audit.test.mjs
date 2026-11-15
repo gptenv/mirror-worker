@@ -95,3 +95,93 @@ test.describe('server / upstream-errors-audit', () => {
     await assert.rejects(createAssetLinks(client,'https://mirror.example','file-service://file',null,null,undefined,true),error=>error.upstreamResponseText===json);
   });
 });
+
+  test('optional GPT catalog lookups propagate authentication failures', async () => {
+    for (const endpoint of ['/api/gpts', '/v1/models']) {
+      const app = await buildApp({worker: true});
+      const backend = stubBackend('audit');
+      test.mock.method(globalThis, 'fetch', async (input, init) =>
+        new URL(String(input)).pathname.includes('/gizmos/')
+          ? new Response(json, { status: 401 })
+          : backend(input, init));
+      try {
+        const response = await app.inject({ method: 'GET', url: endpoint, headers: { authorization: 'Bearer access' } });
+        assert.equal(response.statusCode, 401, response.body);
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
+  test('optional catalog catch covers status and statusCode shapes', async () => {
+    const app = await buildApp({worker: true});
+    // status present (left of ??) and auth → throw
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoSidebar', async () => {
+      throw Object.assign(new Error('auth'), { status: 401 });
+    });
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoBootstrap', async () => {
+      throw Object.assign(new Error('auth'), { statusCode: 403 });
+    });
+    const backend = stubBackend('audit');
+    test.mock.method(globalThis, 'fetch', backend);
+    try {
+      const response = await app.inject({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer access' } });
+      // First rejection in Promise.all wins; either 401 or 403 is acceptable as long as it is not 200.
+      assert.ok([401, 403].includes(response.statusCode), response.body);
+    } finally {
+      await app.close();
+    }
+
+    // Non-auth statusCode only → return {} (right of ??, if false)
+    const app2 = await buildApp({worker: true});
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoSidebar', async () => {
+      throw Object.assign(new Error('outage'), { statusCode: 503 });
+    });
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoBootstrap', async () => {
+      throw Object.assign(new Error('outage'), { statusCode: 500 });
+    });
+    test.mock.method(globalThis, 'fetch', backend);
+    try {
+      const response = await app2.inject({ method: 'GET', url: '/v1/models', headers: { authorization: 'Bearer access' } });
+      assert.equal(response.statusCode, 200, response.body);
+    } finally {
+      await app2.close();
+    }
+
+    // Same for /api/gpts
+    const app3 = await buildApp({worker: true});
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoSidebar', async () => {
+      throw Object.assign(new Error('auth'), { statusCode: 401 });
+    });
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoBootstrap', async () => {
+      throw Object.assign(new Error('auth'), { status: 403 });
+    });
+    test.mock.method(globalThis, 'fetch', backend);
+    try {
+      const response = await app3.inject({ method: 'GET', url: '/api/gpts', headers: { authorization: 'Bearer access' } });
+      assert.ok([401, 403].includes(response.statusCode), response.body);
+    } finally {
+      await app3.close();
+    }
+  });
+
+  test('non-versioned error handler includes token lengths when the thrown error carries them', async () => {
+    const app = await buildApp({worker: true});
+    test.mock.method(ChatGptBackendClient.prototype, 'fetchModels', async () => {
+      throw Object.assign(new Error('upstream failed'), {
+        upstreamResponseText: 'sensitive-body',
+        tokenLengths: { accessToken: { sentUpstream: 42 } },
+        statusCode: 502,
+      });
+    });
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/models', headers: { authorization: 'Bearer access' } });
+      assert.equal(response.statusCode, 502, response.body);
+      const body = response.json();
+      assert.equal(body.error.upstream_response_text, 'sensitive-body');
+      assert.equal(body.error.message, 'sensitive-body');
+      assert.deepEqual(body.error.token_lengths, { accessToken: { sentUpstream: 42 } });
+    } finally {
+      await app.close();
+    }
+  });
