@@ -13,9 +13,17 @@ test.describe('server / openapi-contract', () => {
     assert.ok(schemas.CompletionRequest);
     assert.ok(schemas.ChatMessage);
     assert.deepEqual(schemas.CompletionResponse.properties.choices.items.properties.finish_reason.enum, ['stop', 'tool_calls']);
+    const responseMessage = schemas.ChatMessageResponse;
+    assert.deepEqual(responseMessage.properties.role.const, 'assistant');
+    assert.deepEqual(responseMessage.properties.tool_calls.items.properties.type.const, 'function');
+    assert.equal(responseMessage.properties.tool_calls.items.properties.function.properties.arguments.type, 'string');
     assert.ok(document.paths['/api/diagnostics'].get.responses['200']);
     assert.deepEqual(schemas.EgressStatus.properties.mode.enum, ['direct', 'worker']);
+    assert.equal(schemas.EgressStatus.properties.verified.const, false);
+    assert.deepEqual(schemas.EgressStatus.properties.checkedAt.type, 'null');
+    assert.deepEqual(schemas.EgressStatus.properties.error.type, 'null');
     assert.deepEqual(schemas.DiagnosticResponse.properties.egress.properties.checkedAt.type, 'null');
+    assert.equal(schemas.DiagnosticResponse.properties.storage.properties.schemaVersion.type, 'integer');
     const events = schemas.NormalizedConversationEvent;
     assert.equal(events.discriminator.propertyName, 'kind');
     for (const entry of events.oneOf) assert.ok(schemas[entry.$ref.split('/').at(-1)]);

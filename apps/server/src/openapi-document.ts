@@ -70,8 +70,13 @@ const ModelsResponse = z
 
 const ChatMessageResponse = z
   .object({
-    role: z.enum(["system", "developer", "user", "assistant"]),
+    role: z.literal("assistant"),
     content: z.string().nullable(),
+    tool_calls: z.array(z.object({
+      id: z.string(),
+      type: z.literal("function"),
+      function: z.object({ name: z.string(), arguments: z.string() }),
+    })).optional(),
   })
   .meta({ id: "ChatMessageResponse" });
 
@@ -344,9 +349,9 @@ const EgressStatus = z
   .object({
     mode: z.enum(["direct", "worker"]),
     required: z.literal(false),
-    verified: z.boolean(),
-    checkedAt: z.string().datetime().nullable(),
-    error: z.string().nullable(),
+    verified: z.literal(false),
+    checkedAt: z.null(),
+    error: z.null(),
   })
   .meta({ id: "EgressStatus", description: "Outbound request routing status for this deployment." });
 
@@ -355,7 +360,7 @@ const DiagnosticResponse = z
     schemaVersion: z.literal(1),
     build: z.object({ version: z.string(), revision: z.string() }),
     api: z.object({ reachable: z.literal(true), keyConfigured: z.boolean() }),
-    storage: z.object({ engine: z.literal("sqlite"), healthy: z.boolean(), schemaVersion: z.number().int().nullable() }),
+    storage: z.object({ engine: z.literal("sqlite"), healthy: z.boolean(), schemaVersion: z.number().int() }),
     egress: z.object({
       required: z.literal(false),
       verified: z.literal(false),
