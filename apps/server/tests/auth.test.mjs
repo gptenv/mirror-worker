@@ -63,6 +63,17 @@ test.describe("server / auth", () => {
     await owner;
   });
 
+  test("three-part access JWTs are not retained as refresh session tokens", async () => {
+    const accessToken = `header.${Buffer.from(JSON.stringify({ exp: 1 })).toString('base64url')}.signature`;
+    await auth.runWithRequestSessionToken(accessToken, async () => {
+      auth.setRequestSessionToken(accessToken, accessToken);
+      assert.equal(auth.getRequestFallbackSessionToken(), undefined);
+      const credentials = await auth.getValidCredentials();
+      assert.equal(credentials.accessToken, accessToken);
+      assert.equal(credentials.sessionToken, undefined);
+    }, accessToken);
+  });
+
   test("configured keys select the configured account while unrelated bearers stay independent", async () => {
     await auth.runWithRequestSessionToken(undefined, async () => {
       assert.equal((await auth.getValidCredentials()).accessToken, "configured");

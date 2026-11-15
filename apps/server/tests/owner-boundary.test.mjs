@@ -81,6 +81,34 @@ test.describe('server / Worker owner boundary', () => {
     } finally { await app.close(); }
   });
 
+  test('a three-part access token repeated as the session fallback is never exchanged as a session', async () => {
+    const payload = Buffer.from(JSON.stringify({ exp: 1 })).toString('base64url');
+    const prefix = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${payload}.`;
+    const accessToken = prefix + 'a'.repeat(2046 - prefix.length);
+    assert.equal(accessToken.length, 2046);
+    assert.equal(accessToken.split('.').length, 3);
+    const paths = [];
+    test.mock.method(globalThis, 'fetch', async input => {
+      const pathname = new URL(String(input)).pathname;
+      paths.push(pathname);
+      return new Response('expired access token', { status: 401 });
+    });
+    const app = await buildApp({ worker: true, ownerUserId: 'user-synthetic-owner' });
+    try {
+      const response = await app.inject({ url: '/api/settings/hotkeys', headers: {
+        authorization: `Bearer ${accessToken}`,
+        'x-mirror-session-token': accessToken,
+      } });
+      assert.equal(response.statusCode, 401, response.body);
+      assert.equal(response.json().error.code, 'credential_rejected');
+      assert.deepEqual(response.json().error.token_lengths, {
+        received: { sessionToken: 0, accessToken: 2046 },
+        sent_upstream: { sessionToken: null, accessToken: 2046 },
+      });
+      assert.deepEqual(paths, ['/backend-api/me'], 'do not exchange an access token at /api/auth/session');
+    } finally { await app.close(); }
+  });
+
   test('another valid account cannot read, export, change or delete cached owner data', async () => {
     const id = seed();
     identityFetch();
@@ -191,6 +219,12 @@ test.describe('server / Worker owner boundary', () => {
       assert.ok(!response.body.includes('fixture-expired-access'));
       assert.ok(!response.body.includes('fixture-long-session'));
       assert.equal(response.headers['x-mirror-access-token'], undefined);
+
+      const sessionToken = 'header.payload.ciphertext.tag.iv';
+      const sessionBearer = await app.inject({ url: '/api/settings/hotkeys', headers: { authorization: `Bearer ${sessionToken}` } });
+      assert.equal(sessionBearer.statusCode, 503, sessionBearer.body);
+      assert.deepEqual(sessionBearer.json().error.token_lengths.received, { sessionToken: sessionToken.length, accessToken: sessionToken.length });
+      assert.deepEqual(sessionBearer.json().error.token_lengths.sent_upstream, { sessionToken: sessionToken.length, accessToken: null });
     } finally { await app.close(); }
   });
 
