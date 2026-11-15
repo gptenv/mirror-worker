@@ -587,7 +587,18 @@ export async function registerOpenAiRoutes(
       reply.raw.write(`event: ${event.type}\n`);
       sse(reply, event);
     }) : undefined;
-    const parsed = CompletionBody.safeParse(responsesParsed?.success ? responsesToCompletion(responsesParsed.data) : req.body);
+    let completionBody: unknown = req.body;
+    if (responsesParsed?.success) {
+      try {
+        completionBody = responsesToCompletion(responsesParsed.data);
+      } catch (error) {
+        return reply.code(400).send({ error: {
+          message: error instanceof Error ? error.message : "Invalid Responses input",
+          type: "invalid_request_error",
+        } });
+      }
+    }
+    const parsed = CompletionBody.safeParse(completionBody);
     if (!parsed.success) {
       return reply.code(400).send({
         error: {

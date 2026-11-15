@@ -49,9 +49,66 @@ function setup(account, options = {}) {
   store.saveVerifiedSession(account, "synthetic-device");
   globalThis.fetch = stubBackend(account, options);
 }
+function setupWithUploads(account, { sent = [], uploads = [] } = {}) {
+  store.saveVerifiedSession(account, "synthetic-device");
+  const backend = stubBackend(account, { sent });
+  let uploaded = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    const pathname = new URL(String(url)).pathname;
+    if (pathname === "/backend-api/files" && init.method === "POST") {
+      sent.push({ pathname, body: JSON.parse(init.body) });
+      const fileId = `response-file-${++uploaded}`;
+      return Response.json({ upload_url: `https://blob.example/${fileId}`, file_id: fileId });
+    }
+    if (/^\/response-file-\d+$/.test(pathname)) {
+      uploads.push({ data: Buffer.from(init.body), mimeType: init.headers["content-type"] });
+      return new Response(null, { status: 200 });
+    }
+    if (/^\/backend-api\/files\/response-file-\d+\/uploaded$/.test(pathname)) return Response.json({ status: "success" });
+    return backend(url, init);
+  };
+  return { sent, uploads };
+}
 async function post(body) {
   return localFetch(`${address}/v1/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stream: false, ...body }) });
 }
+test("Responses uploads documented image and file inputs and forwards both attachments", async () => {
+  const { sent, uploads } = setupWithUploads("multimodal-upload");
+  const res = await post({ input: [{ role: "user", content: [
+    { type: "input_text", text: "Describe these." },
+    { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+    { type: "input_file", file_data: "data:application/pdf;base64,JVBERi0=", filename: "report.pdf" },
+  ] }] });
+  assert.equal(res.status, 200, await res.clone().text());
+  const creates = sent.filter(call => call.pathname === "/backend-api/files");
+  assert.deepEqual(creates.map(call => [call.body.file_name, call.body.use_case]), [
+    ["image-0.png", "multimodal"], ["report.pdf", "my_files"],
+  ]);
+  assert.deepEqual(uploads.map(upload => upload.mimeType), ["image/png", "application/pdf"]);
+  const turn = sent.find(call => call.pathname.endsWith("/f/conversation"));
+  assert.deepEqual(turn.body.messages[0].metadata.attachments.map(file => [file.name, file.mimeType]), [
+    ["image-0.png", "image/png"], ["report.pdf", "application/pdf"],
+  ]);
+});
+test("Responses file IDs and attachments outside the final user message return 400 before upstream access", async () => {
+  setup("invalid-multimodal");
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => { upstreamCalls++; throw new Error("Must not call upstream"); };
+  for (const input of [
+    [{ role: "user", content: [{ type: "input_image", file_id: "file_123" }] }],
+    [{ role: "user", content: [{ type: "input_file", file_id: "file_123" }] }],
+    [
+      { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AAAA" }] },
+      { role: "assistant", content: "Earlier response" },
+      { role: "user", content: "Current question" },
+    ],
+  ]) {
+    const res = await post({ input });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error.type, "invalid_request_error");
+  }
+  assert.equal(upstreamCalls, 0);
+});
 for (const minimal of [true, false]) test(`Responses three turns, mixed transport, minimal=${minimal}`, async () => {
   const sent = []; setup(`responses-${minimal}`, { sent });
   let id;
