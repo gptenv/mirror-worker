@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeModels, normalizeGizmos } from "../dist/index.js";
+import { normalizeModels, normalizeGizmos, hasWorkModeSuffix } from "../dist/index.js";
 
 test.describe("protocol / models", () => {
 test("model normalization tolerates malformed entries and preserves optional metadata", () => {
@@ -11,6 +11,12 @@ test("model normalization tolerates malformed entries and preserves optional met
   assert.deepEqual(result, [{ id: "model", title: "Display", description: "Details", maxTokens: 123,
     capabilities: {}, enabledTools: ["tool"], raw: model }]);
   assert.equal(normalizeModels({ models: [{ slug: "fallback", title: "" }] })[0].title, "fallback");
+});
+
+test("Work suffix detection is only a syntactic heuristic, not model ID verification", () => {
+  assert.equal(hasWorkModeSuffix("synthetic-fixture-wm"), true);
+  assert.equal(hasWorkModeSuffix("synthetic-fixture"), false);
+  assert.equal(hasWorkModeSuffix("-wm-middle"), false);
 });
 
 test("gizmo recognition accepts each supported flat discriminator without requiring a short URL", () => {

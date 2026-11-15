@@ -11,6 +11,7 @@ import {
   classifyProtocolFailure,
   normalizeGizmos,
   normalizeModels,
+  hasWorkModeSuffix,
   type NormalizedConversationEvent,
   type UploadedFile,
 } from "@mirror/protocol";
@@ -528,7 +529,7 @@ export async function registerOpenAiRoutes(
           object: "model",
           created: 0,
           owned_by: "chatgpt-web",
-          mirror: { supported: !model.id.endsWith("-wm"), execution_mode: model.id.endsWith("-wm") ? "unsupported_work" : "interactive", capabilities: model.capabilities ?? null },
+          mirror: { supported: !hasWorkModeSuffix(model.id), execution_mode: hasWorkModeSuffix(model.id) ? "unsupported_work" : "interactive", capabilities: model.capabilities ?? null },
         })),
         ...gizmos.map((gizmo) => ({
           id: gizmo.id,
@@ -567,7 +568,7 @@ export async function registerOpenAiRoutes(
     const body = parsed.data;
     const clientTools = nonEmptyToolValues(body.tools);
     const toolCallsEnabled = !isResponses && clientTools.length > 0;
-    if ((body.metadata?.mirror_model ?? body.model).endsWith("-wm")) return reply.code(400).send({ error: {message: "Work Mode is not supported by Mirror; select an interactive model", type: "unsupported_parameter"} });
+    if (hasWorkModeSuffix(body.metadata?.mirror_model ?? body.model)) return reply.code(400).send({ error: {message: "Work Mode is not supported by Mirror; select an interactive model", type: "unsupported_parameter"} });
     let streamedText = "";
     let emittedText = "";
     let rich = false;
