@@ -72,6 +72,11 @@ const ChatMessageResponse = z
   .object({
     role: z.enum(["system", "developer", "user", "assistant"]),
     content: z.string().nullable(),
+    tool_calls: z.array(z.object({
+      id: z.string(),
+      type: z.literal("function"),
+      function: z.object({ name: z.string(), arguments: z.string() }),
+    })).optional(),
   })
   .meta({ id: "ChatMessageResponse" });
 

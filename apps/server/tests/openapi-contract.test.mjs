@@ -12,6 +12,10 @@ test.describe('server / openapi-contract', () => {
     const schemas = document.components.schemas;
     assert.ok(schemas.CompletionRequest);
     assert.ok(schemas.ChatMessage);
+    const completionMessage = schemas.ChatMessageResponse;
+    assert.ok(completionMessage.properties.tool_calls);
+    assert.equal(completionMessage.properties.tool_calls.items.properties.type.const, 'function');
+    assert.equal(completionMessage.properties.tool_calls.items.properties.function.properties.arguments.type, 'string');
     const events = schemas.NormalizedConversationEvent;
     assert.equal(events.discriminator.propertyName, 'kind');
     for (const entry of events.oneOf) assert.ok(schemas[entry.$ref.split('/').at(-1)]);
