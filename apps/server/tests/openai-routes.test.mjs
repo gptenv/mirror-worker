@@ -1030,6 +1030,9 @@ test("a streaming completion emits the preamble, a delta chunk, the mirror-conve
       assert.ok(commentFrame);
       const finalFrame = frames.find((f) => f.json && f.json.choices[0].finish_reason === "stop");
       assert.ok(finalFrame);
+      for (const frame of frames.filter((f) => f.json)) {
+        assert.equal(Object.hasOwn(frame.json, "usage"), false, "streamed chunks omit usage, including the final chunk");
+      }
       assert.ok(frames.some((f) => f.done));
     },
   );
