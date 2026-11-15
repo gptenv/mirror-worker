@@ -3,7 +3,7 @@ import test, { mock } from "node:test";
 import * as zodOpenapi from "zod-openapi";
 
 let document;
-mock.module("zod-openapi", { namedExports: { ...zodOpenapi, createDocument: () => document } });
+mock.module("zod-openapi", { exports: { ...zodOpenapi, createDocument: () => document } });
 const { buildOpenApiDocument } = await import("../dist/openapi-document.js");
 
 test.describe("server / openapi-fallback", () => {

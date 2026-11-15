@@ -11,7 +11,7 @@ const { configuredApiKeys } = await import('../dist/security.js');
 const { getValidCredentials, getRotatedRequestAccessToken, runWithRequestSessionToken } = await import('../dist/auth.js');
 test.describe('server / upstream-cookie-auth', () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
-  test('all supported settings select their first token in the existing preference order', async () => {
+  test('configured API-key-shaped settings are ChatGPT session credentials sent to backend-api', async () => {
     for (const settings of [
       { MIRROR_API_KEY: 'primary-session', MIRROR_API_KEYS: 'secondary-session,third-session', OPENAI_API_KEY: 'last-session' },
       { MIRROR_API_KEYS: 'secondary-session,third-session', OPENAI_API_KEY: 'last-session' },
@@ -24,6 +24,7 @@ test.describe('server / upstream-cookie-auth', () => {
         assert.equal(credentials.cookie, '__Secure-next-auth.session-token=' + keys[0]);
         assert.equal(await getRotatedRequestAccessToken(), undefined);
         await runWithUpstreamFetch(async (url, init) => {
+          assert.match(String(url), /^https:\/\/chatgpt\.com\/backend-api\//);
           assert.equal(new Headers(init.headers).get('cookie'), credentials.cookie);
           return Response.json({ id: 'test-user' });
         }, () => new ChatGptBackendClient(credentials).fetchMe());
