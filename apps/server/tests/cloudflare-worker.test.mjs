@@ -17,16 +17,20 @@ registerHooks({ resolve(specifier, context, next) {
 let starts = 0;
 let shouldFail = false;
 let initialized = 0;
+let appFetch;
 // Give generated mock modules fixture URLs: Node's ?node-test-mock modules
 // contain different code, so mapping their offsets onto production source
 // would invent uncovered import branches in the c8 report.
 mock.module('./helpers/worker-entrypoint-app.mjs', { exports: { buildApp: async (options) => {
   starts++;
   if (shouldFail) { shouldFail = false; throw new Error('fixture startup failure'); }
-  return { ready: async () => {}, server: { fetch: async request => Response.json({ owner: options.ownerUserId, authorization: request.headers.get('authorization') }) } };
+  return { ready: async () => {}, server: { fetch: async request => appFetch
+    ? appFetch(request)
+    : Response.json({ owner: options.ownerUserId, authorization: request.headers.get('authorization') }) } };
 } } });
 mock.module('./helpers/worker-entrypoint-store.mjs', { exports: { initializeWorkerStore: () => { initialized++; }, getOrCreateDeviceId: () => 'fixture-device' } });
 const { MirrorStorage, default: worker } = await import('../dist/cloudflare-worker.js');
+const { getWorkerRequestSignal } = await import('../dist/worker-request-signals.js');
 const env = { MIRROR_OWNER_ACCOUNT_ID: ' owner ', MIRROR_STORE_KEY: 'fixture', WARP: { fetch: async () => new Response() }, ASSETS: {} };
 
 test.describe('server / cloudflare-worker entrypoint', () => {
@@ -59,6 +63,37 @@ test.describe('server / cloudflare-worker entrypoint', () => {
     assert.equal(forwarded.headers.get('x-forwarded-proto'), 'https');
     await worker.fetch(new Request('https://mirror.example/'), runtime);
     assert.equal(forwarded.headers.get('x-forwarded-for'), null);
+    assert.match(forwarded.headers.get('x-mirror-worker-request-id'), /^[0-9a-f-]{36}$/i);
+    assert.ok(forwarded.signal);
+  });
+  test('carries the Worker disconnect signal across the Node HTTP bridge request boundary', async () => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers();
+    const observedAbort = Promise.withResolvers();
+    appFetch = request => {
+      const signal = getWorkerRequestSignal(request.headers.get('x-mirror-worker-request-id'));
+      assert.ok(signal, 'the Fastify-side request ID must resolve to the incoming Worker signal');
+      started.resolve(signal);
+      return new Promise((resolve, reject) => {
+        const abort = () => { observedAbort.resolve(signal.reason); reject(signal.reason); };
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+      });
+    };
+    const instance = new MirrorStorage({ storage: {} }, env);
+    const runtime = { MIRROR: { idFromName: () => 'id', get: () => ({ fetch: request => instance.fetch(request) }) } };
+    try {
+      const pending = worker.fetch(new Request('https://mirror.example/v1/models', { signal: controller.signal }), runtime);
+      const signal = await started.promise;
+      assert.equal(signal.aborted, false);
+      controller.abort(new DOMException('Client disconnected', 'AbortError'));
+      const reason = await observedAbort.promise;
+      assert.equal(reason.name, 'AbortError');
+      await assert.rejects(pending, /Client disconnected/);
+    } finally {
+      controller.abort();
+      appFetch = undefined;
+    }
   });
   test('accepts an unset owner and falls back to the standard Worker fetch binding', async () => {
     const instance = new MirrorStorage({ storage: {} }, { ...env, MIRROR_OWNER_ACCOUNT_ID: undefined, WARP: undefined });

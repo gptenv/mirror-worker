@@ -3,7 +3,7 @@
   "name": "mirror-worker",
   "main": "apps/server/src/cloudflare-worker.ts",
   "compatibility_date": "2026-09-30",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal", "request_signal_passthrough"],
   "vpc_networks": [
     { "binding": "WARP", "network_id": "cf1:network" }
   ],

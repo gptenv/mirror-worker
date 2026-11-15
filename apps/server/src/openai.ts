@@ -30,6 +30,7 @@ import {
   firstHistoryDifference,
 } from "./conversation-context.js";
 import { getValidCredentials } from "./auth.js";
+import { getWorkerRequestSignal } from "./worker-request-signals.js";
 import { runChat } from "./chat-service.js";
 import {
   updateMessage,
@@ -494,11 +495,15 @@ export async function registerOpenAiRoutes(
     const controller = new AbortController();
     const abortClient = () => controller.abort(new DOMException("Client disconnected", "AbortError"));
     const abortReply = () => { if (!reply.raw.writableEnded) abortClient(); };
+    const workerSignal = getWorkerRequestSignal(req.headers["x-mirror-worker-request-id"]);
+    const abortWorkerRequest = () => controller.abort(workerSignal?.reason ?? new DOMException("Worker request disconnected", "AbortError"));
     const timeout = setTimeout(() => controller.abort(Object.assign(
       new Error("Model catalog deadline exceeded"), { statusCode: 504 },
     )), deadlineMs(process.env.MIRROR_CATALOG_TIMEOUT_MS, 60_000));
     req.raw.once("aborted", abortClient);
     reply.raw.once("close", abortReply);
+    if (workerSignal?.aborted) abortWorkerRequest();
+    else workerSignal?.addEventListener("abort", abortWorkerRequest, { once: true });
     try {
     const signal = controller.signal;
     const creds = await abortable(getValidCredentials(), signal);
@@ -511,7 +516,7 @@ export async function registerOpenAiRoutes(
       if (status === 401 || status === 403) throw error;
       return {};
     });
-    const [modelsRaw, projectsRaw, gptsRaw] = await Promise.all([
+    const catalogRequests = Promise.all([
       client.fetchModels(signal),
       optionalGizmos(client.fetchGizmoSidebar({
         ownedOnly: false,
@@ -520,6 +525,12 @@ export async function registerOpenAiRoutes(
       }, signal)),
       optionalGizmos(client.fetchGizmoBootstrap({ limit: 20 }, signal)),
     ]);
+    const [modelsRaw, projectsRaw, gptsRaw] = await catalogRequests.catch(error => {
+      // Promise.all rejects on the first failure but does not cancel sibling
+      // fetches. Stop their shared request signal before returning the error.
+      if (!signal.aborted) controller.abort(error);
+      throw error;
+    });
     signal.throwIfAborted();
     const models = normalizeModels(modelsRaw);
     const seen = new Set<string>();
@@ -556,6 +567,7 @@ export async function registerOpenAiRoutes(
       clearTimeout(timeout);
       req.raw.off("aborted", abortClient);
       reply.raw.off("close", abortReply);
+      workerSignal?.removeEventListener("abort", abortWorkerRequest);
     }
   });
 

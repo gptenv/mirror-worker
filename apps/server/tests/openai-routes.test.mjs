@@ -230,6 +230,30 @@ test("GET /v1/models aborts upstream catalog requests at its configured deadline
 });
 });
 
+test("GET /v1/models aborts sibling catalog requests when a required catalog call fails", async () => {
+  useSession("account-models-sibling-abort");
+  let sidebarSignal;
+  let bootstrapSignal;
+  await withFetch((url, init = {}) => {
+    const pathname = new URL(String(url)).pathname;
+    if (pathname.endsWith("/models")) return Promise.resolve(new Response("catalog failed", { status: 503 }));
+    if (pathname.endsWith("/gizmos/snorlax/sidebar")) {
+      sidebarSignal = init.signal;
+      return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
+    }
+    if (pathname.endsWith("/gizmos/bootstrap")) {
+      bootstrapSignal = init.signal;
+      return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
+    }
+    throw new Error(`Unexpected catalog URL: ${url}`);
+  }, async () => {
+    const res = await app.inject({ method: "GET", url: "/v1/models" });
+    assert.equal(res.statusCode, 503, res.body);
+    assert.equal(sidebarSignal?.aborted, true);
+    assert.equal(bootstrapSignal?.aborted, true);
+  });
+});
+
 test("GET /v1/models preserves caller cancellation and aborts its upstream request on disconnect", async () => {
   useSession("account-models-disconnect");
   const { request } = await import("node:http");
