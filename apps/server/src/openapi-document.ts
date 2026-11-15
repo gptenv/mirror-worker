@@ -40,6 +40,10 @@ const ErrorResponse = z
   })
   .meta({ id: "Error", description: "Error envelope returned by Mirror's error handler." });
 
+const DiagnosticErrorResponse = z
+  .object({ error: z.union([z.string(), z.record(z.string(), z.unknown())]) })
+  .meta({ id: "DiagnosticError", description: "Authentication, owner authorization, upstream identity lookup, or local route error." });
+
 const OkResponse = z
   .object({ ok: z.boolean() })
   .meta({ id: "OkResponse" });
@@ -70,8 +74,13 @@ const ModelsResponse = z
 
 const ChatMessageResponse = z
   .object({
-    role: z.enum(["system", "developer", "user", "assistant"]),
+    role: z.literal("assistant"),
     content: z.string().nullable(),
+    tool_calls: z.array(z.object({
+      id: z.string(),
+      type: z.literal("function"),
+      function: z.object({ name: z.string(), arguments: z.string() }),
+    })).optional(),
   })
   .meta({ id: "ChatMessageResponse" });
 
@@ -110,9 +119,9 @@ const CompletionResponse = z
       z.object({
         index: z.number().int(),
         message: ChatMessageResponse,
-        finish_reason: z.literal("stop").meta({
+        finish_reason: z.enum(["stop", "tool_calls"]).meta({
           description:
-            "Mirror reports stop on successful completion and never truncates responses based on token limits or stop strings.",
+            "Mirror emits stop for ordinary completions and tool_calls when it returns client tool calls. These are the successful finish reasons currently emitted by Mirror.",
         }),
       }),
     ),
@@ -342,13 +351,36 @@ const PublicGizmoSummary = z
 /** Mirrors EgressStatus from egress.ts. */
 const EgressStatus = z
   .object({
-    mode: z.literal("direct"),
+    mode: z.enum(["direct", "worker"]),
     required: z.literal(false),
-    verified: z.boolean(),
-    checkedAt: z.string().datetime().nullable(),
-    error: z.string().nullable(),
+    verified: z.literal(false),
+    checkedAt: z.null(),
+    error: z.null(),
   })
   .meta({ id: "EgressStatus", description: "Outbound request routing status for this deployment." });
+
+const DiagnosticResponse = z
+  .object({
+    schemaVersion: z.literal(1),
+    build: z.object({ version: z.string(), revision: z.string() }),
+    api: z.object({ reachable: z.literal(true), keyConfigured: z.boolean() }),
+    storage: z.object({ engine: z.literal("sqlite"), healthy: z.boolean(), schemaVersion: z.number().int() }),
+    egress: z.object({
+      required: z.literal(false),
+      verified: z.literal(false),
+      mode: z.enum(["direct", "worker"]),
+      checkedAt: z.null(),
+    }),
+    session: z.object({ saved: z.boolean(), generationVerified: z.literal(false) }),
+    recentFailures: z.array(z.object({
+      at: z.string().datetime(),
+      code: z.string(),
+      requestId: z.string(),
+      protocolCategory: z.string().nullable(),
+    })),
+    nextAction: z.string(),
+  })
+  .meta({ id: "DiagnosticResponse", description: "Local diagnostic state; egress and generation are not verified by this endpoint." });
 
 /** The shape stored/returned by store.ts's getInstructions(). */
 const InstructionMessage = z
@@ -356,6 +388,22 @@ const InstructionMessage = z
   .meta({ id: "InstructionMessage" });
 
 const nativeApiPaths: ZodOpenApiPathsObject = {
+  "/api/diagnostics": {
+    get: {
+      summary: "Read local Worker diagnostics",
+      description: "Reports local storage, configuration, recent failures, and runtime egress mode. It does not verify upstream connectivity or generation. On Workers this route requires owner authentication when MIRROR_OWNER_ACCOUNT_ID is configured.",
+      tags: ["Mirror"],
+      responses: {
+        "200": { description: "Local diagnostic state", content: { "application/json": { schema: DiagnosticResponse } } },
+        "401": { description: "Missing or rejected ChatGPT credential", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "403": { description: "The account is not the configured Worker owner or the request origin is rejected", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "421": { description: "Untrusted request Host header", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "429": { description: "Global request rate limit exceeded" },
+        "500": { description: "Local diagnostic request failed", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "502": { description: "The upstream identity lookup failed or returned an invalid profile", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+      },
+    },
+  },
   "/api/health": {
     get: {
       summary: "Health check",
