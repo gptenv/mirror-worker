@@ -40,6 +40,10 @@ const ErrorResponse = z
   })
   .meta({ id: "Error", description: "Error envelope returned by Mirror's error handler." });
 
+const DiagnosticErrorResponse = z
+  .object({ error: z.union([z.string(), z.record(z.string(), z.unknown())]) })
+  .meta({ id: "DiagnosticError", description: "Authentication, owner authorization, upstream identity lookup, or local route error." });
+
 const OkResponse = z
   .object({ ok: z.boolean() })
   .meta({ id: "OkResponse" });
@@ -391,6 +395,12 @@ const nativeApiPaths: ZodOpenApiPathsObject = {
       tags: ["Mirror"],
       responses: {
         "200": { description: "Local diagnostic state", content: { "application/json": { schema: DiagnosticResponse } } },
+        "401": { description: "Missing or rejected ChatGPT credential", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "403": { description: "The account is not the configured Worker owner or the request origin is rejected", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "421": { description: "Untrusted request Host header", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "429": { description: "Global request rate limit exceeded" },
+        "500": { description: "Local diagnostic request failed", content: { "application/json": { schema: DiagnosticErrorResponse } } },
+        "502": { description: "The upstream identity lookup failed or returned an invalid profile", content: { "application/json": { schema: DiagnosticErrorResponse } } },
       },
     },
   },

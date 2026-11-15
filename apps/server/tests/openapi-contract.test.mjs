@@ -17,7 +17,10 @@ test.describe('server / openapi-contract', () => {
     assert.deepEqual(responseMessage.properties.role.const, 'assistant');
     assert.deepEqual(responseMessage.properties.tool_calls.items.properties.type.const, 'function');
     assert.equal(responseMessage.properties.tool_calls.items.properties.function.properties.arguments.type, 'string');
-    assert.ok(document.paths['/api/diagnostics'].get.responses['200']);
+    const diagnosticResponses = document.paths['/api/diagnostics'].get.responses;
+    assert.ok(diagnosticResponses['200']);
+    for (const status of ['401', '403', '421', '429', '500', '502']) assert.ok(diagnosticResponses[status]);
+    assert.ok(schemas.DiagnosticError);
     assert.deepEqual(schemas.EgressStatus.properties.mode.enum, ['direct', 'worker']);
     assert.equal(schemas.EgressStatus.properties.verified.const, false);
     assert.deepEqual(schemas.EgressStatus.properties.checkedAt.type, 'null');
