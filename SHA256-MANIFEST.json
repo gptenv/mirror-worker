@@ -70,7 +70,7 @@
   "apps/server/tests/asset-cookie-fallback.test.mjs": "4815bf7e37942d39ba3584d7ea4b1e55c300ab51b30e353c7e59f39b7a336d1e",
   "apps/server/tests/auth.test.mjs": "20a96f296897ee09d732e5b39534c6d4fbe74f59dcf6c213d08ee143b17d9edc",
   "apps/server/tests/browser-credentials.test.mjs": "a61a5201d5a0b25d2d6fc524e7dd7881f09e813d4bc16362f3ac33ead6cfb3dd",
-  "apps/server/tests/browser-login.test.mjs": "4e641ef3df507951d0c21a89772af8ca86ee34136ea485370af445c5725cd659",
+  "apps/server/tests/browser-login.test.mjs": "37eddaadadd66e1c9b7981351c5bc272a3ae00137a7cf4e17d2919d908879688",
   "apps/server/tests/browser-reconnect.test.mjs": "0aba308a04a01746c6f795d1ab970ee652968f5dc64731bc997d212d2256e0a6",
   "apps/server/tests/chat-service.test.mjs": "f04777b72e11fe7775bba217fae381cb0e32d1250024019fcc7dcab603e11f24",
   "apps/server/tests/cloudflare-worker.test.mjs": "0c5a493792021b358aadc0a5c5e1537fac73ef7bf64ae720ee81ed7bd6515d1d",

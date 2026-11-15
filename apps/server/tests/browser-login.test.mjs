@@ -28,7 +28,7 @@ test.describe('server / browser-login', () => {
       },
       document: { cookie: '', open() {}, write(html) { written = html; }, close() {}, getElementById(id) { assert.ok(id in elements); return elements[id]; } },
     };
-    await vm.runInNewContext(BROWSER_BOOTSTRAP.match(/<script>([\s\S]*)<\/script>/)[1], context);
+    await vm.runInNewContext(BROWSER_BOOTSTRAP.match(/<script>([\s\S]*)<\/script>/i)[1], context);
     assert.equal(written, '<html>authenticated</html>');
     assert.equal(storage.get('mirror_access_token'), 'access-new');
     assert.equal(storage.get('mirror_session_token'), 'session-new');
@@ -55,7 +55,7 @@ test.describe('server / browser-login', () => {
       },
       document: { cookie: '', open() {}, write(html) { written = html; }, close() {}, getElementById(id) { assert.ok(id in elements); return elements[id]; } },
     };
-    await vm.runInNewContext(BROWSER_BOOTSTRAP.match(/<script>([\s\S]*)<\/script>/)[1], context);
+    await vm.runInNewContext(BROWSER_BOOTSTRAP.match(/<script>([\s\S]*)<\/script>/i)[1], context);
     assert.equal(redirected, '/mirror/playground');
     assert.equal(written, undefined);
     assert.equal(storage.get('mirror_access_token'), accessToken);
