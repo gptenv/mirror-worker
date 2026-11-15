@@ -17,5 +17,8 @@ test.describe('server / openapi-contract', () => {
     for (const entry of events.oneOf) assert.ok(schemas[entry.$ref.split('/').at(-1)]);
     const params = document.paths['/api/conversations'].get.parameters;
     assert.deepEqual(params.find((p) => p.name === 'sync').schema.enum, ['true', 'false']);
+    const responseSchema = document.paths['/v1/responses'].post.responses['200'].content['application/json'].schema;
+    assert.ok(responseSchema.required.includes('completed_at'));
+    assert.equal(responseSchema.properties.completed_at.type, 'integer');
   });
 });

@@ -790,7 +790,7 @@ export function buildOpenApiDocument(): ReturnType<typeof createDocument> {
           requestBody: { content: { "application/json": { schema: ResponsesBody } } },
           responses: {
             "200": { description: "Response object with assistant output_text parts, or named Responses SSE events ending in response.completed (response.failed on failure). usage is null.",
-              content: { "application/json": { schema: z.object({ id: z.string(), object: z.literal("response"), status: z.literal("completed"), output: z.array(z.object({ type: z.literal("message"), role: z.literal("assistant"), content: z.array(z.object({ type: z.literal("output_text"), text: z.string() }).passthrough()) }).passthrough()), metadata: z.record(z.string(), z.string()), usage: z.null() }).passthrough() }, "text/event-stream": { schema: z.string() } } },
+              content: { "application/json": { schema: z.object({ id: z.string(), object: z.literal("response"), status: z.literal("completed"), completed_at: z.number().int(), output: z.array(z.object({ type: z.literal("message"), role: z.literal("assistant"), content: z.array(z.object({ type: z.literal("output_text"), text: z.string() }).passthrough()) }).passthrough()), metadata: z.record(z.string(), z.string()), usage: z.null() }).passthrough() }, "text/event-stream": { schema: z.string() } } },
             "400": { description: "Invalid or unsupported input", content: { "application/json": { schema: ErrorResponse } } },
             "401": { description: "Missing/invalid Mirror API key", content: { "application/json": { schema: ErrorResponse } } },
           },
