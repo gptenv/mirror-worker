@@ -91,9 +91,13 @@ function isPublicApiPath(url: string): boolean {
   return pathname === "/v1/responses" || pathname === "/v1/models" || pathname === "/v1/chat/completions" || pathname === "/v1/capabilities";
 }
 
-function sessionAuthenticationError(error: unknown): string {
+function isVersionedApiErrorPath(url: string): boolean {
+  return url.split("?", 1)[0].startsWith("/v1/");
+}
+
+function sessionAuthenticationError(error: unknown, redactUpstreamBody: boolean): string {
   const upstreamResponseText = (error as { upstreamResponseText?: unknown })?.upstreamResponseText;
-  if (typeof upstreamResponseText === "string") return upstreamResponseText;
+  if (typeof upstreamResponseText === "string") return redactUpstreamBody ? upstreamErrorMessage(upstreamResponseText) : upstreamResponseText;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -116,10 +120,10 @@ function sessionAuthenticationStatus(error: unknown): number {
   return Number(upstream?.statusCode ?? upstream?.status ?? 502);
 }
 
-function sessionAuthenticationErrorBody(error: unknown, bearer: string, fallbackSessionToken: string | undefined) {
+function sessionAuthenticationErrorBody(error: unknown, bearer: string, fallbackSessionToken: string | undefined, redactUpstreamBody = false) {
   return {
     error: {
-      message: sessionAuthenticationError(error),
+      message: sessionAuthenticationError(error, redactUpstreamBody),
       type: sessionAuthenticationStatus(error) === 401 ? "authentication_error" : "upstream_error",
       code: sessionAuthenticationStatus(error) === 401 ? "credential_rejected" : "upstream_failure",
       token_lengths: sessionTokenLengthDiagnostics(error, bearer, fallbackSessionToken),
@@ -244,7 +248,7 @@ app.addHook("onRequest", async (req, reply) => {
     } catch (error) {
       const status = sessionAuthenticationStatus(error);
       reply.header("x-mirror-auth-status", status === 401 ? "credential_rejected" : "upstream_failure");
-      return reply.code(status).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken));
+      return reply.code(status).send(sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken, isVersionedApiErrorPath(req.url)));
     }
   }
   if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
@@ -259,7 +263,7 @@ app.addHook("onRequest", async (req, reply) => {
       const status = sessionAuthenticationStatus(error);
       reply.header("x-mirror-auth-status", status === 401 ? "credential_rejected" : "upstream_failure");
       return reply.code(status).send(
-        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken),
+        sessionAuthenticationErrorBody(error, bearer, fallbackSessionToken, isVersionedApiErrorPath(req.url)),
       );
     }
   }
