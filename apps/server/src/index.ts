@@ -227,7 +227,7 @@ app.addHook("onRequest", async (req, reply) => {
   const requestSessionToken = bearer || nativePair?.[0] || nativePair?.[1] || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
   const cookieSessionFallback = bearer
-    ? nativeSessionFallback(req, Boolean(options.worker && options.ownerUserId), bearer)
+    ? nativeSessionFallback(req, bearer)
     : nativePair?.[1] || assetCookieToken;
   if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || cookieSessionFallback);
   const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
