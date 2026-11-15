@@ -182,12 +182,14 @@ test("GET /v1/models reports a primary catalog outage instead of returning a fab
   });
 });
 
-test("an unknown model is sent upstream and its rejection is returned without substituting a listed model", async () => {
+test("an unknown model is sent unchanged upstream and its rejection is generically redacted", async () => {
   useSession("account-unknown-model");
   const sent = [];
   const backend = stubBackend("account-unknown-model", { sent });
+  let initCalled = false;
   await withFetch(async (url, init) => {
     if (new URL(String(url)).pathname.endsWith("/conversation/init")) {
+      initCalled = true;
       const body = JSON.parse(init.body);
       assert.equal(body.requested_default_model, "unverified-model-id");
       return Response.json({ error: "Unknown model" }, { status: 400 });
@@ -200,7 +202,9 @@ test("an unknown model is sent upstream and its rejection is returned without su
       payload: { model: "unverified-model-id", stream: false, messages: [{ role: "user", content: "hello" }] },
     });
     assert.equal(res.statusCode, 400, res.body);
-    assert.match(res.json().error.message, /Unknown model/);
+    assert.equal(res.json().error.message, "The upstream request failed.");
+    assert.ok(!res.body.includes("Unknown model"));
+    assert.equal(initCalled, true, "the exact unverified model id must be sent upstream");
     assert.equal(sent.some((item) => item.pathname.endsWith("/f/conversation")), false);
   });
 });

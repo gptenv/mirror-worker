@@ -86,6 +86,19 @@ test.describe('server / session delivery', () => {
       assert.equal(calls, 1, 'no retries for ambiguous or transient failures');
     } finally { await app.close(); }
   });
+  test('the early /v1 authentication return redacts upstream bodies and supplied credentials', async t => {
+    const upstreamSecret = 'SENTINEL_UPSTREAM_SECRET';
+    const clientSecret = 'SENTINEL_CLIENT_CREDENTIAL';
+    t.mock.method(globalThis, 'fetch', async () => new Response(upstreamSecret, { status: 401 }));
+    const app = await buildApp({ worker: true, ownerUserId: 'expected-owner' });
+    try {
+      const response = await app.inject({ url: '/v1/not-a-route', headers: { authorization: `Bearer ${clientSecret}` } });
+      assert.equal(response.statusCode, 401);
+      assert.equal(response.json().error.message, 'The upstream request failed.');
+      assert.ok(!response.body.includes(upstreamSecret));
+      assert.ok(!response.body.includes(clientSecret));
+    } finally { await app.close(); }
+  });
   test('a downstream denial cannot rotate or switch identity after the owner gate', async t => {
     let mints = 0, posts = 0;
     const backend = stubBackend('owner');
