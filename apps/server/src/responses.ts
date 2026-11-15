@@ -47,7 +47,9 @@ export function createResponseWriter(body: ResponsesRequest, emit: (event: Recor
   delete (sanitizedBodyMetadata as any).turnstile_token;
   delete (sanitizedBodyMetadata as any).mirror_turnstile_token;
   const response = (text: string, status: string, model = body.model, metadata = sanitizedBodyMetadata) => ({
-    id, object: "response", created_at: created, status, error: null, incomplete_details: null,
+    id, object: "response", created_at: created, status,
+    ...(status === "completed" ? { completed_at: Math.floor(Date.now() / 1000) } : {}),
+    error: null, incomplete_details: null,
     model, output: status === "in_progress" ? [] : [item(text, "completed"), ...summaries],
     instructions: body.instructions ?? null, metadata, usage: null, store: body.store,
     tools: [], tool_choice: "none", parallel_tool_calls: false,
