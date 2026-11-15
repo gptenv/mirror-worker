@@ -4,11 +4,12 @@ import { z } from "zod";
 const InputMessage = z.object({
   type: z.literal("message").optional(),
   role: z.enum(["system", "developer", "user", "assistant"]),
-  content: z.union([z.string(), z.array(z.object({
-    type: z.enum(["input_text", "output_text"]), text: z.string(),
-    annotations: z.array(z.unknown()).optional(),
-    logprobs: z.array(z.unknown()).optional(),
-  }).strict()).min(1)]),
+  content: z.union([z.string(), z.array(z.union([
+    z.object({ type: z.literal("input_text"), text: z.string(), annotations: z.array(z.unknown()).optional(), logprobs: z.array(z.unknown()).optional() }).strict(),
+    z.object({ type: z.literal("output_text"), text: z.string(), annotations: z.array(z.unknown()).optional(), logprobs: z.array(z.unknown()).optional() }).strict(),
+    z.object({ type: z.literal("input_image"), image_url: z.string().optional(), file_id: z.string().optional(), detail: z.enum(["auto", "low", "high", "original"]).optional() }).strict().refine(part => Boolean(part.image_url || part.file_id), "input_image requires image_url or file_id"),
+    z.object({ type: z.literal("input_file"), file_data: z.string().optional(), file_url: z.string().optional(), file_id: z.string().optional(), filename: z.string().optional(), detail: z.enum(["auto", "low", "high"]).optional() }).strict().refine(part => Boolean(part.file_data || part.file_url || part.file_id), "input_file requires file_data, file_url, or file_id"),
+  ])).min(1)]),
   id: z.string().optional(),
   status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
 }).strict();
@@ -26,13 +27,76 @@ export const ResponsesBody = z.object({
 }).strict();
 export type ResponsesRequest = z.infer<typeof ResponsesBody>;
 
+export function responsesInputErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Invalid Responses input";
+}
+
+type ResponsesMessageInput = Extract<ResponsesRequest["input"], unknown[]>[number];
+type ResponsesContentPartInput = Extract<ResponsesMessageInput["content"], unknown[]>[number];
+type MappedContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "auto" | "low" | "high" | "original" } }
+  | { type: "file"; file: { file_data: string; filename?: string } };
+
+function mapResponsesContent(content: Exclude<ResponsesMessageInput["content"], string>): MappedContentPart[] {
+  const mapped: MappedContentPart[] = [];
+  let accumulatedText: Extract<MappedContentPart, { type: "text" }> | undefined;
+  for (const part of content) {
+    let next: MappedContentPart;
+    if (part.type === "input_text" || part.type === "output_text") {
+      next = { type: "text", text: part.text };
+    } else if (part.type === "input_image") {
+      if (part.file_id) throw new Error("Responses input_image file_id is unsupported; provide image_url");
+      next = { type: "image_url", image_url: { url: part.image_url!, ...(part.detail ? { detail: part.detail } : {}) } };
+    } else {
+      if (part.file_id) throw new Error("Responses input_file file_id is unsupported; provide file_data or file_url");
+      const filename = part.filename ?? (part.file_url ? filenameFromUrl(part.file_url) : undefined);
+      next = { type: "file", file: { file_data: part.file_data ?? part.file_url!, ...(filename ? { filename } : {}) } };
+    }
+
+    // The text-only Responses adapter concatenated adjacent text parts. Keep
+    // doing that even when images/files are present; the shared chat adapter
+    // otherwise inserts newlines between separate text parts.
+    if (next.type === "text") {
+      if (!accumulatedText) {
+        accumulatedText = next;
+        mapped.push(next);
+      } else {
+        accumulatedText.text += next.text;
+      }
+    } else {
+      mapped.push(next);
+    }
+  }
+  return mapped;
+}
+
 export function responsesToCompletion(body: ResponsesRequest) {
+  if (Array.isArray(body.input)) {
+    const lastIndex = body.input.length - 1;
+    body.input.forEach((item, index) => {
+      if (typeof item.content === "string") return;
+      if (item.content.some(part => part.type === "input_image" || part.type === "input_file") &&
+          (index !== lastIndex || item.role !== "user")) {
+        throw new Error("Responses image and file inputs are supported only in the final user message");
+      }
+    });
+  }
   const messages = typeof body.input === "string"
     ? [{ role: "user" as const, content: body.input }]
     : body.input.map(item => ({ role: item.role, content: typeof item.content === "string"
-      ? item.content : item.content.map(part => part.text).join("") }));
+      ? item.content : mapResponsesContent(item.content as Exclude<ResponsesMessageInput["content"], string>) }));
   return { model: body.model, stream: body.stream, store: body.store, metadata: body.metadata,
     messages: [...(body.instructions === undefined ? [] : [{ role: "system" as const, content: body.instructions }]), ...messages] };
+}
+
+function filenameFromUrl(source: string): string | undefined {
+  try {
+    const segment = new URL(source).pathname.split("/").pop();
+    return segment ? decodeURIComponent(segment) || undefined : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createResponseWriter(body: ResponsesRequest, emit: (event: Record<string, unknown>) => void) {

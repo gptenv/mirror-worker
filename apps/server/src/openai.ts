@@ -1,6 +1,6 @@
 import { needsRichOutput, renderRichOutput, type RichOutput } from "./rich-output.js";
 import { createAssetLinks } from "./asset-content.js";
-import { ResponsesBody, responsesToCompletion, createResponseWriter } from "./responses.js";
+import { ResponsesBody, responsesToCompletion, responsesInputErrorMessage, createResponseWriter } from "./responses.js";
 import { abortable, deadlineMs, turnDeadline } from "./deadlines.js";
 import { apiError, recordFailure, upstreamErrorMessage } from "./api-errors.js";
 import "./zod-openapi-init.js";
@@ -82,7 +82,7 @@ const ImageUrlPart = z
             "the turn - backend-api has no concept of pointing at an external URL directly.",
         }),
         detail: z
-          .enum(["auto", "low", "high"])
+          .enum(["auto", "low", "high", "original"])
           .optional()
           .meta({
             description:
@@ -587,7 +587,18 @@ export async function registerOpenAiRoutes(
       reply.raw.write(`event: ${event.type}\n`);
       sse(reply, event);
     }) : undefined;
-    const parsed = CompletionBody.safeParse(responsesParsed?.success ? responsesToCompletion(responsesParsed.data) : req.body);
+    let completionBody: unknown = req.body;
+    if (responsesParsed?.success) {
+      try {
+        completionBody = responsesToCompletion(responsesParsed.data);
+      } catch (error) {
+        return reply.code(400).send({ error: {
+          message: responsesInputErrorMessage(error),
+          type: "invalid_request_error",
+        } });
+      }
+    }
+    const parsed = CompletionBody.safeParse(completionBody);
     if (!parsed.success) {
       return reply.code(400).send({
         error: {
