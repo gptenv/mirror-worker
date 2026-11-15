@@ -49,12 +49,17 @@ function setup(account, options = {}) {
   store.saveVerifiedSession(account, "synthetic-device");
   globalThis.fetch = stubBackend(account, options);
 }
-function setupWithUploads(account, { sent = [], uploads = [] } = {}) {
+function setupWithUploads(account, { sent = [], uploads = [], sourceFails = false } = {}) {
   store.saveVerifiedSession(account, "synthetic-device");
   const backend = stubBackend(account, { sent });
   let uploaded = 0;
   globalThis.fetch = async (url, init = {}) => {
-    const pathname = new URL(String(url)).pathname;
+    const parsedUrl = new URL(String(url));
+    const pathname = parsedUrl.pathname;
+    if (parsedUrl.hostname === "images.example") return new Response(Buffer.from([1, 2, 3]), { headers: { "content-type": "image/png" } });
+    if (parsedUrl.hostname === "files.example") return sourceFails
+      ? new Response("synthetic file source failure", { status: 503 })
+      : new Response(Buffer.from("%PDF-test"), { headers: { "content-type": "application/pdf" } });
     if (pathname === "/backend-api/files" && init.method === "POST") {
       sent.push({ pathname, body: JSON.parse(init.body) });
       const fileId = `response-file-${++uploaded}`;
@@ -90,6 +95,23 @@ test("Responses uploads documented image and file inputs and forwards both attac
     ["image-0.png", "image/png"], ["report.pdf", "application/pdf"],
   ]);
 });
+test("Responses accepts detail fields and uploads URL image and PDF file with filename inferred from URL", async () => {
+  const { sent, uploads } = setupWithUploads("multimodal-url-upload");
+  const res = await post({ stream: true, input: [{ role: "user", content: [
+    { type: "input_text", text: "Read and describe." },
+    { type: "input_image", image_url: "https://images.example/cat.png", detail: "original" },
+    { type: "input_file", file_url: "https://files.example/docs/report.pdf", detail: "high" },
+  ] }] });
+  const wire = await res.text();
+  assert.equal(res.status, 200, wire);
+  const events = wire.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+  assert.equal(events[0].type, "response.created");
+  assert.equal(events.at(-1).type, "response.completed");
+  assert.deepEqual(sent.filter(call => call.pathname === "/backend-api/files").map(call => [call.body.file_name, call.body.use_case]), [
+    ["image-0.png", "multimodal"], ["report.pdf", "my_files"],
+  ]);
+  assert.deepEqual(uploads.map(upload => upload.mimeType), ["image/png", "application/pdf"]);
+});
 test("Responses file IDs and attachments outside the final user message return 400 before upstream access", async () => {
   setup("invalid-multimodal");
   let upstreamCalls = 0;
@@ -97,17 +119,30 @@ test("Responses file IDs and attachments outside the final user message return 4
   for (const input of [
     [{ role: "user", content: [{ type: "input_image", file_id: "file_123" }] }],
     [{ role: "user", content: [{ type: "input_file", file_id: "file_123" }] }],
+    [{ role: "user", content: [{ type: "input_file", file_id: "file_123", file_url: "https://files.example/report.pdf" }] }],
     [
       { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AAAA" }] },
       { role: "assistant", content: "Earlier response" },
       { role: "user", content: "Current question" },
     ],
   ]) {
-    const res = await post({ input });
+    const res = await post({ input, stream: true });
     assert.equal(res.status, 400);
-    assert.equal((await res.json()).error.type, "invalid_request_error");
+    const body = await res.json();
+    assert.equal(body.error.type, "invalid_request_error");
+    assert.notEqual(body.type, "response");
   }
   assert.equal(upstreamCalls, 0);
+});
+test("failed streamed attachment resolution returns a client error without a completed response event", async () => {
+  setupWithUploads("multimodal-url-failure", { sourceFails: true });
+  const res = await post({ stream: true, input: [{ role: "user", content: [
+    { type: "input_file", file_url: "https://files.example/docs/report.pdf" },
+  ] }] });
+  const body = await res.text();
+  assert.equal(res.status, 400, body);
+  assert.match(body, /invalid_request_error/);
+  assert.doesNotMatch(body, /response\.completed/);
 });
 for (const minimal of [true, false]) test(`Responses three turns, mixed transport, minimal=${minimal}`, async () => {
   const sent = []; setup(`responses-${minimal}`, { sent });

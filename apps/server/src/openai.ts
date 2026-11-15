@@ -82,7 +82,7 @@ const ImageUrlPart = z
             "the turn - backend-api has no concept of pointing at an external URL directly.",
         }),
         detail: z
-          .enum(["auto", "low", "high"])
+          .enum(["auto", "low", "high", "original"])
           .optional()
           .meta({
             description:
