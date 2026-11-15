@@ -155,10 +155,11 @@ XMLHttpRequest.prototype.send=function(){
     var token=storedToken();
     if(token&&this.__mirrorSameOrigin){
       var sentToken=token,sentSession=localStorage.getItem('mirror_session_token')||'';
-      // XHR has no redirect:error option. Use its standard Authorization
-      // header only (the browser strips it across origins). A session bearer
-      // can refresh at the owner gate without a redirect-leaking custom header.
-      xhrSetRequestHeader.call(this,'Authorization','Bearer '+(sentSession||token));
+      // XHR has no redirect:error option, so keep the session token out of
+      // custom headers that could cross a redirect. Send the access token as
+      // the bearer; the Worker can match it to the same-origin credential
+      // cookie and use the session value only as a refresh fallback.
+      xhrSetRequestHeader.call(this,'Authorization','Bearer '+token);
       var listener=function(){
         try{
           if(new URL(this.responseURL,location.href).origin===location.origin)rememberTokens(this.getResponseHeader('x-mirror-access-token'),sentToken,this.getResponseHeader('x-mirror-session-token'),sentSession);

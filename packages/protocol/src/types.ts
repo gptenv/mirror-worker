@@ -9,7 +9,7 @@ export interface SessionCredentials {
   deviceId: string;
   /** Optional Cloudflare Turnstile token for sentinel requirements. */
   turnstileToken?: string | null;
-  /** Client-held long-lived sessionToken used only after an accessToken denial. */
+  /** Client-held long-lived sessionToken used to mint access before expiry and to recover after an access denial. */
   sessionToken?: string | null;
   /** New client-held session value returned only when ChatGPT rotates it during exchange. */
   rotatedSessionToken?: string | null;

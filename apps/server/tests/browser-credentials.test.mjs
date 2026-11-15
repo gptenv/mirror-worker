@@ -100,7 +100,7 @@ test.describe('server / injected browser credentials', () => {
     await f.context.fetch('/api/library/files/libfile_fixture/content', { redirect: 'follow' });
     const xhr = new f.context.XMLHttpRequest();
     xhr.open('GET', '/api/library/files/libfile_fixture/content'); xhr.send();
-    assert.equal(xhr.headers.get('authorization'), 'Bearer old-session');
+    assert.equal(xhr.headers.get('authorization'), 'Bearer old-access');
     assert.equal(xhr.headers.get('x-mirror-session-token'), null);
     xhr.responseURL = 'https://third-party.example/content'; xhr.finish(rotated);
     assert.deepEqual(pair(f), ['old-access', 'old-session']);

@@ -67,6 +67,47 @@ test.describe('server / browser reconnect', () => {
     assert.deepEqual(f.pair(), ['fixture-fresh-access', 'fixture-fresh-session']);
   });
 
+  test('login accepts an access token directly and a session token through its minted access token', async t => {
+    const directAccess = fixture(t, async (_url, init) => {
+      assert.equal(init.headers.get('authorization'), 'Bearer direct-access');
+      assert.equal(init.headers.get('x-mirror-session-token'), null);
+      return new Response('owner HTML', { headers: { 'content-type': 'text/html' } });
+    });
+    await directAccess.run();
+    await directAccess.submit('direct-access');
+    assert.deepEqual(directAccess.pair(), ['direct-access', null]);
+    assert.equal(directAccess.rendered, 'owner HTML');
+
+    const sessionLogin = fixture(t, async (_url, init) => {
+      assert.equal(init.headers.get('authorization'), 'Bearer long-lived-session');
+      assert.equal(init.headers.get('x-mirror-session-token'), null);
+      return new Response('owner HTML', { headers: {
+        'content-type': 'text/html',
+        'x-mirror-access-token': 'minted-short-lived-access',
+        'x-mirror-session-token': 'rotated-long-lived-session',
+      } });
+    });
+    await sessionLogin.run();
+    await sessionLogin.submit('long-lived-session');
+    assert.deepEqual(sessionLogin.pair(), ['minted-short-lived-access', 'rotated-long-lived-session']);
+    assert.equal(sessionLogin.rendered, 'owner HTML');
+  });
+
+  test('stored session-backed login sends both credentials so the access token can refresh early', async t => {
+    const f = fixture(t, async (_url, init) => {
+      assert.equal(init.headers.get('authorization'), 'Bearer expiring-access');
+      assert.equal(init.headers.get('x-mirror-session-token'), 'renewable-session');
+      return new Response('owner HTML', { headers: {
+        'content-type': 'text/html',
+        'x-mirror-access-token': 'fresh-access',
+        'x-mirror-session-token': 'rotated-session',
+      } });
+    }, ['expiring-access', 'renewable-session']);
+    await f.run();
+    assert.deepEqual(f.pair(), ['fresh-access', 'rotated-session']);
+    assert.equal(f.rendered, 'owner HTML');
+  });
+
   test('successful data documents render inert text rather than executable markup', async t => {
     const body = '<img src=x onerror="window.pwned=true"><script>window.pwned=true</script>';
     for (const type of ['application/json', 'application/yaml', 'text/plain', '']) {

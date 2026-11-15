@@ -97,10 +97,11 @@ test.describe('browser / protected navigation through workerd', () => {
       await expect(page.locator('#owner-document')).toHaveCount(0);
       await expect(page.locator('#submit')).toBeEnabled();
     }
-    await page.locator('#credential').fill('fixture-owner-session');
+    const sessionCookie = 'header.payload.fixture-owner-session.tag.iv';
+    await page.locator('#credential').fill(sessionCookie);
     await page.locator('#submit').click();
     await expect(page.locator('#owner-document')).toBeVisible();
-    expect(await page.evaluate(() => [localStorage.getItem('mirror_access_token'), localStorage.getItem('mirror_session_token')])).toEqual(['fixture-owner-token', 'fixture-owner-session']);
+    expect(await page.evaluate(token => [localStorage.getItem('mirror_access_token'), localStorage.getItem('mirror_session_token')], sessionCookie)).toEqual(['fixture-owner-token', sessionCookie]);
     await expect.poll(() => page.locator('#space-preview').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1);
     await page.reload();
     await expect(page.locator('#owner-document')).toBeVisible();

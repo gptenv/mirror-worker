@@ -21,7 +21,7 @@ import { z, ZodError } from "zod";
 import { buildOpenApiDocument } from "./openapi-document.js";
 import { BROWSER_BOOTSTRAP } from "./browser-bootstrap.js";
 import { EARLY_PATCH } from "./browser-patch.js";
-import { nativeReadCredentials, applyNativeCredentialCookies } from "./native-credentials.js";
+import { nativeReadCredentials, nativeSessionFallback, applyNativeCredentialCookies } from "./native-credentials.js";
 import { chatGptUpstreamPath } from "./url-rewrite.js";
 import {
   ConversationIdParam,
@@ -38,7 +38,7 @@ import {
   normalizeModels,
   type NormalizedConversationEvent,
 } from "@mirror/protocol";
-import { runWithRequestSessionToken, applyRotatedCredentialHeaders, getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, setRequestSessionToken } from "./auth.js";
+import { runWithRequestSessionToken, applyRotatedCredentialHeaders, getRequestFallbackSessionToken, getRequestSessionToken, getRotatedRequestAccessToken, getRotatedRequestSessionToken, getValidCredentials, resolveAssetCookieToken, setRequestSessionToken } from "./auth.js";
 import { runChat, stopConversation } from "./chat-service.js";
 import { registerOpenAiRoutes } from "./openai.js";
 import {
@@ -226,7 +226,10 @@ app.addHook("onRequest", async (req, reply) => {
   const nativePair = nativeReadCredentials(req, Boolean(options.worker && options.ownerUserId));
   const requestSessionToken = bearer || nativePair?.[0] || nativePair?.[1] || assetCookieToken || "";
   const fallbackSessionToken = typeof req.headers["x-mirror-session-token"] === "string" ? req.headers["x-mirror-session-token"] : undefined;
-  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || (!bearer ? nativePair?.[1] || assetCookieToken : undefined));
+  const cookieSessionFallback = bearer
+    ? nativeSessionFallback(req, Boolean(options.worker && options.ownerUserId), bearer)
+    : nativePair?.[1] || assetCookieToken;
+  if (requestSessionToken) setRequestSessionToken(requestSessionToken, fallbackSessionToken || cookieSessionFallback);
   const workerPublicAsset = options.worker && req.method === "GET" && (publicWorkerAsset ||
     /^\/(?:assets|mirror\/assets)\//.test(pathname!) || ["/favicon.ico", "/index.html"].includes(pathname!));
   if (options.ownerUserId && !workerPublicAsset && pathname !== "/api/health") {
@@ -252,9 +255,9 @@ app.addHook("onRequest", async (req, reply) => {
     }
   }
   if (!sessionBearerAuthenticated && !isConfiguredApiKey && requestSessionToken && !upstreamAuthenticates && !publicWorkerAsset) {
-    // Validate the browser bearer against ChatGPT. The backend client tries it
-    // directly as an accessToken and exchanges the client-held sessionToken
-    // only after an upstream authentication denial.
+    // Validate the browser credential against ChatGPT. Session-only bearers
+    // are exchanged first; access tokens are sent directly with an optional
+    // separate sessionToken available for expiry refresh or auth recovery.
     try {
       const credentials = await getValidCredentials();
       await new ChatGptBackendClient(credentials).fetchMe();
@@ -348,7 +351,8 @@ app.addHook("onSend", async (req, reply, payload) => {
     reply.header("x-mirror-access-token", accessToken);
     if (!nativeRead && req.url.split("?", 1)[0] === "/api/asset-content") {
       const secure = req.protocol === "https" ? "; Secure" : "";
-      reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(sessionToken || getRequestFallbackSessionToken() || getRequestSessionToken() || accessToken)}; Path=/api/asset-content; SameSite=Strict${secure}`);
+      const cookieToken = resolveAssetCookieToken(sessionToken, getRequestFallbackSessionToken(), getRequestSessionToken(), accessToken);
+      reply.header("Set-Cookie", `mirror_asset_session=${encodeURIComponent(cookieToken!)}; Path=/api/asset-content; SameSite=Strict${secure}`);
     }
   }
   if (req.url.startsWith("/v1/") && reply.statusCode >= 400) {

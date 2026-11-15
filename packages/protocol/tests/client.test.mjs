@@ -50,6 +50,76 @@ test("tries the stored accessToken first and exchanges the saved sessionToken on
     assert.equal(creds.rotatedSessionToken, "rotated-session");
   }));
 
+test("a session-only bearer is exchanged before backend-api and returns the rotated credentials", () =>
+  withFetch(async (input, init = {}) => {
+    const url = new URL(String(input));
+    const headers = new Headers(init.headers);
+    if (url.pathname === "/api/auth/session") {
+      assert.equal(headers.get("cookie"), "__Secure-next-auth.session-token=header.payload.ciphertext.tag.iv");
+      return Response.json({ accessToken: `h.${Buffer.from(JSON.stringify({ exp: Date.now() / 1000 + 3600 })).toString("base64url")}.s` }, {
+        headers: { "set-cookie": "__Secure-next-auth.session-token=rotated-session; Path=/; Secure" },
+      });
+    }
+    assert.equal(url.pathname, "/backend-api/me");
+    assert.notEqual(headers.get("authorization"), "Bearer header.payload.ciphertext.tag.iv");
+    assert.match(headers.get("authorization"), /^Bearer h\./);
+    assert.equal(headers.get("cookie"), "__Secure-next-auth.session-token=rotated-session");
+    return Response.json({ account: { account_user_id: "session-owner" } });
+  }, async () => {
+    const creds = { accessToken: "header.payload.ciphertext.tag.iv", sessionToken: "header.payload.ciphertext.tag.iv", cookie: "__Secure-next-auth.session-token=header.payload.ciphertext.tag.iv", deviceId: "device-1" };
+    const client = new ChatGptBackendClient(creds);
+    await client.fetchMe();
+    assert.equal(creds.rotatedSessionToken, "rotated-session");
+    assert.equal(creds.sessionToken, "rotated-session");
+  }));
+
+test("a near-expiry access token refreshes before backend-api while an access-only token remains direct", async () => {
+  const expiring = `h.${Buffer.from(JSON.stringify({ exp: Date.now() / 1000 + 30 })).toString("base64url")}.s`;
+  await withFetch(async (input, init = {}) => {
+    const url = new URL(String(input));
+    const headers = new Headers(init.headers);
+    if (url.pathname === "/api/auth/session") {
+      assert.equal(headers.get("cookie"), "__Secure-next-auth.session-token=renewable-session");
+      return Response.json({ accessToken: `h.${Buffer.from(JSON.stringify({ exp: Date.now() / 1000 + 3600 })).toString("base64url")}.s` });
+    }
+    assert.equal(url.pathname, "/backend-api/me");
+    assert.notEqual(headers.get("authorization"), `Bearer ${expiring}`);
+    return Response.json({ id: "near-expiry-owner" });
+  }, async () => {
+    const client = new ChatGptBackendClient({ accessToken: expiring, sessionToken: "renewable-session", cookie: "__Secure-next-auth.session-token=renewable-session", deviceId: "device-1" });
+    await client.fetchMe();
+    assert.match(client["creds"].accessToken, /^h\./);
+  });
+
+  let calls = 0;
+  await withFetch(async (_input, init = {}) => {
+    calls++;
+    assert.equal(new Headers(init.headers).get("authorization"), `Bearer ${expiring}`);
+    return Response.json({ id: "direct-access-owner" });
+  }, async () => {
+    const client = new ChatGptBackendClient({ accessToken: expiring, deviceId: "device-1" });
+    await client.fetchMe();
+  });
+  assert.equal(calls, 1, "access-only credentials are not exchanged or changed");
+});
+
+test("a failed proactive session exchange reports token lengths without attempting backend-api", async () => {
+  const sessionToken = "header.payload.ciphertext.tag.iv";
+  await withFetch(async input => {
+    assert.equal(new URL(String(input)).pathname, "/api/auth/session");
+    return new Response("synthetic exchange unavailable", { status: 503 });
+  }, async () => {
+    const client = new ChatGptBackendClient({ accessToken: sessionToken, sessionToken, deviceId: "device-1" });
+    await assert.rejects(client.fetchMe(), error => {
+      assert.equal(error.statusCode, 503);
+      assert.equal(error.tokenLengths.accessToken.received, sessionToken.length);
+      assert.equal(error.tokenLengths.accessToken.sentUpstream, null);
+      assert.equal(error.tokenLengths.sessionToken.sentUpstream, sessionToken.length);
+      return true;
+    });
+  });
+});
+
 for (const outcome of ["success", "mint rejection", "retry rejection"]) {
   test(`discards the denied response before credential refresh: ${outcome}`, async () => {
     let cancelled = 0;

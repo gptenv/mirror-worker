@@ -12,10 +12,11 @@ const { getValidCredentials, getRotatedRequestAccessToken, runWithRequestSession
 test.describe('server / upstream-cookie-auth', () => {
   test.after(() => rmSync(dir, { recursive: true, force: true }));
   test('configured API-key-shaped settings are ChatGPT session credentials sent to backend-api', async () => {
+    const session = value => `header.payload.${value}.tag.iv`;
     for (const settings of [
-      { MIRROR_API_KEY: 'primary-session', MIRROR_API_KEYS: 'secondary-session,third-session', OPENAI_API_KEY: 'last-session' },
-      { MIRROR_API_KEYS: 'secondary-session,third-session', OPENAI_API_KEY: 'last-session' },
-      { OPENAI_API_KEY: 'last-session' },
+      { MIRROR_API_KEY: session('primary-session'), MIRROR_API_KEYS: `${session('secondary-session')},${session('third-session')}`, OPENAI_API_KEY: session('last-session') },
+      { MIRROR_API_KEYS: `${session('secondary-session')},${session('third-session')}`, OPENAI_API_KEY: session('last-session') },
+      { OPENAI_API_KEY: session('last-session') },
     ]) {
       const keys = configuredApiKeys(settings);
       await runWithRequestSessionToken(keys.at(-1), async () => {
@@ -24,7 +25,12 @@ test.describe('server / upstream-cookie-auth', () => {
         assert.equal(credentials.cookie, '__Secure-next-auth.session-token=' + keys[0]);
         assert.equal(await getRotatedRequestAccessToken(), undefined);
         await runWithUpstreamFetch(async (url, init) => {
+          if (new URL(String(url)).pathname === '/api/auth/session') {
+            assert.equal(new Headers(init.headers).get('cookie'), credentials.cookie);
+            return Response.json({ accessToken: 'configured-access' });
+          }
           assert.match(String(url), /^https:\/\/chatgpt\.com\/backend-api\//);
+          assert.equal(new Headers(init.headers).get('authorization'), 'Bearer configured-access');
           assert.equal(new Headers(init.headers).get('cookie'), credentials.cookie);
           return Response.json({ id: 'test-user' });
         }, () => new ChatGptBackendClient(credentials).fetchMe());
