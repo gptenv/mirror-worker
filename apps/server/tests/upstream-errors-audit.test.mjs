@@ -97,11 +97,14 @@ test.describe('server / upstream-errors-audit', () => {
   test('optional GPT catalog lookups propagate authentication failures', async () => {
     for (const endpoint of ['/api/gpts', '/v1/models']) {
       const app = await buildApp({worker: true});
+      test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoSidebar', async () => {
+        throw Object.assign(new Error('auth'), { status: 401 });
+      });
+      test.mock.method(ChatGptBackendClient.prototype, 'fetchGizmoBootstrap', async () => {
+        throw Object.assign(new Error('auth'), { status: 401 });
+      });
       const backend = stubBackend('audit');
-      test.mock.method(globalThis, 'fetch', async (input, init) =>
-        new URL(String(input)).pathname.includes('/gizmos/')
-          ? new Response(json, { status: 401 })
-          : backend(input, init));
+      test.mock.method(globalThis, 'fetch', backend);
       try {
         const response = await app.inject({ method: 'GET', url: endpoint, headers: { authorization: 'Bearer access' } });
         assert.equal(response.statusCode, 401, response.body);
