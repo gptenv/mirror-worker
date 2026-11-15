@@ -65,6 +65,15 @@ export const BROWSER_BOOTSTRAP = `<!doctype html><html><head><meta charset="utf-
         if(currentAttempt===attempt)status.textContent='Credentials changed while connecting. Reload to continue.';
         return;
       }
+      // A direct three-part accessToken authenticates Mirror and ChatGPT's
+      // API routes, but is not a NextAuth session cookie for ChatGPT's
+      // server-rendered web app. Send access-only root logins to Mirror's
+      // API-backed chat UI; session credentials keep opening the upstream UI.
+      var directAccessToken=!sessionToken&&!rotatedSession&&token.split('.').length===3;
+      if(location.pathname==='/'&&directAccessToken){
+        window.location.replace('/mirror/playground');
+        return;
+      }
       if((response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase()==='text/html'){
         document.open();document.write(body);document.close();
       }else{

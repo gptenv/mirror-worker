@@ -34,6 +34,33 @@ test.describe('server / browser-login', () => {
     assert.equal(storage.get('mirror_session_token'), 'session-new');
   });
 
+  test('access-token root login routes to the API-backed chat UI', async () => {
+    const accessToken = 'header.payload.signature';
+    const storage = new Map([['mirror_access_token', accessToken]]);
+    const elements = { connect: {}, credential: { value: '' }, submit: { disabled: false }, status: { textContent: '' } };
+    let redirected;
+    let written;
+    const context = {
+      Headers, location: { href: 'https://mirror.example/', pathname: '/' },
+      window: { location: { replace(path) { redirected = path; } } },
+      localStorage: {
+        getItem: key => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+        removeItem: key => storage.delete(key),
+      },
+      fetch: async (_url, init) => {
+        assert.equal(init.headers.get('authorization'), `Bearer ${accessToken}`);
+        assert.equal(init.headers.get('x-mirror-document'), '1');
+        return new Response('<html>upstream ChatGPT page</html>', { headers: { 'content-type': 'text/html', 'x-mirror-auth-status': 'owner_verified' } });
+      },
+      document: { cookie: '', open() {}, write(html) { written = html; }, close() {}, getElementById(id) { assert.ok(id in elements); return elements[id]; } },
+    };
+    await vm.runInNewContext(BROWSER_BOOTSTRAP.match(/<script>([\s\S]*)<\/script>/)[1], context);
+    assert.equal(redirected, '/mirror/playground');
+    assert.equal(written, undefined);
+    assert.equal(storage.get('mirror_access_token'), accessToken);
+  });
+
   test('Worker browser navigation bootstraps without granting access to account data', async () => {
     const app = await buildApp({ worker: true });
     try {
