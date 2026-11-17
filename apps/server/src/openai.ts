@@ -484,6 +484,27 @@ export function remainingStreamText(responseText: string, emittedText: string): 
   return responseText.slice(emittedText.length);
 }
 
+/** Return the longest prefix that cannot become part of an unresolved file reference. */
+export function safeStreamingTextLength(text: string): number {
+  let boundary = text.length;
+  const markers = ["sandbox:", "file-service:", "sediment:"];
+  for (const marker of markers) {
+    const index = text.indexOf(marker);
+    if (index >= 0) boundary = Math.min(boundary, index);
+    // Keep a partial marker at the end of a snapshot until the next update,
+    // so a marker split across upstream SSE events is never sent as plain text.
+    for (let length = Math.min(marker.length - 1, text.length); length > 0; length--) {
+      if (text.endsWith(marker.slice(0, length))) {
+        boundary = Math.min(boundary, text.length - length);
+        break;
+      }
+    }
+  }
+  const privateMarker = text.search(/[\uE000-\uF8FF]/);
+  if (privateMarker >= 0) boundary = Math.min(boundary, privateMarker);
+  return boundary;
+}
+
 export { CompletionBody, OpenAiMessage, ContentPart };
 export type { TextPart };
 
@@ -1054,13 +1075,13 @@ export async function registerOpenAiRoutes(
                 ? event.text.slice(previous.length)
                 : (streamedText ? "\n\n" : "") + event.text;
               streamedText += append;
-              // Keep the unfinished line and reference-bearing suffix until
-              // late file metadata has arrived. SSE heartbeats remain active.
+              // Plain answer text can be sent as soon as it arrives. Hold
+              // only unresolved file-reference markers until their metadata
+              // is available; waiting for a newline made ordinary one-line
+              // answers look like non-streaming responses.
               if (!rich) {
-                const boundary = streamedText.lastIndexOf("\n") + 1;
-                const reference = streamedText.search(/\[|[\uE000-\uF8FF]|sandbox:|file-service:|sediment:/);
-                const safe = streamedText.slice(0, reference < 0 ? boundary : Math.min(boundary, reference));
-                const delta = safe.slice(emittedText.length);
+                const safeLength = safeStreamingTextLength(streamedText);
+                const delta = streamedText.slice(emittedText.length, safeLength);
                 if (delta) {
                   if (responses) responses.delta(delta);
                   else sse(reply, { id: completionId, object: "chat.completion.chunk", created, model: body.model,
