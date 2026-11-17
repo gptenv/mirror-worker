@@ -45,6 +45,10 @@ export function routeModel(
     };
   return {
     model: override || model,
+    // A normal model request explicitly targets the primary assistant. Keep
+    // this distinct from an omitted routing hint so implicit conversation
+    // matching cannot carry a prior Custom GPT/Project into this request.
+    gizmoId: null,
     ...(privateMode !== undefined ? { private: privateMode } : {}),
   };
 }

@@ -142,8 +142,13 @@ for (const model of ["g-custom", "g-p-project", "model-a"]) for (const endpoint 
       assert.match(answer, /PYTHON STDOUT/); assert.match(answer, /PYTHON STDERR/); assert.match(answer, /VISIBLE PYTHON/);
       assert.match(answer, new RegExp(`Normal answer ${turn}\\.`));
       const hidden = model.startsWith("g-") && turn === 1;
+      const fileSearchHidden = turn === 1;
       if (hidden) {
         assert.doesNotMatch(JSON.stringify({ answer, metadata, output }), /SEARCH|file_search|EXTRA SUMMARY/);
+        assert.equal(downloads.length, 0);
+      } else if (fileSearchHidden) {
+        assert.doesNotMatch(JSON.stringify({ answer, metadata, output }), /SEARCH LOG|TYPED SEARCH LOG|SEARCH ATTACHMENT|file_search/);
+        assert.match(answer, /SEARCH PREAMBLE/);
         assert.equal(downloads.length, 0);
       } else {
         assert.match(answer, /SEARCH LOG MORE SEARCH LOG/);

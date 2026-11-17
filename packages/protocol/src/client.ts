@@ -846,10 +846,12 @@ export class ChatGptBackendClient {
       ));
     }
 
-    // Scope display suppression to a new upstream Custom GPT/Project chat.
-    // Python output remains visible; existing upstream threads are unaffected.
+    // Suppress file-search tool text for a new conversation's first turn.
+    // The broader setup narration rule remains limited to Custom GPT/Project
+    // chats; user-requested tools and follow-up turns stay visible.
     const reducer = new ConversationStreamReducer({
       suppressFirstTurnToolNarration: firstTurn && Boolean(opts.gizmoId),
+      suppressFirstTurnFileSearch: firstTurn,
     });
     const allEvents: NormalizedConversationEvent[] = [];
     const reader = res.body.getReader();

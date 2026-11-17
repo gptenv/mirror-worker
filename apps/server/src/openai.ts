@@ -822,7 +822,7 @@ export async function registerOpenAiRoutes(
           const routeCandidate = routeModel(body.model, body.metadata);
           if (candidate && candidate.accountId === accountId &&
               !hasPriorTurns &&
-              (routeCandidate.gizmoId === undefined || routeCandidate.gizmoId === candidate.gizmoId) &&
+              routeCandidate.gizmoId === candidate.gizmoId &&
               (!routeCandidate.model || routeCandidate.model === "auto" || routeCandidate.model === candidate.model) &&
               (routeCandidate.private === undefined || routeCandidate.private === Boolean(candidate.private))) {
             explicitConversation = candidate;
@@ -881,8 +881,7 @@ export async function registerOpenAiRoutes(
           );
           if (
             candidate &&
-            (route.gizmoId === undefined ||
-              route.gizmoId === candidate.gizmoId) &&
+            route.gizmoId === candidate.gizmoId &&
             (!route.model ||
               route.model === "auto" ||
               route.model === candidate.model) &&
@@ -982,7 +981,6 @@ export async function registerOpenAiRoutes(
 
         if (explicitConversation && !needsRebase) {
           if (
-            route.gizmoId !== undefined &&
             route.gizmoId !== explicitConversation.gizmoId
           ) {
             throw Object.assign(

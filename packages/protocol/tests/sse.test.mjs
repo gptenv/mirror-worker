@@ -316,6 +316,29 @@ test("suppressFirstTurnToolNarration never hides Python's own code/execution_out
   assert.equal(events.filter((e) => e.kind === "assistant_text").length, 2);
 });
 
+test("first-turn typed web tool events stay visible even when their names are unfamiliar", () => {
+  const reducer = new ConversationStreamReducer({ suppressFirstTurnToolNarration: true });
+  reducer.feed(JSON.stringify({ type: "web_search", tool_name: "search_provider", status: "completed" }));
+  const event = reducer.drainEvents().find(e => e.kind === "tool");
+  assert.ok(event);
+  assert.equal(event.displayHidden, undefined);
+});
+
+test("first-turn file-search tool messages are hidden without hiding ordinary first-turn narration", () => {
+  const reducer = new ConversationStreamReducer({ suppressFirstTurnFileSearch: true });
+  reducer.feed(JSON.stringify({ p: "", o: "add", v: { message: {
+    id: "file-search", author: { role: "tool", name: "file_search.msearch" },
+    content: { content_type: "text", parts: ["private search output"] },
+  } } }));
+  reducer.feed(JSON.stringify({ p: "", o: "add", v: { message: {
+    id: "narration", author: { role: "assistant" }, channel: "commentary",
+    content: { content_type: "text", parts: ["visible narration"] },
+  } } }));
+  const events = reducer.drainEvents();
+  assert.ok(events.filter(e => e.kind === "tool").every(e => e.displayHidden));
+  assert.equal(reducer.text, "visible narration");
+});
+
 test("without suppressFirstTurnToolNarration, browsing status cards behave exactly as before (visible assistant_text)", () => {
   const reducer = new ConversationStreamReducer();
   reducer.feed(JSON.stringify({

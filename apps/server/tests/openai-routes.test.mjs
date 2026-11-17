@@ -1481,6 +1481,38 @@ test("a gizmo model with no metadata.private routes without forcing a private fl
   });
 });
 
+test("a requested primary model does not implicitly continue the previous Custom GPT", async () => {
+  const account = "account-model-change-from-gpt";
+  useSession(account);
+  const sent = [];
+  await withFetch(stubBackend(account, { sent }), async () => {
+    const gptResponse = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: { stream: false, model: "g-tuesday", messages: [{ role: "user", content: "first" }] },
+    });
+    assert.equal(gptResponse.statusCode, 200, gptResponse.body);
+    const gptConversationId = gptResponse.headers["x-mirror-conversation-id"];
+    assert.equal(store.getConversation(gptConversationId).gizmoId, "g-tuesday");
+
+    const modelResponse = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: { stream: false, model: "model-b", messages: [{ role: "user", content: "second" }] },
+    });
+    assert.equal(modelResponse.statusCode, 200, modelResponse.body);
+    const modelConversationId = modelResponse.headers["x-mirror-conversation-id"];
+    assert.notEqual(modelConversationId, gptConversationId);
+    assert.equal(store.getConversation(modelConversationId).gizmoId, null);
+
+    const sends = sent.filter(({ pathname }) => pathname.endsWith("/f/conversation"));
+    assert.equal(sends.length, 2);
+    assert.equal(sends[1].body.model, "model-b");
+    assert.equal(sends[1].body.conversation_id, undefined);
+    assert.deepEqual(sends[1].body.conversation_mode, { kind: "primary_assistant" });
+  });
+});
+
 test("a gizmo model with metadata.private=true routes as a private conversation", async () => {
   useSession("account-branch-gizmo-private");
   await withFetch(stubBackend("account-branch-gizmo-private", {}), async () => {

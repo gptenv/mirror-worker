@@ -214,6 +214,10 @@ function isPythonTool(name: string): boolean {
   return /^(?:python|python_user_visible)(?:\.|$)/.test(name);
 }
 
+function isFileSearchTool(name: string): boolean {
+  return /^(?:file_search|myfiles_browser)(?:[._-]|$)/i.test(name);
+}
+
 /**
  * Tools the model can invoke in direct response to something the user asked
  * for in THIS turn (image generation, web browsing/search, canvas, code
@@ -242,6 +246,8 @@ export interface ConversationStreamReducerOptions {
    * being promoted into text, tool metadata, summaries, or output
    * attachments. Subsequent turns are unaffected. */
   suppressFirstTurnToolNarration?: boolean;
+  /** Hide file-search tool-call text on the first turn of any new chat. */
+  suppressFirstTurnFileSearch?: boolean;
 }
 
 export class ConversationStreamReducer {
@@ -328,7 +334,10 @@ export class ConversationStreamReducer {
       }
       const previousVisibility = this.displayHidden;
       const name = asString(event.raw.tool_name) ?? asString(event.raw.name) ?? "";
-      this.displayHidden = Boolean(this.opts.suppressFirstTurnToolNarration) && !isAlwaysVisibleFirstTurnTool(name) && !isAlwaysVisibleFirstTurnTool(event.type);
+      this.displayHidden = Boolean(this.opts.suppressFirstTurnFileSearch) &&
+        (isFileSearchTool(name) || isFileSearchTool(event.type)) ||
+        Boolean(this.opts.suppressFirstTurnToolNarration) &&
+        !isAlwaysVisibleFirstTurnTool(name) && !isAlwaysVisibleFirstTurnTool(event.type);
       this.applyTyped(event.type, event.raw);
       scanSpecials(event.raw, (normalized) => this.push(normalized));
       this.displayHidden = previousVisibility;
@@ -419,6 +428,8 @@ export class ConversationStreamReducer {
 
     const channel = asString(message.channel);
     const python = isPythonTool(authorName ?? "") || isPythonTool(asString(message.recipient) ?? "");
+    const fileSearch = Boolean(this.opts.suppressFirstTurnFileSearch) &&
+      (isFileSearchTool(authorName ?? "") || isFileSearchTool(asString(message.recipient) ?? ""));
     const isVisibleFirstTurnTool = python ||
       isAlwaysVisibleFirstTurnTool(authorName ?? "") ||
       isAlwaysVisibleFirstTurnTool(asString(message.recipient) ?? "");
@@ -435,7 +446,7 @@ export class ConversationStreamReducer {
         ));
     const isProtectedOutput = isVisibleFirstTurnTool || hasImageContent;
 
-    this.displayHidden = channel === "analysis" ||
+    this.displayHidden = fileSearch || channel === "analysis" ||
       Boolean(this.opts.suppressFirstTurnToolNarration) && !isProtectedOutput &&
       (role !== "assistant" || Boolean(authorName) || channel === "commentary" ||
         Boolean(message.recipient && message.recipient !== "all") ||
