@@ -63,6 +63,22 @@ const migrations = [
     }
 
   },
+  function chunkLargeStoredPayloads(db: SchemaDatabase): void {
+    // Keep each SQLite row comfortably below the Workers SQLite 8 MiB limit.
+    // Payloads are moved to bounded rows by store.ts as they are written.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS stored_payload_chunks (
+        owner_type TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        field TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY (owner_type, owner_id, field, chunk_index)
+      );
+      CREATE INDEX IF NOT EXISTS stored_payload_chunks_owner_idx
+        ON stored_payload_chunks(owner_type, owner_id, field);
+    `);
+  },
 ];
 
 export const DATABASE_SCHEMA_VERSION = migrations.length;

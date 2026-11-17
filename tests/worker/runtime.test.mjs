@@ -196,8 +196,8 @@ test.describe('worker / local workerd acceptance', { timeout: 120_000 }, () => {
     assert.deepEqual(await restored.json(), { content: 'Synthetic persisted instruction' });
     const diagnostics = await request('/api/diagnostics', { headers: owner });
     assert.equal(diagnostics.status, 200);
-    // Version 1 is the released baseline; a migration must update this acceptance fixture.
-    assert.equal((await diagnostics.json()).storage.schemaVersion, 1);
+    // Version 2 introduces bounded SQLite payload rows.
+    assert.equal((await diagnostics.json()).storage.schemaVersion, 2);
     assert.ok(upstreamCalls.includes('/backend-api/me'));
   });
   test('JSON and SSE completions retain their transcript through the real HTTP bridge', async () => {

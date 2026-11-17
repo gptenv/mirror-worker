@@ -54,7 +54,7 @@ test.describe('worker / native Durable Object migration recovery', { timeout: 12
     assert.equal(pragma.userVersionSupported, false);
     assert.ok(pragma.messageColumns.some(column => column.name === 'content'));
     const migrated = await request('legacy', '/migrate');
-    assert.equal(migrated.version, 1);
+    assert.equal(migrated.version, 2);
     assert.deepEqual(migrated.conversations, original.conversations.map(row => ({ ...row, is_private: 0, is_branch: 0 })));
     assert.deepEqual(migrated.messages, original.messages.map(row => ({ ...row, attachments_json: '[]' })));
     assert.deepEqual(await request('legacy', '/migrate'), migrated, 'repeated initialization is idempotent');
@@ -72,7 +72,7 @@ test.describe('worker / native Durable Object migration recovery', { timeout: 12
     runtime = new Miniflare(options);
     assert.deepEqual(await request('rollback', '/state'), original, 'failed migration remains rolled back after restart');
     const retried = await request('rollback', '/migrate');
-    assert.equal(retried.version, 1);
+    assert.equal(retried.version, 2);
     assert.equal(retried.messages[0].content, 'Preserve answer');
     assert.deepEqual(await request('rollback', '/transaction-failure'), { rolledBack: true });
     const committed = await request('rollback', '/transaction-retry');
@@ -86,7 +86,7 @@ test.describe('worker / native Durable Object migration recovery', { timeout: 12
     await request('future', '/seed');
     await request('future', '/migrate');
     const newer = await request('future', '/future-version');
-    assert.equal(newer.version, 2);
+    assert.equal(newer.version, 3);
     assert.match((await request('future', '/migrate', 409)).error, /Unsupported database schema version/);
     assert.deepEqual(await request('future', '/state'), newer);
     await runtime.dispose();

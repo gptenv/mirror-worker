@@ -37,6 +37,43 @@ const KEY_FILE = path.join(DATA_DIR, "master.key");
 const LEGACY_STORE_FILE = path.join(DATA_DIR, "store.json");
 let db: SqliteDatabase;
 
+// Durable Object SQLite caps an individual row at 8 MiB. Keep payload rows
+// small even when an accepted request/response contains much longer text.
+const INLINE_PAYLOAD_LIMIT = 512 * 1024;
+const PAYLOAD_CHUNK_LIMIT = 256 * 1024;
+
+function splitPayload(value: string): string[] {
+  const chunks: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  for (const character of value) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > PAYLOAD_CHUNK_LIMIT && chunk) {
+      chunks.push(chunk);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += character;
+    bytes += size;
+  }
+  if (chunk || chunks.length === 0) chunks.push(chunk);
+  return chunks;
+}
+
+function writeStoredPayload(ownerType: string, ownerId: string, field: string, value: string): string {
+  db.prepare("DELETE FROM stored_payload_chunks WHERE owner_type=? AND owner_id=? AND field=?").run(ownerType, ownerId, field);
+  if (Buffer.byteLength(value, "utf8") <= INLINE_PAYLOAD_LIMIT) return value;
+  const insert = db.prepare("INSERT INTO stored_payload_chunks(owner_type, owner_id, field, chunk_index, payload) VALUES (?, ?, ?, ?, ?)");
+  splitPayload(value).forEach((chunk, index) => insert.run(ownerType, ownerId, field, index, chunk));
+  return "";
+}
+
+function readStoredPayload(ownerType: string, ownerId: string, field: string, inlineValue: string): string {
+  if (inlineValue !== "") return inlineValue;
+  const chunks = db.prepare("SELECT payload FROM stored_payload_chunks WHERE owner_type=? AND owner_id=? AND field=? ORDER BY chunk_index").all(ownerType, ownerId, field) as Array<{payload: string}>;
+  return chunks.length ? chunks.map(({payload}) => payload).join("") : inlineValue;
+}
+
 function decodeConfiguredKey(value: string): Buffer {
   const key = /^[a-f\d]{64}$/i.test(value)
     ? Buffer.from(value, "hex")
@@ -142,14 +179,17 @@ function readSetting(key: string): string | null {
   const row = db
     .prepare("SELECT value FROM settings WHERE key = ?")
     .get(key) as { value: string } | undefined;
-  return row?.value ?? null;
+  return row ? readStoredPayload("setting", key, "value", row.value) : null;
 }
 
 function writeSetting(key: string, value: string): void {
-  db.prepare(
-    `INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-  ).run(key, value, new Date().toISOString());
+  db.transaction(() => {
+    const storedValue = writeStoredPayload("setting", key, "value", value);
+    db.prepare(
+      `INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+    ).run(key, storedValue, new Date().toISOString());
+  });
 }
 
 /** The last implicit API conversation is scoped to the connected account. */
@@ -698,20 +738,15 @@ export function addMessage(
     id: input.id ?? randomUUID(),
     createdAt: new Date().toISOString(),
   };
-  db.prepare(
-    `INSERT INTO messages(id, conversation_id, upstream_node_id, role, content, status, events_json, attachments_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    message.id,
-    message.conversationId,
-    message.upstreamNodeId,
-    message.role,
-    message.content,
-    message.status,
-    JSON.stringify(message.events),
-    JSON.stringify(message.attachments ?? []),
-    message.createdAt,
-  );
+  db.transaction(() => {
+    const content = writeStoredPayload("message", message.id, "content", message.content);
+    const events = writeStoredPayload("message", message.id, "events_json", JSON.stringify(message.events));
+    const attachments = writeStoredPayload("message", message.id, "attachments_json", JSON.stringify(message.attachments ?? []));
+    db.prepare(
+      `INSERT INTO messages(id, conversation_id, upstream_node_id, role, content, status, events_json, attachments_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(message.id, message.conversationId, message.upstreamNodeId, message.role, content, message.status, events, attachments, message.createdAt);
+  });
   return message;
 }
 
@@ -722,9 +757,13 @@ export function updateMessage(
   upstreamNodeId: string | null,
   events: NormalizedConversationEvent[],
 ): void {
-  db.prepare(
-    "UPDATE messages SET content=?, status=?, upstream_node_id=?, events_json=? WHERE id=?",
-  ).run(content, status, upstreamNodeId, JSON.stringify(events), id);
+  db.transaction(() => {
+    const storedContent = writeStoredPayload("message", id, "content", content);
+    const storedEvents = writeStoredPayload("message", id, "events_json", JSON.stringify(events));
+    db.prepare(
+      "UPDATE messages SET content=?, status=?, upstream_node_id=?, events_json=? WHERE id=?",
+    ).run(storedContent, status, upstreamNodeId, storedEvents, id);
+  });
 }
 
 export function listMessages(conversationId: string): StoredMessage[] {
@@ -738,10 +777,10 @@ export function listMessages(conversationId: string): StoredMessage[] {
     conversationId: String(row.conversation_id),
     upstreamNodeId: row.upstream_node_id ? String(row.upstream_node_id) : null,
     role: row.role as StoredMessage["role"],
-    content: String(row.content),
+    content: readStoredPayload("message", String(row.id), "content", String(row.content)),
     status: String(row.status),
-    events: JSON.parse(String(row.events_json)),
-    attachments: JSON.parse(String(row.attachments_json)),
+    events: JSON.parse(readStoredPayload("message", String(row.id), "events_json", String(row.events_json))),
+    attachments: JSON.parse(readStoredPayload("message", String(row.id), "attachments_json", String(row.attachments_json))),
     createdAt: String(row.created_at),
   }));
 }
@@ -775,7 +814,11 @@ export function ownsUpstreamConversation(
 }
 
 export function deleteConversation(id: string): void {
-  db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+  db.transaction(() => {
+    db.prepare("DELETE FROM stored_payload_chunks WHERE owner_type='message' AND owner_id IN (SELECT id FROM messages WHERE conversation_id=?)").run(id);
+    db.prepare("DELETE FROM stored_payload_chunks WHERE owner_type='instructions' AND owner_id=?").run(id);
+    db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+  });
 }
 
 export function branchConversation(
@@ -937,6 +980,7 @@ export function replaceMessages(
   }>,
 ): void {
   db.transaction(() => {
+    db.prepare("DELETE FROM stored_payload_chunks WHERE owner_type='message' AND owner_id IN (SELECT id FROM messages WHERE conversation_id=?)").run(conversationId);
     db.prepare("DELETE FROM messages WHERE conversation_id = ?").run(
       conversationId,
     );
@@ -956,19 +1000,23 @@ export function replaceMessages(
 }
 
 export function saveInstructions(id: string, messages: Array<{role: string; content: string}>): void {
-  db.prepare("INSERT INTO conversation_instructions VALUES (?, ?) ON CONFLICT(conversation_id) DO UPDATE SET messages_json=excluded.messages_json").run(id, JSON.stringify(messages.filter(m => m.role === "system" || m.role === "developer")));
+  db.transaction(() => {
+    const payload = writeStoredPayload("instructions", id, "messages_json", JSON.stringify(messages.filter(m => m.role === "system" || m.role === "developer")));
+    db.prepare("INSERT INTO conversation_instructions VALUES (?, ?) ON CONFLICT(conversation_id) DO UPDATE SET messages_json=excluded.messages_json").run(id, payload);
+  });
 }
 export function getInstructions(id: string): Array<{role: string; content: string}> {
   const row = db.prepare("SELECT messages_json FROM conversation_instructions WHERE conversation_id=?").get(id) as {messages_json: string} | undefined;
-  return row ? JSON.parse(row.messages_json) : [];
+  return row ? JSON.parse(readStoredPayload("instructions", id, "messages_json", row.messages_json)) : [];
 }
 
 /** Search only local history owned by this account; never initiates upstream sync. */
 export function searchConversations(accountId: string, query: string): StoredConversation[] {
   const rows = db.prepare(`SELECT c.* FROM conversations c WHERE account_id = ? AND
     (instr(lower(title), lower(?)) > 0 OR EXISTS
-      (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND instr(lower(m.content), lower(?)) > 0))
-    ORDER BY updated_at DESC LIMIT 100`).all(accountId, query, query) as Record<string, unknown>[];
+      (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND (instr(lower(m.content), lower(?)) > 0 OR EXISTS
+        (SELECT 1 FROM stored_payload_chunks p WHERE p.owner_type='message' AND p.owner_id=m.id AND p.field='content' AND instr(lower(p.payload), lower(?)) > 0))))
+    ORDER BY updated_at DESC LIMIT 100`).all(accountId, query, query, query) as Record<string, unknown>[];
   return rows.map(mapConversation);
 }
 

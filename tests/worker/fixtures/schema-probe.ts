@@ -46,7 +46,7 @@ export class SchemaProbe extends DurableObject {
         return Response.json({ error: (error as Error).message }, { status: 409 });
       }
     } else if (url.pathname === '/future-version') {
-      db.prepare('UPDATE mirror_schema SET version = ? WHERE id = 1').run(2);
+      db.prepare('UPDATE mirror_schema SET version = ? WHERE id = 1').run(3);
     } else if (url.pathname === '/transaction-failure') {
       try {
         db.transaction(() => {

@@ -23,6 +23,7 @@ export interface DurableSqlStorage {
 }
 
 export function wrapNodeDatabase(database: DatabaseSync): SqliteDatabase {
+  let transactionDepth = 0;
   return {
     exec: (sql) => database.exec(sql),
     prepare(sql) {
@@ -34,7 +35,9 @@ export function wrapNodeDatabase(database: DatabaseSync): SqliteDatabase {
       };
     },
     transaction(work) {
+      if (transactionDepth > 0) return work();
       database.exec("BEGIN IMMEDIATE");
+      transactionDepth++;
       try {
         const result = work();
         database.exec("COMMIT");
@@ -42,12 +45,15 @@ export function wrapNodeDatabase(database: DatabaseSync): SqliteDatabase {
       } catch (error) {
         database.exec("ROLLBACK");
         throw error;
+      } finally {
+        transactionDepth--;
       }
     },
   };
 }
 
 export function wrapDurableSql(storage: DurableSqlStorage): SqliteDatabase {
+  let transactionDepth = 0;
   return {
     exec(sql) {
       // Let the runtime accept supported PRAGMAs (such as table_info) and
@@ -69,7 +75,12 @@ export function wrapDurableSql(storage: DurableSqlStorage): SqliteDatabase {
       };
     },
     transaction(work) {
-      return storage.transactionSync(work);
+      if (transactionDepth > 0) return work();
+      return storage.transactionSync(() => {
+        transactionDepth++;
+        try { return work(); }
+        finally { transactionDepth--; }
+      });
     },
   };
 }

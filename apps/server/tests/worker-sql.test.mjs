@@ -51,10 +51,10 @@ test.describe('server / worker-sql', () => {
     assert.throws(() => initializeWorkerStore(untouched, 'invalid'), /must decode to exactly 32 bytes/);
   });
   test('reports the persisted Worker version rather than a binary constant', () => {
-    assert.equal(storedDatabaseSchemaVersion(), 1);
+    assert.equal(storedDatabaseSchemaVersion(), 2);
     database.exec('UPDATE mirror_schema SET version = 7');
     try { assert.equal(storedDatabaseSchemaVersion(), 7); }
-    finally { database.exec('UPDATE mirror_schema SET version = 1'); }
+    finally { database.exec('UPDATE mirror_schema SET version = 2'); }
   });
   test('Worker restart removes legacy credentials and retains valid account metadata', () => {
     const metadata = { deviceId: 'existing-device', savedAt: '2026-01-01T00:00:00.000Z', accountId: 'fixture-owner', assetLinkGeneration: 'existing-generation', turnstileToken: 'fixture-turnstile', turnstileTokenSavedAt: 123 };
@@ -98,7 +98,16 @@ test.describe('server / worker-sql', () => {
     assert.equal(getConversation(conversation.id).conversationId, 'upstream-retained');
     assert.equal(listMessages(conversation.id)[0].content, 'Partial answer');
     assert.equal(listMessages(conversation.id)[0].status, 'interrupted');
-    assert.equal(storedDatabaseSchemaVersion(), 1);
+    assert.equal(storedDatabaseSchemaVersion(), 2);
+  });
+  test('stores and reconstructs strings larger than the Durable Object SQLite row limit', () => {
+    const conversation = createConversation({ model: 'auto', accountId: 'large-payload-owner' });
+    const content = `${'x'.repeat(8 * 1024 * 1024)}🙂tail`;
+    addMessage({ conversationId: conversation.id, upstreamNodeId: null, role: 'assistant', content, status: 'done', events: [] });
+    assert.equal(listMessages(conversation.id)[0].content, content);
+    const chunks = database.prepare("SELECT payload FROM stored_payload_chunks WHERE owner_type='message' AND field='content' ORDER BY chunk_index").all();
+    assert.ok(chunks.length > 1);
+    assert.ok(chunks.every(({payload}) => Buffer.byteLength(payload, 'utf8') <= 256 * 1024));
   });
   test('transactions run on storage and roll back failed writes', () => {
     const db = wrapDurableSql(storage);
