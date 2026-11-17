@@ -1942,6 +1942,14 @@ test("sse() destroys the connection once the backlog stays stalled past the time
   ]);
 });
 
+test("streamable text holds split file references but does not wait for a newline", () => {
+  assert.equal(openai.safeStreamingTextLength("A short answer without a newline"), "A short answer without a newline".length);
+  assert.equal(openai.safeStreamingTextLength("A [bracketed phrase] is ordinary text"), "A [bracketed phrase] is ordinary text".length);
+  assert.equal(openai.safeStreamingTextLength("Download: file-ser"), "Download: ".length);
+  assert.equal(openai.safeStreamingTextLength("Download: file-service://file-1"), "Download: ".length);
+  assert.equal(openai.safeStreamingTextLength("Answer \uE200citation"), "Answer ".length);
+});
+
 // ---------------------------------------------------------------------------
 // Real-socket-only branches: light-my-request's mock socket (used by every
 // app.inject() call above) has no setNoDelay method, so the guard added
@@ -1986,6 +1994,94 @@ test("a streaming completion over a real socket still calls setNoDelay and compl
       }
     },
   );
+});
+
+test("Chat Completions and Responses emit ordinary answer text before the upstream stream ends", async () => {
+  const realFetch = globalThis.fetch;
+  for (const endpoint of ["chat/completions", "responses"]) {
+    const account = `account-early-stream-${endpoint}`;
+    useSession(account);
+    let upstreamController;
+    let upstreamClosed = false;
+    const upstreamBody = new ReadableStream({
+      start(controller) { upstreamController = controller; },
+    });
+    const backend = stubBackend(account);
+    const handler = async (url, init) => {
+      if (new URL(String(url)).pathname.endsWith("/f/conversation"))
+        return new Response(upstreamBody, { headers: { "content-type": "text/event-stream" } });
+      return backend(url, init);
+    };
+    await withFetch(handler, async () => {
+      const realApp = Fastify({ bodyLimit: 30 * 1024 * 1024 });
+      await openai.registerOpenAiRoutes(realApp);
+      await realApp.listen({ port: 0, host: "127.0.0.1" });
+      try {
+        const address = realApp.server.address();
+        const port = typeof address === "object" && address ? address.port : address;
+        const requestBody = endpoint === "responses"
+          ? { model: "auto", stream: true, input: "Say hello" }
+          : { model: "auto", stream: true, messages: [{ role: "user", content: "Say hello" }] };
+        const response = await realFetch(`http://127.0.0.1:${port}/v1/${endpoint}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(requestBody),
+        });
+        assert.equal(response.status, 200);
+        const reader = response.body.getReader();
+        const firstFrame = `data: ${JSON.stringify(assistantAddFrame("upstream-early", "assistant-early", "First words arrive"))}\n\n`;
+        upstreamController.enqueue(new TextEncoder().encode(firstFrame));
+
+        let pending = "";
+        const readUntilText = async () => {
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) return false;
+            pending += decoder.decode(value, { stream: true });
+            const frames = pending.split(/\r?\n\r?\n/);
+            pending = frames.pop() ?? "";
+            for (const frame of frames) {
+              const dataLine = frame.split(/\r?\n/).find(line => line.startsWith("data: "));
+              if (!dataLine) continue;
+              const event = JSON.parse(dataLine.slice(6));
+              const text = endpoint === "responses"
+                ? event.type === "response.output_text.delta" ? event.delta : ""
+                : event.choices?.[0]?.delta?.content ?? "";
+              if (text.includes("First words arrive")) return true;
+            }
+          }
+        };
+        const early = await Promise.race([
+          readUntilText().then(value => ({ value })),
+          new Promise(resolve => setTimeout(() => resolve({ timeout: true }), 1000)),
+        ]);
+        assert.deepEqual(early, { value: true }, `${endpoint} did not emit text before upstream EOF`);
+        assert.equal(upstreamClosed, false);
+
+        upstreamController.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ p: "/message/content/parts/0", o: "append", v: " and the rest." })}\n\ndata: [DONE]\n\n`));
+        upstreamClosed = true;
+        upstreamController.close();
+        const remainder = await reader.read();
+        // The consumer may still have buffered the terminal events, so drain
+        // the response before asserting that completion was delivered.
+        let tail = remainder.done ? "" : new TextDecoder().decode(remainder.value);
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          tail += new TextDecoder().decode(next.value);
+        }
+        assert.match(tail, endpoint === "responses" ? /response\.completed/ : /\[DONE\]/);
+        await reader.cancel().catch(() => undefined);
+      } finally {
+        if (!upstreamClosed) {
+          upstreamClosed = true;
+          try { upstreamController?.close(); } catch { /* already closed */ }
+        }
+        await realApp.close();
+      }
+    });
+  }
 });
 
 test("a client that disconnects mid-stream aborts the in-flight upstream turn", async () => {
