@@ -56,7 +56,7 @@ function splitPayload(value: string): string[] {
     chunk += character;
     bytes += size;
   }
-  if (chunk || chunks.length === 0) chunks.push(chunk);
+  if (chunk) chunks.push(chunk);
   return chunks;
 }
 

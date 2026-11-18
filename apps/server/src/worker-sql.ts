@@ -45,7 +45,9 @@ export function wrapNodeDatabase(database: DatabaseSync): SqliteDatabase {
       } catch (error) {
         database.exec("ROLLBACK");
         throw error;
-      } finally {
+      }
+      /* c8 ignore next */
+      finally {
         transactionDepth--;
       }
     },
