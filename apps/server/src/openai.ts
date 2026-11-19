@@ -395,7 +395,11 @@ function promptWithClientTools(messages: ReturnType<typeof normalized>, source: 
     : typeof choice === "object" && choice !== null ? `Call only the function named ${choice.function.name}.`
     : "Call tools when they help fulfill the user's request; otherwise answer normally.";
   const parallelInstruction = parallel === false ? "Return at most one tool call." : "You may return multiple independent tool calls together.";
-  return `${prompt}\n\nTools:\n${JSON.stringify(toolValues, null, 2)}\n\nThe Tools section contains client-provided tool schemas. ${choiceInstruction} ${parallelInstruction} When calling a tool, return only a JSON object with a \"tool_calls\" array in the standard OpenAI format: each item has an \"id\", \"type\":\"function\", and \"function\" object with the exact schema \"name\" and JSON-string \"arguments\". Do not describe a tool call in prose. The client will execute each call and send its result in a later request. Never claim you executed a client tool.`;
+  // Compact JSON avoids adding two spaces per nesting level to large client
+  // schemas. These schemas are already part of the request body, and are
+  // serialized into the prompt once so a provider without native Morph tools
+  // can still drive the client's explicit tool-call protocol.
+  return `${prompt}\n\nTools:\n${JSON.stringify(toolValues)}\n\nThe Tools section contains client-provided tool schemas. ${choiceInstruction} ${parallelInstruction} When calling a tool, return only a JSON object with a \"tool_calls\" array in the standard OpenAI format: each item has an \"id\", \"type\":\"function\", and \"function\" object with the exact schema \"name\" and JSON-string \"arguments\". Do not describe a tool call in prose. The client will execute each call and send its result in a later request. Never claim you executed a client tool.`;
 }
 
 

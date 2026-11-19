@@ -47,10 +47,28 @@ export interface RunChatOptions {
 }
 
 function titleFromPrompt(prompt: string): string {
-  const oneLine = prompt.replace(/\s+/g, " ").trim();
-  return oneLine.length > 54
-    ? `${oneLine.slice(0, 53)}…`
-    : oneLine || "New chat";
+  // Titles retain the same whitespace folding and 54-character limit as
+  // before, but inspect only the prefix needed to produce that title. The
+  // prompt may contain a very large system/tool context; normalizing the
+  // entire string here creates another full-size copy in the DO isolate.
+  let title = "";
+  let pendingSpace = false;
+  for (let index = 0; index < prompt.length; index++) {
+    const character = prompt[index];
+    if (/\s/.test(character)) {
+      if (title) pendingSpace = true;
+      continue;
+    }
+    if (pendingSpace) {
+      title += " ";
+      pendingSpace = false;
+    }
+    title += character;
+    if (title.length > 54) break;
+  }
+  return title.length > 54
+    ? `${title.slice(0, 53)}…`
+    : title || "New chat";
 }
 
 function linkedAbortController(signal?: AbortSignal): AbortController {
