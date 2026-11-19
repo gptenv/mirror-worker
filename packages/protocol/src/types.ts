@@ -181,6 +181,34 @@ export type NormalizedConversationEvent = {
       raw: unknown;
     });
 
+/**
+ * Retains the latest message/assistant_text snapshots and all other normalized
+ * events. These two event kinds contain full message snapshots, so retaining
+ * every patch update would grow quadratically with answer length.
+ */
+export class NormalizedConversationEventHistory {
+  private readonly events: (NormalizedConversationEvent | null)[] = [];
+  private readonly snapshotIndexes = new Map<string, number>();
+
+  push(event: NormalizedConversationEvent): void {
+    const key = event.kind === "message"
+      ? `message:${event.messageId ?? ""}`
+      : event.kind === "assistant_text" && event.messageId
+        ? `assistant_text:${event.messageId}`
+        : null;
+    if (key) {
+      const previousIndex = this.snapshotIndexes.get(key);
+      if (previousIndex !== undefined) this.events[previousIndex] = null;
+      this.snapshotIndexes.set(key, this.events.length);
+    }
+    this.events.push(event);
+  }
+
+  toArray(): NormalizedConversationEvent[] {
+    return this.events.filter((event): event is NormalizedConversationEvent => event !== null);
+  }
+}
+
 export interface SendMessageResult {
   text: string;
   conversationId: string | null;

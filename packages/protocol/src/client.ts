@@ -15,6 +15,7 @@ import {
 } from "./sse.js";
 import {
   BackendApiError,
+  NormalizedConversationEventHistory,
   type ConversationInitResult,
   type ConversationSessionState,
   type NormalizedConversationEvent,
@@ -29,8 +30,10 @@ import { hasWorkModeSuffix } from "./models.js";
 
 const ORIGIN = "https://chatgpt.com";
 const BASE_URL = `${ORIGIN}/backend-api`;
-/** Bounds both raw diagnostics and input to the reducer; never truncate a turn. */
+/** Bounds upstream SSE input; the stream is rejected rather than truncated. */
 export const MAX_CONVERSATION_STREAM_BYTES = 8 * 1024 * 1024;
+/** Retain only a small tail of upstream SSE text for failure diagnostics. */
+const MAX_CONVERSATION_ERROR_DIAGNOSTIC_CHARS = 16 * 1024;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
@@ -853,12 +856,42 @@ export class ChatGptBackendClient {
       suppressFirstTurnToolNarration: firstTurn && Boolean(opts.gizmoId),
       suppressFirstTurnFileSearch: firstTurn,
     });
-    const allEvents: NormalizedConversationEvent[] = [];
+    const allEvents = new NormalizedConversationEventHistory();
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     const frames = new SseFrameDecoder();
-    const upstreamBody: string[] = [];
+    const upstreamDiagnostic: string[] = [];
+    let diagnosticStart = 0;
+    let diagnosticChars = 0;
     let upstreamBytes = 0;
+    const retainDiagnostic = (text: string) => {
+      if (!text) return;
+      if (text.length >= MAX_CONVERSATION_ERROR_DIAGNOSTIC_CHARS) {
+        upstreamDiagnostic.length = 0;
+        upstreamDiagnostic.push(text.slice(-MAX_CONVERSATION_ERROR_DIAGNOSTIC_CHARS));
+        diagnosticStart = 0;
+        diagnosticChars = MAX_CONVERSATION_ERROR_DIAGNOSTIC_CHARS;
+        return;
+      }
+      upstreamDiagnostic.push(text);
+      diagnosticChars += text.length;
+      while (diagnosticChars > MAX_CONVERSATION_ERROR_DIAGNOSTIC_CHARS) {
+        const excess = diagnosticChars - MAX_CONVERSATION_ERROR_DIAGNOSTIC_CHARS;
+        const first = upstreamDiagnostic[diagnosticStart]!;
+        if (first.length <= excess) {
+          diagnosticChars -= first.length;
+          diagnosticStart++;
+        } else {
+          upstreamDiagnostic[diagnosticStart] = first.slice(excess);
+          diagnosticChars -= excess;
+        }
+      }
+      if (diagnosticStart > 128 && diagnosticStart * 2 > upstreamDiagnostic.length) {
+        upstreamDiagnostic.splice(0, diagnosticStart);
+        diagnosticStart = 0;
+      }
+    };
+    const getDiagnostic = () => upstreamDiagnostic.slice(diagnosticStart).join("");
     const cancelOnAbort = () => {
       // Service-bound fetch adapters may leave a pending read alive after their
       // request signal aborts. Cancel the reader directly to release that read.
@@ -889,7 +922,7 @@ export class ChatGptBackendClient {
         if (upstreamBytes > MAX_CONVERSATION_STREAM_BYTES)
           throw new Error("Conversation stream exceeds resource limit");
         const text = decoder.decode(value, { stream: true });
-        upstreamBody.push(text);
+        retainDiagnostic(text);
         for (const chunk of frames.push(text)) {
           for (const payload of iterSseDataLines(chunk)) {
             reducer.feed(payload);
@@ -911,7 +944,7 @@ export class ChatGptBackendClient {
     // Flushing UTF-8 emits only a pending replacement character, never an
     // SSE delimiter. The unterminated final frame is handled by finish().
     const tail = decoder.decode();
-    upstreamBody.push(tail);
+    retainDiagnostic(tail);
     frames.push(tail);
     for (const chunk of frames.finish()) {
       for (const payload of iterSseDataLines(chunk)) {
@@ -923,14 +956,15 @@ export class ChatGptBackendClient {
     opts.signal?.throwIfAborted();
 
     if (reducer.error) {
-      const body = upstreamBody.join("");
+      const body = getDiagnostic();
       throw new BackendApiError(`Conversation stream returned error_code=${reducer.error}`, 502, body, body);
     }
 
-    if (!reducer.isDone) throw new BackendApiError("Conversation stream interrupted before completion", 502, undefined, upstreamBody.join(""));
+    const diagnostic = getDiagnostic();
+    if (!reducer.isDone) throw new BackendApiError("Conversation stream interrupted before completion", 502, undefined, diagnostic);
 
     if (!reducer.error && !reducer.currentAssistantMessageId) {
-      throw new BackendApiError("Unsupported conversation response: no assistant node was received", 502, undefined, upstreamBody.join(""));
+      throw new BackendApiError("Unsupported conversation response: no assistant node was received", 502, undefined, diagnostic);
     }
 
 
@@ -940,7 +974,7 @@ export class ChatGptBackendClient {
       messageId: reducer.currentAssistantMessageId,
       userMessageId,
       status: reducer.status,
-      events: allEvents,
+      events: allEvents.toArray(),
     };
   }
 

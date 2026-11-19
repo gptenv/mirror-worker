@@ -543,6 +543,60 @@ test("sendMessage's first turn skips prepareFollowup", () =>
     },
   ));
 
+test("sendMessage retains final snapshots instead of every growing assistant snapshot", () =>
+  withFetch(async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/backend-api/sentinel/chat-requirements/prepare") return Response.json({ prepare_token: "p", proofofwork: { required: false } });
+    if (pathname === "/backend-api/sentinel/chat-requirements/finalize") return Response.json({ token: "final" });
+    if (pathname === "/backend-api/f/conversation") {
+      const frames = [JSON.stringify({ p: "", o: "add", v: {
+        conversation_id: "upstream-conv",
+        message: { id: "assistant-growing", author: { role: "assistant" }, content: { content_type: "text", parts: [""] }, status: "in_progress" },
+      } })];
+      // Each patch produces a full message and assistant_text snapshot. The
+      // completed answer is only 8 KiB, but retaining every intermediate
+      // snapshot would retain tens of MiB and exceed the old event budget.
+      for (let index = 0; index < 8 * 1024; index++)
+        frames.push(JSON.stringify({ p: "/message/content/parts/0", o: "append", v: "a" }));
+      frames.push(JSON.stringify({ p: "/message/status", o: "replace", v: "finished_successfully" }), "[DONE]");
+      return sseBody(frames);
+    }
+    throw new Error(`unexpected ${pathname}`);
+  }, async () => {
+    let deltas = 0;
+    let snapshotCallbacks = 0;
+    const result = await new ChatGptBackendClient(fakeCreds()).sendMessage({
+      prompt: "hi", model: "auto",
+      onDelta: delta => { deltas += delta.length; },
+      onEvent: event => { if (event.kind === "assistant_text") snapshotCallbacks++; },
+    });
+    assert.equal(result.text, "a".repeat(8 * 1024));
+    assert.equal(deltas, 8 * 1024, "every delta remains available to live streaming callers");
+    assert.equal(snapshotCallbacks, 8 * 1024, "every snapshot remains available to live event callbacks");
+    assert.equal(result.events.filter(event => event.kind === "message" && event.messageId === "assistant-growing").length, 1);
+    assert.equal(result.events.filter(event => event.kind === "assistant_text" && event.messageId === "assistant-growing").length, 1);
+    assert.equal(result.events.find(event => event.kind === "assistant_text").text.length, 8 * 1024);
+  }));
+
+test("stream failure diagnostics retain only the bounded tail", () =>
+  withFetch(async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname === "/backend-api/sentinel/chat-requirements/prepare") return Response.json({ prepare_token: "p", proofofwork: { required: false } });
+    if (pathname === "/backend-api/sentinel/chat-requirements/finalize") return Response.json({ token: "final" });
+    if (pathname === "/backend-api/f/conversation")
+      return sseBody([JSON.stringify({ type: "diagnostic", padding: "x".repeat(32 * 1024) })]);
+    throw new Error(`unexpected ${pathname}`);
+  }, async () => {
+    await assert.rejects(
+      new ChatGptBackendClient(fakeCreds()).sendMessage({ prompt: "hi", model: "auto" }),
+      error => {
+        assert.equal(error.upstreamResponseText.length, 16 * 1024);
+        assert.ok(error.upstreamResponseText.includes("x".repeat(128)));
+        return true;
+      },
+    );
+  }));
+
 test("sendMessage's follow-up turn negotiates prepareFollowup and forwards its conduit token", () => {
   const seenHeaders = [];
   return withFetch(

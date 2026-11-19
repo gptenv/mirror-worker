@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   ChatGptBackendClient,
   type ConversationInitResult,
+  NormalizedConversationEventHistory,
   type NormalizedConversationEvent,
   type SendMessageResult,
   type UploadedFile,
@@ -151,7 +152,7 @@ export async function runChat(
   });
 
   let fullText = "";
-  const events: NormalizedConversationEvent[] = [];
+  const events = new NormalizedConversationEventHistory();
   let outcome: Awaited<ReturnType<typeof runChat>>;
   try {
     const creds = await abortable(getValidCredentials(), controller.signal);
@@ -233,7 +234,7 @@ export async function runChat(
       result.text || fullText,
       result.status ?? "done",
       result.messageId,
-      events,
+      events.toArray(),
     );
     outcome = {
       conversation: transient ? conversation : getConversation(conversation.id)!,
@@ -251,7 +252,7 @@ export async function runChat(
         fullText,
         message === "Generation stopped" ? "stopped" : "error",
         null,
-        events,
+        events.toArray(),
       );
     } finally {
       // Recording a partial turn must never replace the original failure.

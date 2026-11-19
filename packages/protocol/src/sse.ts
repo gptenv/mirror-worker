@@ -265,6 +265,8 @@ export class ConversationStreamReducer {
   private finalAssistantId: string | null = null;
   private normalized: NormalizedConversationEvent[] = [];
   private normalizedChars = 0;
+  private normalizedSnapshotChars = new Map<string, number>();
+  private normalizedSnapshotIndexes = new Map<string, number>();
 
   constructor(private readonly opts: ConversationStreamReducerOptions = {}) {}
 
@@ -285,6 +287,7 @@ export class ConversationStreamReducer {
   drainEvents(): NormalizedConversationEvent[] {
     const out = this.normalized;
     this.normalized = [];
+    this.normalizedSnapshotIndexes.clear();
     return out;
   }
 
@@ -300,9 +303,35 @@ export class ConversationStreamReducer {
     const isCitationPatch = event.kind === "citation_patch";
     const shouldHide = this.displayHidden && !isImage && !isCitationPatch;
     const normalized = shouldHide ? { ...event, displayHidden: true } : event;
-    this.normalizedChars += JSON.stringify(normalized).length;
+    const size = JSON.stringify(normalized).length;
+    // Message and assistant_text events are full snapshots emitted after each
+    // upstream patch. Budget the latest snapshot per message, rather than
+    // adding every superseded copy; the client still gets each update while
+    // parsing, but a growing answer no longer exhausts the event budget due
+    // to quadratic snapshot repetition.
+    const snapshotKey = normalized.kind === "message"
+      ? `message:${normalized.messageId ?? ""}`
+      : normalized.kind === "assistant_text" && normalized.messageId
+        ? `assistant_text:${normalized.messageId}`
+        : null;
+    if (snapshotKey) {
+      this.normalizedChars += size - (this.normalizedSnapshotChars.get(snapshotKey) ?? 0);
+      this.normalizedSnapshotChars.set(snapshotKey, size);
+    } else {
+      this.normalizedChars += size;
+    }
     if (this.normalizedChars > (this.opts.maxEventChars ?? MAX_NORMALIZED_EVENT_CHARS))
       throw new Error("Conversation events exceed resource limit");
+    if (snapshotKey) {
+      const previousIndex = this.normalizedSnapshotIndexes.get(snapshotKey);
+      if (previousIndex !== undefined) {
+        this.normalized.splice(previousIndex, 1);
+        for (const [key, index] of this.normalizedSnapshotIndexes) {
+          if (index > previousIndex) this.normalizedSnapshotIndexes.set(key, index - 1);
+        }
+      }
+      this.normalizedSnapshotIndexes.set(snapshotKey, this.normalized.length);
+    }
     this.normalized.push(structuredClone(normalized));
   }
 

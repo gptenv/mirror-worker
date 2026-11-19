@@ -12,7 +12,7 @@ import {
   normalizeGizmos,
   normalizeModels,
   hasWorkModeSuffix,
-  type NormalizedConversationEvent,
+  NormalizedConversationEventHistory,
   type UploadedFile,
 } from "@mirror/protocol";
 import {
@@ -642,7 +642,7 @@ export async function registerOpenAiRoutes(
     let rich = false;
     let richOutput: RichOutput | undefined;
     const streamedMessages = new Map<string | null, string>();
-    const capturedEvents: NormalizedConversationEvent[] = [];
+    const capturedEvents = new NormalizedConversationEventHistory();
     let messages = normalized(body.messages);
     const last = messages.at(-1);
     if (!last || (last.role !== "user" && last.role !== "tool"))
@@ -1105,6 +1105,7 @@ export async function registerOpenAiRoutes(
           throw error;
         }
         const { conversation, result, storedAssistantMessageId } = chat;
+        const completedEvents = capturedEvents.toArray();
         if (!oneShot) setImplicitConversationId(accountId, conversation.id);
         // The API transcript must be exactly what the caller can send back.
         // The upstream retains its own full tree; captured events preserve
@@ -1112,7 +1113,7 @@ export async function registerOpenAiRoutes(
         let responseText = body.stream ? (streamedText || result.text) : result.text;
         if (rich) {
           const downloadClient = new ChatGptBackendClient(await getValidCredentials());
-          richOutput = await renderRichOutput(capturedEvents, responseText, (pointer, messageId, image) =>
+          richOutput = await renderRichOutput(completedEvents, responseText, (pointer, messageId, image) =>
             createAssetLinks(downloadClient, `${req.protocol}://${req.headers.host}`, pointer,
               conversation.conversationId, messageId ?? result.messageId, controller.signal, image));
           controller.signal.throwIfAborted();
@@ -1187,7 +1188,7 @@ export async function registerOpenAiRoutes(
               },
             ]);
           }
-          updateMessage(storedAssistantMessageId, responseText, result.status ?? "done", result.messageId, capturedEvents);
+          updateMessage(storedAssistantMessageId, responseText, result.status ?? "done", result.messageId, completedEvents);
           saveInstructions(conversation.id, messages);
           saveOpenAiContext(conversation.id, instructionsHash(messages));
           saveOpenAiTranscript(
@@ -1201,13 +1202,13 @@ export async function registerOpenAiRoutes(
         }
 
 
-        const responseMetadata = buildResponseMetadata(capturedEvents, conversation.conversationId) ?? (richOutput ? {} : undefined);
+        const responseMetadata = buildResponseMetadata(completedEvents, conversation.conversationId) ?? (richOutput ? {} : undefined);
         if (richOutput && responseMetadata) {
           responseMetadata.mirror_assets = JSON.stringify(richOutput.assets);
           responseMetadata.mirror_tool_outputs = JSON.stringify(richOutput.tools);
           if (richOutput.summaries.length) responseMetadata.mirror_reasoning_summaries = JSON.stringify(richOutput.summaries);
-          const resolvedImages = richOutput.assets.filter(asset => asset.url && !asset.previewUnavailable && capturedEvents.some(event => (event.kind === "image" || (event.kind === "file" && typeof (event as any).assetPointer === "string" && (event as any).assetPointer.startsWith("sediment://"))) && event.assetPointer === asset.pointer));
-          const hadImage = capturedEvents.some(event => event.kind === "image" ||
+          const resolvedImages = richOutput.assets.filter(asset => asset.url && !asset.previewUnavailable && completedEvents.some(event => (event.kind === "image" || (event.kind === "file" && typeof (event as any).assetPointer === "string" && (event as any).assetPointer.startsWith("sediment://"))) && event.assetPointer === asset.pointer));
+          const hadImage = completedEvents.some(event => event.kind === "image" ||
             (event.kind === "file" && event.assetPointer.startsWith("sediment://")));
           if (hadImage) responseMetadata.mirror_images = JSON.stringify(resolvedImages.map(asset => ({ url: asset.url })));
         }
