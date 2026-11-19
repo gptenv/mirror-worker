@@ -169,6 +169,8 @@ test("assistant history is immutable while user edits rebase and continue", asyn
         messages: [
           { role: "system", content: "Be concise." },
           { role: "user", content: "edited hello" },
+          { role: "assistant", content: "reply-1" },
+          { role: "user", content: "follow up after edit" },
         ],
       },
     });
@@ -182,8 +184,8 @@ test("assistant history is immutable while user edits rebase and continue", asyn
     assert.equal(sent[1].parent_message_id, "client-created-root");
     assert.equal(
       sent[1].messages[0].content.parts[0],
-      "edited hello",
-      "a user edit must be replayed as one real user turn, not a flattened USER/ASSISTANT transcript",
+      "follow up after edit",
+      "after rebasing an edited user turn, only the new user message is sent upstream",
     );
     assert.deepEqual(
       store.listMessages(conversationId).map(({ role, content }) => ({
@@ -192,6 +194,8 @@ test("assistant history is immutable while user edits rebase and continue", asyn
       })),
       [
         { role: "user", content: "edited hello" },
+        { role: "assistant", content: "reply-1" },
+        { role: "user", content: "follow up after edit" },
         { role: "assistant", content: "reply-2" },
       ],
       "the synthetic transcript-seeding prompt must not leak into stored history",
@@ -236,8 +240,10 @@ test("assistant history is immutable while user edits rebase and continue", asyn
         messages: [
           { role: "system", content: "Be concise." },
           { role: "user", content: "edited hello" },
+          { role: "assistant", content: "reply-1" },
+          { role: "user", content: "edited follow up after edit" },
           { role: "assistant", content: "reply-2" },
-          { role: "user", content: "edited after reload" },
+          { role: "user", content: "after editing the second turn" },
         ],
       },
     });
@@ -249,8 +255,8 @@ test("assistant history is immutable while user edits rebase and continue", asyn
     );
     assert.equal(
       sent[3].messages[0].content.parts[0],
-      "edited after reload",
-      "a later user edit must also be one real user bubble",
+      "after editing the second turn",
+      "a new turn after a later user edit is sent as one real user bubble",
     );
     const afterSecondUserEdit = store.listMessages(conversationId);
     assert.deepEqual(
@@ -301,6 +307,8 @@ test("assistant history is immutable while user edits rebase and continue", asyn
         messages: [
           { role: "system", content: "Be concise." },
           { role: "user", content: "edited legacy question" },
+          { role: "assistant", content: "legacy answer" },
+          { role: "user", content: "follow up after legacy edit" },
         ],
       },
     });

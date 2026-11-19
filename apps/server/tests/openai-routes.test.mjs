@@ -1351,10 +1351,9 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
         ["user", "assistant"],
       );
 
-      // Editing the system-only prior transcript's sole user turn triggers a
-      // rebase (see openai-edit-history.test.mjs for the same shape on the
-      // success path); this time the upstream call for the rebased turn
-      // itself fails.
+      // Resend the edited prior user turn and its unchanged assistant reply,
+      // followed by a new turn. The changed prior prefix triggers a rebase;
+      // this time the upstream call for the rebased turn itself fails.
       const edited = await app.inject({
         method: "POST",
         url: "/v1/chat/completions",
@@ -1364,6 +1363,8 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
           messages: [
             { role: "system", content: "Be concise." },
             { role: "user", content: "edited hello" },
+            { role: "assistant", content: "reply-1" },
+            { role: "user", content: "follow up" },
           ],
         },
       });
@@ -1372,11 +1373,14 @@ test("a rebase that fails upstream restores the locally-edited prefix instead of
       assert.match(edited.json().error.message, /simulated upstream failure/);
       assert.equal(edited.json().error.type, "server_error");
       assert.equal(edited.json().error.code, "upstream_failure");
-      // rebasePriorMessages for a system-only prior transcript is empty (the
-      // caller has no confirmed user/assistant turns yet at this point), so
-      // the restore must leave local history empty rather than some
-      // half-applied synthetic replay prompt or the old pre-edit turn.
-      assert.deepEqual(store.listMessages(conversationId), []);
+      assert.deepEqual(
+        store.listMessages(conversationId).map(({ role, content }) => ({ role, content })),
+        [
+          { role: "user", content: "edited hello" },
+          { role: "assistant", content: "reply-1" },
+        ],
+        "a failed rebase must restore the edited prior prefix, without synthetic replay rows or the failed new turn",
+      );
     },
   );
 });

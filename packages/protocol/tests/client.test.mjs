@@ -6,6 +6,7 @@ import {
   BackendApiError,
   newDeviceId,
   MAX_CONVERSATION_STREAM_BYTES,
+  NormalizedConversationEventHistory,
 } from "../dist/index.js";
 
 function fakeCreds() {
@@ -23,6 +24,26 @@ function withFetch(handler, fn) {
 // --- fetchMe ------------------------------------------------------------------------
 
 test.describe("protocol / client", () => {
+test("normalized event history coalesces snapshots while preserving non-snapshot events", () => {
+  const history = new NormalizedConversationEventHistory();
+  history.push({ kind: "message", messageId: "m1", value: 1 });
+  history.push({ kind: "status", messageId: "m1", status: "working" });
+  history.push({ kind: "message", messageId: "m1", value: 2 });
+  history.push({ kind: "message", messageId: null, value: 3 });
+  history.push({ kind: "message", messageId: null, value: 4 });
+  history.push({ kind: "assistant_text", messageId: "m1", text: "draft", delta: "draft" });
+  history.push({ kind: "assistant_text", messageId: "m1", text: "final", delta: "final" });
+  history.push({ kind: "assistant_text", messageId: null, text: "anonymous", delta: "anonymous" });
+  history.push({ kind: "raw", raw: { retained: true } });
+  assert.deepEqual(history.toArray(), [
+    { kind: "status", messageId: "m1", status: "working" },
+    { kind: "message", messageId: "m1", value: 2 },
+    { kind: "message", messageId: null, value: 4 },
+    { kind: "assistant_text", messageId: "m1", text: "final", delta: "final" },
+    { kind: "assistant_text", messageId: null, text: "anonymous", delta: "anonymous" },
+    { kind: "raw", raw: { retained: true } },
+  ]);
+});
 test("tries the stored accessToken first and exchanges the saved sessionToken only after auth denial", () =>
   withFetch(async (input, init = {}) => {
     const url = new URL(String(input));
@@ -583,8 +604,16 @@ test("stream failure diagnostics retain only the bounded tail", () =>
     const pathname = new URL(url).pathname;
     if (pathname === "/backend-api/sentinel/chat-requirements/prepare") return Response.json({ prepare_token: "p", proofofwork: { required: false } });
     if (pathname === "/backend-api/sentinel/chat-requirements/finalize") return Response.json({ token: "final" });
-    if (pathname === "/backend-api/f/conversation")
-      return sseBody([JSON.stringify({ type: "diagnostic", padding: "x".repeat(32 * 1024) })]);
+    if (pathname === "/backend-api/f/conversation") {
+      const encoder = new TextEncoder();
+      const frames = Array.from({ length: 600 }, (_, index) => `data: ${JSON.stringify({ type: "diagnostic", padding: String(index).padStart(3, "0") + "x".repeat(253) })}\n\n`);
+      return new Response(new ReadableStream({
+        start(controller) {
+          for (const frame of frames) controller.enqueue(encoder.encode(frame));
+          controller.close();
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    }
     throw new Error(`unexpected ${pathname}`);
   }, async () => {
     await assert.rejects(
