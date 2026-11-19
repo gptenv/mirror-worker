@@ -850,8 +850,8 @@ export function branchConversation(
   }
   const instructions = getInstructions(sourceId);
   saveInstructions(branch.id, instructions);
-  saveOpenAiContext(branch.id, fingerprintValue(instructions));
-  saveOpenAiTranscript(branch.id, source.accountId, fingerprintValue([
+  saveOpenAiContext(branch.id, fingerprintArrayValue(instructions));
+  saveOpenAiTranscript(branch.id, source.accountId, fingerprintArrayValue([
     ...instructions, ...listMessages(branch.id).map(({ role, content }) => ({ role, content })),
   ]));
   return getConversation(branch.id);
@@ -859,6 +859,18 @@ export function branchConversation(
 
 export function fingerprintValue(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/** Hash a JSON array a value at a time without allocating one copy of the full transcript. */
+export function fingerprintArrayValue(values: readonly unknown[]): string {
+  const hash = createHash("sha256");
+  hash.update("[");
+  for (let index = 0; index < values.length; index++) {
+    if (index) hash.update(",");
+    hash.update(JSON.stringify(values[index]) ?? "null");
+  }
+  hash.update("]");
+  return hash.digest("hex");
 }
 
 export function saveOpenAiContext(

@@ -16,7 +16,7 @@ import {
   type NormalizedConversationEvent,
   type UploadedFile,
 } from "@mirror/protocol";
-import { fingerprintValue } from "./store.js";
+import { fingerprintArrayValue, fingerprintValue } from "./store.js";
 import { uploadMimeType } from "./upload-mime.js";
 import type { OpenAiMessage, TextPart, ContentPart } from "./openai.js";
 
@@ -355,7 +355,7 @@ export function promptFor(
 }
 
 export function instructionsHash(messages: ReturnType<typeof normalized>): string {
-  return fingerprintValue(
+  return fingerprintArrayValue(
     messages.filter(
       (message) => message.role === "system" || message.role === "developer",
     ),

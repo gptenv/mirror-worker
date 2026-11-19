@@ -40,7 +40,7 @@ import {
   saveFile,
   assertSessionRevision,
   saveInstructions,
-  fingerprintValue,
+  fingerprintArrayValue,
   findConversationByTranscript,
   getConversation,
   getOpenAiContext,
@@ -869,8 +869,8 @@ export async function registerOpenAiRoutes(
         // `messages` array, since the new turn obviously never matches
         // anything yet.
         const priorTranscript = messages.slice(0, -1);
-        const priorTranscriptHash = priorTranscript.length
-          ? fingerprintValue(priorTranscript)
+        const priorTranscriptHash = priorTranscript.some(message => message.role === "user" || message.role === "assistant")
+          ? fingerprintArrayValue(priorTranscript)
           : null;
 
         // No metadata.conversation_id at all: try to recognize this as a
@@ -942,8 +942,8 @@ export async function registerOpenAiRoutes(
             !storedTranscriptHash &&
             priorTranscriptHash &&
             storedConversationMessages.length > 0 &&
-            fingerprintValue(storedConversationMessages) !==
-              fingerprintValue(priorConversationMessages),
+            fingerprintArrayValue(storedConversationMessages) !==
+              fingerprintArrayValue(priorConversationMessages),
         );
         const storedContextHash = explicitConversation
           ? getOpenAiContext(explicitConversation.id)
@@ -1193,7 +1193,7 @@ export async function registerOpenAiRoutes(
           saveOpenAiTranscript(
             conversation.id,
             accountId,
-            fingerprintValue([
+            fingerprintArrayValue([
               ...messages,
               { role: "assistant", content: responseText },
             ]),
